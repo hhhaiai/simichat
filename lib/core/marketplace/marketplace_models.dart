@@ -1,0 +1,225 @@
+/// MCP 市场数据模型
+class MarketplaceItem {
+  const MarketplaceItem({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.category,
+    required this.transport,
+    this.command,
+    this.args = const [],
+    this.url,
+    this.author = '',
+    this.icon,
+    this.tags = const [],
+    this.installCount = 0,
+    this.githubUrl,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final String category;
+  final String transport; // 'stdio' | 'sse'
+  final String? command;
+  final List<String> args;
+  final String? url;
+  final String author;
+  final String? icon;
+  final List<String> tags;
+  final int installCount;
+  final String? githubUrl;
+
+  bool get isStdio => transport == 'stdio';
+  bool get isSse => transport == 'sse';
+}
+
+/// 内置热门 MCP 服务器列表
+const builtinMcpServers = <MarketplaceItem>[
+  MarketplaceItem(
+    id: 'filesystem',
+    name: 'Filesystem',
+    description: '安全的文件系统访问，支持读写文件、目录操作',
+    category: '文件系统',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    author: 'Anthropic',
+    tags: ['文件', '读写', '目录'],
+    installCount: 50000,
+  ),
+  MarketplaceItem(
+    id: 'github',
+    name: 'GitHub',
+    description: 'GitHub API 集成，管理仓库、Issues、PR',
+    category: '开发工具',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-github'],
+    author: 'Anthropic',
+    tags: ['git', 'github', '代码管理'],
+    installCount: 30000,
+    githubUrl: 'https://github.com/modelcontextprotocol/servers',
+  ),
+  MarketplaceItem(
+    id: 'brave-search',
+    name: 'Brave Search',
+    description: 'Brave 搜索引擎集成，支持网页和本地搜索',
+    category: '搜索',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-brave-search'],
+    author: 'Anthropic',
+    tags: ['搜索', '网页', 'brave'],
+    installCount: 25000,
+  ),
+  MarketplaceItem(
+    id: 'puppeteer',
+    name: 'Puppeteer',
+    description: '浏览器自动化，网页截图、PDF 生成、表单交互',
+    category: '浏览器',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-puppeteer'],
+    author: 'Anthropic',
+    tags: ['浏览器', '截图', '自动化'],
+    installCount: 20000,
+  ),
+  MarketplaceItem(
+    id: 'postgres',
+    name: 'PostgreSQL',
+    description: 'PostgreSQL 数据库查询和管理',
+    category: '数据库',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-postgres'],
+    author: 'Anthropic',
+    tags: ['数据库', 'sql', 'postgres'],
+    installCount: 15000,
+  ),
+  MarketplaceItem(
+    id: 'sqlite',
+    name: 'SQLite',
+    description: 'SQLite 数据库操作，本地数据管理',
+    category: '数据库',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-sqlite'],
+    author: 'Anthropic',
+    tags: ['数据库', 'sql', 'sqlite', '本地'],
+    installCount: 12000,
+  ),
+  MarketplaceItem(
+    id: 'memory',
+    name: 'Memory',
+    description: '基于知识图谱的持久化记忆系统',
+    category: '记忆',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-memory'],
+    author: 'Anthropic',
+    tags: ['记忆', '知识图谱', '持久化'],
+    installCount: 18000,
+  ),
+  MarketplaceItem(
+    id: 'fetch',
+    name: 'Fetch',
+    description: 'HTTP 请求工具，支持网页内容抓取和 API 调用',
+    category: '网络',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-fetch'],
+    author: 'Anthropic',
+    tags: ['http', 'fetch', 'api', '网页'],
+    installCount: 22000,
+  ),
+  MarketplaceItem(
+    id: 'everything',
+    name: 'Everything',
+    description: 'MCP 协议全功能参考实现，包含 Tool/Resource/Prompt',
+    category: '示例',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-everything'],
+    author: 'Anthropic',
+    tags: ['示例', '参考', '全功能'],
+    installCount: 8000,
+  ),
+  MarketplaceItem(
+    id: 'sequential-thinking',
+    name: 'Sequential Thinking',
+    description: '结构化思维链工具，支持复杂推理和问题分解',
+    category: '思维',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+    author: 'Anthropic',
+    tags: ['思维', '推理', '结构化'],
+    installCount: 10000,
+  ),
+  MarketplaceItem(
+    id: 'time',
+    name: 'Time',
+    description: '时间和时区转换工具',
+    category: '工具',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-time'],
+    author: 'Anthropic',
+    tags: ['时间', '时区', '转换'],
+    installCount: 9000,
+  ),
+  MarketplaceItem(
+    id: 'redis',
+    name: 'Redis',
+    description: 'Redis 缓存和数据结构操作',
+    category: '数据库',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-redis'],
+    author: 'Community',
+    tags: ['redis', '缓存', '数据库'],
+    installCount: 7000,
+  ),
+  MarketplaceItem(
+    id: 'slack',
+    name: 'Slack',
+    description: 'Slack 消息和频道管理',
+    category: '通讯',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-slack'],
+    author: 'Anthropic',
+    tags: ['slack', '消息', '团队'],
+    installCount: 11000,
+  ),
+  MarketplaceItem(
+    id: 'sentry',
+    name: 'Sentry',
+    description: 'Sentry 错误监控和 Issue 管理',
+    category: '监控',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-sentry'],
+    author: 'Anthropic',
+    tags: ['sentry', '错误', '监控'],
+    installCount: 6000,
+  ),
+];
+
+/// 所有市场分类
+const marketplaceCategories = [
+  '全部',
+  '文件系统',
+  '开发工具',
+  '搜索',
+  '浏览器',
+  '数据库',
+  '记忆',
+  '网络',
+  '思维',
+  '工具',
+  '通讯',
+  '监控',
+  '示例',
+];

@@ -6,6 +6,8 @@ import 'l10n/generated/app_localizations.dart';
 
 import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
+import 'features/marketplace/marketplace_page.dart';
+import 'features/search/search_sheet.dart';
 import 'core/database/app_database.dart';
 import 'core/notification/notification_service.dart';
 import 'shared/widgets/sidebar.dart';
@@ -54,6 +56,7 @@ class AiChatApp extends ConsumerWidget {
       routes: {
         '/': (_) => const ResponsiveShell(),
         '/settings': (_) => const SettingsPage(),
+        '/marketplace': (_) => const MarketplacePage(),
       },
     );
   }
@@ -130,7 +133,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
           ),
           _SearchIntent: CallbackAction<_SearchIntent>(
             onInvoke: (_) {
-              // TODO: 打开搜索对话框
+              showSearchSheet(context);
               return null;
             },
           ),

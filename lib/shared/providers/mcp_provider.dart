@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/mcp/mcp_client.dart';
+import '../../core/database/dao/mcp_dao.dart';
+import 'database_provider.dart';
 
 /// MCP 服务器配置
 class McpServerConfig {
@@ -11,6 +14,8 @@ class McpServerConfig {
   final String? url;
   final Map<String, String>? headers;
   final bool isEnabled;
+  final String source; // 'manual' | 'marketplace'
+  final String? marketplaceId;
 
   const McpServerConfig({
     required this.id,
@@ -21,6 +26,8 @@ class McpServerConfig {
     this.url,
     this.headers,
     this.isEnabled = true,
+    this.source = 'manual',
+    this.marketplaceId,
   });
 
   McpServerConfig copyWith({
@@ -32,6 +39,8 @@ class McpServerConfig {
     String? url,
     Map<String, String>? headers,
     bool? isEnabled,
+    String? source,
+    String? marketplaceId,
   }) {
     return McpServerConfig(
       id: id ?? this.id,
@@ -42,29 +51,94 @@ class McpServerConfig {
       url: url ?? this.url,
       headers: headers ?? this.headers,
       isEnabled: isEnabled ?? this.isEnabled,
+      source: source ?? this.source,
+      marketplaceId: marketplaceId ?? this.marketplaceId,
     );
   }
 }
 
-/// MCP 管理器：管理多个 MCP 服务器连接
+// JSON 序列化辅助
+String? _listToJson(List<String>? list) =>
+    list != null ? jsonEncode(list) : null;
+List<String>? _listFromJson(String? json) =>
+    json != null ? List<String>.from(jsonDecode(json) as List) : null;
+String? _mapToJson(Map<String, String>? map) =>
+    map != null ? jsonEncode(map) : null;
+Map<String, String>? _mapFromJson(String? json) =>
+    json != null ? Map<String, String>.from(jsonDecode(json) as Map) : null;
+
+/// MCP 管理器：管理多个 MCP 服务器连接，持久化到数据库
 class McpManager extends StateNotifier<List<McpServerConfig>> {
+  final McpDao _dao;
   final Map<String, McpClient> _clients = {};
 
-  McpManager() : super([]);
+  McpManager(this._dao) : super([]) {
+    _loadFromDb();
+  }
 
   Map<String, McpClient> get clients => _clients;
 
-  void addServer(McpServerConfig config) {
+  Future<void> _loadFromDb() async {
+    final rows = await _dao.getAllServers();
+    final configs = rows.map((r) => McpServerConfig(
+      id: r.id,
+      name: r.name,
+      transport: r.transport,
+      command: r.command,
+      args: _listFromJson(r.args),
+      url: r.url,
+      headers: _mapFromJson(r.headers),
+      isEnabled: r.isEnabled,
+      source: r.source,
+      marketplaceId: r.marketplaceId,
+    )).toList();
+    state = configs;
+
+    // 自动连接已启用的服务器
+    for (final config in configs) {
+      if (config.isEnabled) {
+        try {
+          await connectServer(config);
+        } catch (_) {
+          // 连接失败不阻塞启动
+        }
+      }
+    }
+  }
+
+  Future<void> addServer(McpServerConfig config) async {
+    await _dao.insertServer(
+      id: config.id,
+      name: config.name,
+      transport: config.transport,
+      command: config.command,
+      args: _listToJson(config.args),
+      url: config.url,
+      headers: _mapToJson(config.headers),
+      isEnabled: config.isEnabled,
+      source: config.source,
+      marketplaceId: config.marketplaceId,
+    );
     state = [...state, config];
   }
 
-  void removeServer(String id) {
+  Future<void> removeServer(String id) async {
     _clients[id]?.dispose();
     _clients.remove(id);
+    await _dao.deleteServer(id);
     state = state.where((s) => s.id != id).toList();
   }
 
-  void updateServer(McpServerConfig config) {
+  Future<void> updateServer(McpServerConfig config) async {
+    await _dao.updateServer(
+      id: config.id,
+      name: config.name,
+      isEnabled: config.isEnabled,
+      command: config.command,
+      args: _listToJson(config.args),
+      url: config.url,
+      headers: _mapToJson(config.headers),
+    );
     state = state.map((s) => s.id == config.id ? config : s).toList();
   }
 
@@ -98,7 +172,9 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
     for (final entry in _clients.entries) {
       final serverId = entry.key;
       final client = entry.value;
-      final serverName = state.firstWhere((s) => s.id == serverId).name;
+      final matching = state.where((s) => s.id == serverId);
+      if (matching.isEmpty) continue;
+      final serverName = matching.first.name;
       for (final tool in client.tools) {
         result.add(McpToolWithServer(
           serverId: serverId,
@@ -145,5 +221,6 @@ class McpToolWithServer {
 
 final mcpManagerProvider =
     StateNotifierProvider<McpManager, List<McpServerConfig>>((ref) {
-  return McpManager();
+  final dao = ref.watch(mcpDaoProvider);
+  return McpManager(dao);
 });
