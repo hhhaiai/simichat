@@ -57,10 +57,13 @@ class ModelFetcher {
             final id = (m['id'] as String? ?? '').toLowerCase();
             final types = (m['supported_endpoint_types'] as List?)
                 ?.map((e) => e.toString())
-                .toList() ?? [];
+                .toList();
 
-            // 排除纯 embedding/rerank 端点类型
-            if (types.every((t) => t != 'openai' && t != 'chat')) return false;
+            // 如果有 supported_endpoint_types 字段，排除纯 embedding/rerank 端点
+            if (types != null && types.isNotEmpty &&
+                types.every((t) => t != 'openai' && t != 'chat')) {
+              return false;
+            }
 
             // 排除名称包含非对话关键词的模型
             if (_nonChatKeywords.any((kw) => id.contains(kw))) return false;
