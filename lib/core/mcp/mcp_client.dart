@@ -96,8 +96,9 @@ class McpClient {
 
   Future<Map<String, dynamic>> _sendRequest(
     String method,
-    Map<String, dynamic> params,
-  ) async {
+    Map<String, dynamic> params, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
     final id = _nextId++;
     final completer = Completer<Map<String, dynamic>>();
     _pendingRequests[id] = completer;
@@ -109,17 +110,20 @@ class McpClient {
       'params': params,
     };
 
-    _transport.send(message);
+    await _transport.send(message);
 
-    return completer.future;
+    return completer.future.timeout(timeout, onTimeout: () {
+      _pendingRequests.remove(id);
+      throw TimeoutException('MCP request timed out: $method');
+    });
   }
 
   void _sendNotification(String method, Map<String, dynamic> params) {
-    _transport.send({
+    unawaited(_transport.send({
       'jsonrpc': '2.0',
       'method': method,
       'params': params,
-    });
+    }));
   }
 
   void _onMessage(Map<String, dynamic> message) {
@@ -148,7 +152,7 @@ class McpClient {
 abstract class McpTransport {
   Future<void> connect(void Function(Map<String, dynamic>) onMessage);
   Future<void> disconnect();
-  void send(Map<String, dynamic> message);
+  Future<void> send(Map<String, dynamic> message);
 }
 
 /// stdio 传输（本地进程）
@@ -174,6 +178,14 @@ class StdioTransport implements McpTransport {
         debugPrint('[MCP Stdio] Parse error: $e');
       }
     });
+    _process!.stderr
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) {
+      if (line.trim().isNotEmpty) {
+        debugPrint('[MCP Stdio stderr] $line');
+      }
+    });
   }
 
   @override
@@ -183,7 +195,7 @@ class StdioTransport implements McpTransport {
   }
 
   @override
-  void send(Map<String, dynamic> message) {
+  Future<void> send(Map<String, dynamic> message) async {
     _process?.stdin.writeln(jsonEncode(message));
   }
 }
@@ -194,12 +206,14 @@ class SseTransport implements McpTransport {
   final Map<String, String> headers;
   http.Client? _client;
   String? _messageEndpoint;
+  StreamSubscription<String>? _sseSubscription;
 
   SseTransport({required this.url, this.headers = const {}});
 
   @override
   Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
     _client = http.Client();
+    final endpointCompleter = Completer<void>();
 
     final request = http.Request('GET', Uri.parse(url));
     request.headers.addAll(headers);
@@ -212,43 +226,74 @@ class SseTransport implements McpTransport {
     String? eventType;
     String dataBuffer = '';
 
-    await for (final line in stream) {
-      if (line.startsWith('event:')) {
-        eventType = line.substring(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataBuffer += line.substring(5).trim();
-      } else if (line.isEmpty && dataBuffer.isNotEmpty) {
-        if (eventType == 'endpoint') {
-          _messageEndpoint = dataBuffer;
-        } else if (eventType == 'message') {
-          try {
-            final message = jsonDecode(dataBuffer) as Map<String, dynamic>;
-            onMessage(message);
-          } catch (e) {
-            debugPrint('[MCP SSE] Parse error: $e');
+    _sseSubscription = stream.listen(
+      (line) {
+        if (line.startsWith('event:')) {
+          eventType = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataBuffer += line.substring(5).trim();
+        } else if (line.isEmpty && dataBuffer.isNotEmpty) {
+          if (eventType == 'endpoint') {
+            _messageEndpoint = dataBuffer;
+            if (!endpointCompleter.isCompleted) endpointCompleter.complete();
+          } else if (eventType == 'message') {
+            try {
+              final message = jsonDecode(dataBuffer) as Map<String, dynamic>;
+              onMessage(message);
+            } catch (e) {
+              debugPrint('[MCP SSE] Parse error: $e');
+            }
           }
+          eventType = null;
+          dataBuffer = '';
         }
-        eventType = null;
-        dataBuffer = '';
-      }
-    }
+      },
+      onError: (e) {
+        debugPrint('[MCP SSE] Stream error: $e');
+        if (!endpointCompleter.isCompleted) {
+          endpointCompleter.completeError(e);
+        }
+      },
+      onDone: () {
+        debugPrint('[MCP SSE] Stream closed');
+        if (!endpointCompleter.isCompleted) {
+          endpointCompleter.completeError(Exception('SSE stream closed before endpoint received'));
+        }
+      },
+    );
+
+    return endpointCompleter.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        throw TimeoutException('SSE endpoint not received within 15s');
+      },
+    );
   }
 
   @override
   Future<void> disconnect() async {
+    await _sseSubscription?.cancel();
+    _sseSubscription = null;
     _client?.close();
     _client = null;
   }
 
   @override
-  void send(Map<String, dynamic> message) {
+  Future<void> send(Map<String, dynamic> message) async {
     if (_messageEndpoint == null || _client == null) return;
     final body = jsonEncode(message);
-    _client!.post(
-      Uri.parse(_messageEndpoint!),
-      headers: {'Content-Type': 'application/json', ...headers},
-      body: body,
-    );
+    try {
+      final response = await _client!.post(
+        Uri.parse(_messageEndpoint!),
+        headers: {'Content-Type': 'application/json', ...headers},
+        body: body,
+      );
+      if (response.statusCode >= 400) {
+        debugPrint('[MCP SSE] POST failed: ${response.statusCode} ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('[MCP SSE] POST error: $e');
+    }
   }
 }
 
