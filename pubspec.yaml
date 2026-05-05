@@ -1,0 +1,65 @@
+name: ai_chat_app
+description: "Flutter 全平台 AI 对话应用"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 数据库
+  drift: ^2.22.1
+  sqlite3_flutter_libs: ^0.5.28
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # 状态管理
+  flutter_riverpod: ^2.6.1
+
+  # HTTP / SSE
+  dio: ^5.7.0
+
+  # Markdown 渲染
+  flutter_markdown: ^0.7.6
+  markdown: ^7.3.0
+
+  # 代码高亮
+  flutter_highlighter: ^0.1.0
+
+  # 加密存储
+  flutter_secure_storage: ^9.2.4
+
+  # 文件选择
+  file_picker: ^8.1.7
+  image_picker: ^1.1.2
+
+  # 持久化设置
+  shared_preferences: ^2.3.4
+
+  # 网络状态检测
+  connectivity_plus: ^6.1.1
+
+  # 工具
+  uuid: ^4.5.1
+  crypto: ^3.0.6
+  intl: 0.20.2
+  flutter_math_fork: ^0.7.4
+  http: ^1.6.0
+  webview_flutter: ^4.13.1
+  flutter_localizations:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.22.1
+  build_runner: ^2.4.14
+
+flutter:
+  uses-material-design: true
+  generate: true
