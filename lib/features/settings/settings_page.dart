@@ -458,6 +458,7 @@ class SettingsPage extends ConsumerWidget {
       ),
     );
 
+    var loadingDismissed = false;
     try {
       final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
       final models = await ModelFetcher.fetchModels(
@@ -466,7 +467,10 @@ class SettingsPage extends ConsumerWidget {
         apiKey: apiKey,
       );
 
-      if (context.mounted) Navigator.pop(context); // 关闭加载对话框
+      if (context.mounted) {
+        Navigator.pop(context);
+        loadingDismissed = true;
+      }
 
       if (models.isEmpty) {
         if (context.mounted) {
@@ -501,7 +505,7 @@ class SettingsPage extends ConsumerWidget {
         _showFetchResultDialog(context, ref, channel.id, newModels);
       }
     } catch (e) {
-      if (context.mounted) Navigator.pop(context); // 关闭加载对话框
+      if (!loadingDismissed && context.mounted) Navigator.pop(context);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('获取失败: $e')),

@@ -1,13 +1,7 @@
 import 'package:dio/dio.dart';
 
-/// 从 OpenAI 兼容接口获取可用模型列表
+/// 从 API 获取可用模型列表（不做过滤，返回全部模型）
 class ModelFetcher {
-  /// 非对话模型的关键词（embedding、reranker 等）
-  static const _nonChatKeywords = [
-    'embed', 'rerank', 'bge', 'clip', 'voyage', 'nomic', 'zerank',
-    'zembed', 'jina', 'embedding', 'retriever',
-  ];
-
   static Dio _createDio() => Dio(BaseOptions(
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 30),
@@ -25,9 +19,7 @@ class ModelFetcher {
     return '请求失败: ${e.message}';
   }
 
-  /// 获取模型列表（OpenAI Chat / Response 协议通用）
-  /// 返回模型 ID 列表，按字母排序
-  /// 自动过滤 embedding/reranker 等非对话模型
+  /// 获取 OpenAI 兼容接口的模型列表（返回全部，不做过滤）
   static Future<List<String>> fetchOpenAIModels({
     required String baseUrl,
     required String apiKey,
@@ -51,31 +43,11 @@ class ModelFetcher {
 
       if (modelList == null) return [];
 
-      // 过滤：只保留对话模型，排除 embedding/reranker
-      final models = modelList
-          .where((m) {
-            final id = (m['id'] as String? ?? '').toLowerCase();
-            final types = (m['supported_endpoint_types'] as List?)
-                ?.map((e) => e.toString())
-                .toList();
-
-            // 如果有 supported_endpoint_types 字段，排除纯 embedding/rerank 端点
-            if (types != null && types.isNotEmpty &&
-                types.every((t) => t != 'openai' && t != 'chat')) {
-              return false;
-            }
-
-            // 排除名称包含非对话关键词的模型
-            if (_nonChatKeywords.any((kw) => id.contains(kw))) return false;
-
-            return true;
-          })
+      return modelList
           .map((m) => m['id'] as String?)
           .whereType<String>()
           .toList()
         ..sort();
-
-      return models;
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
     } finally {
@@ -83,13 +55,11 @@ class ModelFetcher {
     }
   }
 
-  /// 获取 Claude 模型列表（Anthropic API）
+  /// 获取 Claude 模型列表（Anthropic API 没有列表端点，返回已知模型）
   static Future<List<String>> fetchClaudeModels({
     required String baseUrl,
     required String apiKey,
   }) async {
-    // Claude API 没有标准的 models 列表端点
-    // 返回已知的常用模型
     return [
       'claude-opus-4-20250514',
       'claude-sonnet-4-20250514',
@@ -101,7 +71,7 @@ class ModelFetcher {
     ];
   }
 
-  /// 获取 Gemini 模型列表
+  /// 获取 Gemini 模型列表（返回全部，不做过滤）
   static Future<List<String>> fetchGeminiModels({
     required String baseUrl,
     required String apiKey,
@@ -122,19 +92,15 @@ class ModelFetcher {
 
       if (modelList == null) return [];
 
-      final models = modelList
+      return modelList
           .map((m) {
             final name = m['name'] as String?;
             if (name == null) return null;
-            // 格式: "models/gemini-pro" → "gemini-pro"
             return name.contains('/') ? name.split('/').last : name;
           })
           .whereType<String>()
-          .where((name) => name.contains('gemini'))
           .toList()
         ..sort();
-
-      return models;
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
     } finally {
@@ -157,7 +123,6 @@ class ModelFetcher {
           .map((m) {
             final name = (m as Map<String, dynamic>)['name'] as String?;
             if (name == null) return null;
-            // 去除 :latest 后缀
             return name.endsWith(':latest') ? name.substring(0, name.length - 7) : name;
           })
           .whereType<String>()
