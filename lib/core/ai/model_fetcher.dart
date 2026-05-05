@@ -1,11 +1,22 @@
 import 'package:dio/dio.dart';
 
-/// 从 API 获取可用模型列表（不做过滤，返回全部模型）
+import 'model_capability.dart';
+
+class FetchedModel {
+  final String id;
+  final String capability;
+
+  const FetchedModel({required this.id, required this.capability});
+}
+
+/// 从 API 获取可用模型列表。
 class ModelFetcher {
-  static Dio _createDio() => Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 30),
-      ));
+  static Dio _createDio() => Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+    ),
+  );
 
   static String _errorMessage(DioException e) {
     final status = e.response?.statusCode;
@@ -15,21 +26,23 @@ class ModelFetcher {
     if (status == 429) return '请求过于频繁，请稍后再试';
     if (e.type == DioExceptionType.connectionTimeout) return '连接超时，请检查网络';
     if (e.type == DioExceptionType.receiveTimeout) return '响应超时，请检查网络';
-    if (e.type == DioExceptionType.connectionError) return '无法连接，请检查 Base URL 和网络';
+    if (e.type == DioExceptionType.connectionError) {
+      return '无法连接，请检查 Base URL 和网络';
+    }
     return '请求失败: ${e.message}';
   }
 
-  /// 获取 OpenAI 兼容接口的模型列表（返回全部，不做过滤）
-  static Future<List<String>> fetchOpenAIModels({
+  /// 获取 OpenAI 兼容接口的模型列表，并尽量识别 chat / embedding 能力。
+  static Future<List<FetchedModel>> fetchOpenAIModelInfos({
     required String baseUrl,
     required String apiKey,
   }) async {
     final dio = _createDio();
-    final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/models';
+    final normalizedUrl = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/models';
 
     try {
       final response = await dio.get(
-        url,
+        normalizedUrl,
         options: Options(
           headers: {
             'Authorization': 'Bearer $apiKey',
@@ -39,20 +52,48 @@ class ModelFetcher {
       );
 
       final data = response.data as Map<String, dynamic>;
-      final modelList = data['data'] as List?;
-
-      if (modelList == null) return [];
-
-      return modelList
-          .map((m) => m['id'] as String?)
-          .whereType<String>()
-          .toList()
-        ..sort();
+      return parseOpenAIModels(data);
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
     } finally {
       dio.close();
     }
+  }
+
+  static List<FetchedModel> parseOpenAIModels(Map<String, dynamic> data) {
+    final modelList = data['data'] as List?;
+    if (modelList == null) return [];
+
+    final models = <FetchedModel>[];
+    for (final raw in modelList) {
+      if (raw is! Map<String, dynamic>) continue;
+      final id = raw['id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      models.add(
+        FetchedModel(
+          id: id,
+          capability: ModelCapability.inferFromModel(id, metadata: raw),
+        ),
+      );
+    }
+    models.sort((a, b) {
+      final capabilityOrder = a.capability.compareTo(b.capability);
+      if (capabilityOrder != 0) return capabilityOrder;
+      return a.id.compareTo(b.id);
+    });
+    return models;
+  }
+
+  /// 获取 OpenAI 兼容接口的模型名称列表（兼容旧调用）。
+  static Future<List<String>> fetchOpenAIModels({
+    required String baseUrl,
+    required String apiKey,
+  }) async {
+    final models = await fetchOpenAIModelInfos(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+    );
+    return models.map((m) => m.id).toList();
   }
 
   /// 获取 Claude 模型列表（Anthropic API 没有列表端点，返回已知模型）
@@ -82,9 +123,7 @@ class ModelFetcher {
     try {
       final response = await dio.get(
         url,
-        options: Options(
-          headers: {'x-goog-api-key': apiKey},
-        ),
+        options: Options(headers: {'x-goog-api-key': apiKey}),
       );
 
       final data = response.data as Map<String, dynamic>;
@@ -123,7 +162,9 @@ class ModelFetcher {
           .map((m) {
             final name = (m as Map<String, dynamic>)['name'] as String?;
             if (name == null) return null;
-            return name.endsWith(':latest') ? name.substring(0, name.length - 7) : name;
+            return name.endsWith(':latest')
+                ? name.substring(0, name.length - 7)
+                : name;
           })
           .whereType<String>()
           .toList()
@@ -135,8 +176,8 @@ class ModelFetcher {
     }
   }
 
-  /// 根据协议类型自动获取模型列表
-  static Future<List<String>> fetchModels({
+  /// 根据协议类型自动获取模型列表；非 OpenAI-compatible 协议默认为 chat 模型。
+  static Future<List<FetchedModel>> fetchModelInfos({
     required String protocol,
     required String baseUrl,
     required String apiKey,
@@ -144,15 +185,35 @@ class ModelFetcher {
     switch (protocol) {
       case 'openai_chat':
       case 'openai_response':
-        return fetchOpenAIModels(baseUrl: baseUrl, apiKey: apiKey);
+        return fetchOpenAIModelInfos(baseUrl: baseUrl, apiKey: apiKey);
       case 'claude':
-        return fetchClaudeModels(baseUrl: baseUrl, apiKey: apiKey);
+        return (await fetchClaudeModels(baseUrl: baseUrl, apiKey: apiKey))
+            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
+            .toList();
       case 'gemini':
-        return fetchGeminiModels(baseUrl: baseUrl, apiKey: apiKey);
+        return (await fetchGeminiModels(baseUrl: baseUrl, apiKey: apiKey))
+            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
+            .toList();
       case 'ollama':
-        return fetchOllamaModels(baseUrl: baseUrl);
+        return (await fetchOllamaModels(baseUrl: baseUrl))
+            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
+            .toList();
       default:
         throw UnsupportedError('不支持的协议: $protocol');
     }
+  }
+
+  /// 兼容旧调用：只返回模型名。
+  static Future<List<String>> fetchModels({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+  }) async {
+    final models = await fetchModelInfos(
+      protocol: protocol,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+    );
+    return models.map((m) => m.id).toList();
   }
 }

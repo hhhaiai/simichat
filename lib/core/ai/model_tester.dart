@@ -1,18 +1,69 @@
 import 'dart:async';
 import 'ai_protocol.dart';
+import 'model_capability.dart';
 import 'openai_chat_protocol.dart';
 import 'openai_response_protocol.dart';
+import 'openai_embedding_client.dart';
 import 'claude_protocol.dart';
 import 'gemini_protocol.dart';
 import 'ollama_protocol.dart';
 
-/// 模型连通性测试工具
-///
-/// 发送一条极简消息（"Hi"）验证模型是否可用。
-/// 返回 null 表示连接成功，否则返回错误信息。
+/// 模型连通性测试工具。
 class ModelTester {
-  /// 测试指定模型是否可用（30 秒超时）
+  /// 测试指定模型是否可用（30 秒超时）。
   static Future<String?> testModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    String capability = ModelCapability.chat,
+  }) async {
+    if (ModelCapability.isEmbedding(capability)) {
+      return _testEmbeddingModel(
+        protocol: protocol,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      );
+    }
+    return _testChatModel(
+      protocol: protocol,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+    );
+  }
+
+  static Future<String?> _testEmbeddingModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
+    if (protocol != 'openai_chat' && protocol != 'openai_response') {
+      return '当前协议暂不支持 Embedding 测试';
+    }
+    try {
+      final result = await const OpenAiEmbeddingClient()
+          .createEmbeddings(
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+            model: model,
+            input: const ['ping'],
+          )
+          .timeout(const Duration(seconds: 30));
+      if (result.vectors.isEmpty || result.vectors.first.isEmpty) {
+        return 'Embedding 模型未返回向量';
+      }
+      return null;
+    } on TimeoutException {
+      return '测试超时（30秒），请检查网络或模型状态';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  static Future<String?> _testChatModel({
     required String protocol,
     required String baseUrl,
     required String apiKey,
@@ -40,9 +91,7 @@ class ModelTester {
     }
 
     try {
-      final messages = [
-        AiMessage(role: 'user', content: 'Hi'),
-      ];
+      final messages = [AiMessage(role: 'user', content: 'Hi')];
 
       final stream = adapter.sendStream(
         baseUrl: baseUrl,
@@ -51,7 +100,6 @@ class ModelTester {
         messages: messages,
       );
 
-      // 30 秒超时
       final result = await stream
           .firstWhere(
             (chunk) =>
@@ -60,7 +108,6 @@ class ModelTester {
           )
           .timeout(const Duration(seconds: 30));
 
-      // 收到有效内容即成功
       if ((result.content != null && result.content!.isNotEmpty) ||
           (result.thinking != null && result.thinking!.isNotEmpty)) {
         return null;

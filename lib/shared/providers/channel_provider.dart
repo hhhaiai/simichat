@@ -5,7 +5,7 @@ import 'database_provider.dart';
 
 /// 所有模型列表（跨渠道，不去重）
 final allModelsProvider = FutureProvider<List<ChannelModelWithChannel>>((ref) {
-  return ref.watch(channelDaoProvider).getAllModels();
+  return ref.watch(channelDaoProvider).getChatModels();
 });
 
 /// 所有渠道列表

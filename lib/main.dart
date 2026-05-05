@@ -7,6 +7,7 @@ import 'l10n/generated/app_localizations.dart';
 import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
 import 'core/database/app_database.dart';
+import 'core/notification/notification_service.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
 import 'shared/providers/channel_provider.dart';
@@ -15,6 +16,7 @@ import 'shared/providers/settings_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  NotificationService().init();
   runApp(const ProviderScope(child: AiChatApp()));
 }
 

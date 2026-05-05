@@ -97,3 +97,21 @@ SSE 解析：`candidates[0].content.parts[0].text`
 
 使用 `dio` + `ResponseType.stream`，逐行解析 `data:` 前缀，
 遇到 `data: [DONE]` 或流结束时关闭。
+
+## OpenAI-compatible 通用渠道
+
+任意兼容 OpenAI `/v1/models`、`/v1/chat/completions`、`/v1/embeddings` 的服务都应优先配置为通用 OpenAI-compatible 渠道：
+
+- Chat 模型使用 `openai_chat`，请求 `{baseUrl}/v1/chat/completions`，并强制流式输出。
+- Embedding 模型使用同一渠道的模型能力标记 `embedding`，请求 `{baseUrl}/v1/embeddings`。
+- 模型选择器只展示 `chat` 能力模型，避免 `BAAI/bge-m3` 等向量模型被误用于聊天。
+- `/v1/models` 返回值的模型能力以服务端 metadata 为准；缺失 metadata 时根据常见 embedding 命名做保守识别。
+- API Key 只允许用户在设置页录入并本地加密保存，不应把示例密钥或私钥写入源码。
+
+示例通用配置：
+
+| 服务 | Base URL | 协议 | 推荐模型能力 |
+|------|----------|------|--------------|
+| Grok compatible | `https://grok.chainlessdw.com` | `openai_chat` | chat |
+| Tumuer Router | `https://router.tumuer.me` | `openai_chat` | chat + embedding |
+| Fufu compatible | `https://fufu.iqach.top` | `openai_chat` | chat |

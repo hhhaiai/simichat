@@ -7,7 +7,6 @@ import '../../core/database/app_database.dart';
 import '../providers/session_provider.dart';
 import '../providers/folder_provider.dart';
 import '../providers/database_provider.dart';
-import 'model_selector.dart';
 
 /// 侧边栏：模型选择器 + 搜索 + 历史会话列表
 class Sidebar extends ConsumerStatefulWidget {
@@ -32,34 +31,37 @@ class _SidebarState extends ConsumerState<Sidebar> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Theme.of(context).colorScheme.surface,
+      color: Theme.of(context).colorScheme.surfaceContainerLowest,
       child: Column(
         children: [
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
-          // 模型选择器（带标签）
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
               children: [
-                Text(
-                  '当前模型',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[500],
-                    letterSpacing: 0.5,
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _createNewSession(context),
+                    icon: const Icon(Icons.edit_square, size: 18),
+                    label: const Text('新聊天'),
+                    style: OutlinedButton.styleFrom(
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                ModelSelector(
-                  onModelSelected: (modelId) async {
-                    final activeId = ref.read(activeSessionIdProvider);
-                    if (activeId != null) {
-                      await ref.read(sessionDaoProvider).updateDefaultModel(activeId, modelId);
-                    }
-                  },
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined, size: 20),
+                  tooltip: '设置',
+                  onPressed: () => Navigator.pushNamed(context, '/settings'),
                 ),
               ],
             ),
@@ -81,18 +83,21 @@ class _SidebarState extends ConsumerState<Sidebar> {
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(vertical: 8),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
                       ),
                       filled: true,
-                      fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      fillColor: Theme.of(context).colorScheme.surface,
                     ),
                     style: const TextStyle(fontSize: 13),
                     onChanged: (v) {
                       _searchDebounce?.cancel();
-                      _searchDebounce = Timer(const Duration(milliseconds: 300), () {
-                        setState(() => _searchQuery = v);
-                      });
+                      _searchDebounce = Timer(
+                        const Duration(milliseconds: 300),
+                        () {
+                          setState(() => _searchQuery = v);
+                        },
+                      );
                     },
                   ),
                 ),
@@ -102,30 +107,14 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   tooltip: '新建文件夹',
                   onPressed: () => _showCreateFolderDialog(context),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
                 ),
               ],
             ),
           ),
-
-          // 新建会话按钮
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () => _createNewSession(context),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('新建会话', style: TextStyle(fontSize: 13)),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 4),
 
           // 历史会话列表
           Expanded(
@@ -141,11 +130,14 @@ class _SidebarState extends ConsumerState<Sidebar> {
   Widget _buildSearchResults() {
     final results = ref.watch(sessionSearchProvider(_searchQuery));
     return results.when(
-      loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      loading: () =>
+          const Center(child: CircularProgressIndicator(strokeWidth: 2)),
       error: (e, _) => Center(child: Text('搜索失败: $e')),
       data: (sessions) {
         if (sessions.isEmpty) {
-          return const Center(child: Text('无搜索结果', style: TextStyle(color: Colors.grey)));
+          return const Center(
+            child: Text('无搜索结果', style: TextStyle(color: Colors.grey)),
+          );
         }
         return ListView.builder(
           padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -161,11 +153,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
     final foldersAsync = ref.watch(foldersProvider);
 
     return sessionsAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      loading: () =>
+          const Center(child: CircularProgressIndicator(strokeWidth: 2)),
       error: (e, _) => Center(child: Text('加载失败: $e')),
       data: (sessions) {
         return foldersAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          loading: () =>
+              const Center(child: CircularProgressIndicator(strokeWidth: 2)),
           error: (e, _) => Center(child: Text('加载失败: $e')),
           data: (folders) {
             // 按日期分组
@@ -195,7 +189,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 // 文件夹
                 if (folders.isNotEmpty) ...[
                   for (final f in folders)
-                    _buildFolderTile(f, sessions.where((s) => s.folderId == f.id).toList()),
+                    _buildFolderTile(
+                      f,
+                      sessions.where((s) => s.folderId == f.id).toList(),
+                    ),
                   const Divider(height: 16),
                 ],
 
@@ -240,7 +237,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
   Widget _buildFolderTile(Folder folder, List<Session> sessions) {
     return ExpansionTile(
-      title: Text(folder.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+      title: Text(
+        folder.name,
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+      ),
       tilePadding: const EdgeInsets.symmetric(horizontal: 8),
       childrenPadding: const EdgeInsets.only(left: 16),
       initiallyExpanded: false,
@@ -257,21 +257,27 @@ class _SidebarState extends ConsumerState<Sidebar> {
     return ListTile(
       dense: true,
       selected: isActive,
-      selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+      selectedTileColor: Theme.of(context).colorScheme.surface,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
       title: Text(
         session.title ?? '新会话',
         style: const TextStyle(fontSize: 13),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(timeStr, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+      subtitle: Text(
+        timeStr,
+        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+      ),
       trailing: PopupMenuButton<String>(
         icon: Icon(Icons.more_vert, size: 16, color: Colors.grey[500]),
         padding: EdgeInsets.zero,
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('重命名')),
-          const PopupMenuItem(value: 'delete', child: Text('删除', style: TextStyle(color: Colors.red))),
+          const PopupMenuItem(
+            value: 'delete',
+            child: Text('删除', style: TextStyle(color: Colors.red)),
+          ),
         ],
         onSelected: (action) => _handleSessionAction(action, session),
       ),
@@ -292,7 +298,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
         }
         break;
       case 'delete':
-        final confirmed = await _showDeleteConfirmDialog(session.title ?? '新会话');
+        final confirmed = await _showDeleteConfirmDialog(
+          session.title ?? '新会话',
+        );
         if (confirmed != true) return;
         await sessionDao.deleteSession(session.id);
         final remaining = await sessionDao.getAllSessions();
@@ -315,7 +323,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
         title: const Text('删除会话'),
         content: Text('确定删除「$title」？此操作不可撤销。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -334,8 +345,14 @@ class _SidebarState extends ConsumerState<Sidebar> {
         title: const Text('重命名'),
         content: TextField(controller: controller, autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('确定')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('确定'),
+          ),
         ],
       ),
     );
@@ -347,16 +364,22 @@ class _SidebarState extends ConsumerState<Sidebar> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新建文件夹'),
-        content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(hintText: '文件夹名称')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '文件夹名称'),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () async {
               if (controller.text.isNotEmpty) {
-                await ref.read(folderDaoProvider).createFolder(
-                  id: const Uuid().v4(),
-                  name: controller.text,
-                );
+                await ref
+                    .read(folderDaoProvider)
+                    .createFolder(id: const Uuid().v4(), name: controller.text);
                 refreshFolders(ref);
                 if (ctx.mounted) Navigator.pop(ctx);
               }

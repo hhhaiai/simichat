@@ -85,3 +85,4 @@ linux/flutter/ephemeral/
 # Secrets
 *.env
 .env.*
+.omx/

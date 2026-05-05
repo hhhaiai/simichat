@@ -10,6 +10,7 @@ import '../../core/context/token_estimator.dart';
 import '../../core/crypto/key_encryptor.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/channel_dao.dart';
+import '../../core/notification/notification_service.dart';
 import '../widgets/chat_input_bar.dart' show PendingAttachment;
 import 'database_provider.dart';
 import 'session_provider.dart';
@@ -245,6 +246,14 @@ Future<void> sendMessage({
       const StreamState(isStreaming: false);
   ref.invalidate(messagesProvider(sessionId));
   ref.invalidate(sessionsProvider);
+
+  // 本地通知：回复完成
+  unawaited(
+    NotificationService().showResponseComplete(
+      sessionTitle: session.title ?? '新会话',
+      preview: responseContent,
+    ),
+  );
 
   // 后台任务：自动生成标题
   if (session.title == null) {

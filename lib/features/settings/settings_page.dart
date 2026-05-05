@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/crypto/key_encryptor.dart';
+import '../../core/ai/model_capability.dart';
 import '../../core/ai/model_fetcher.dart';
 import '../../core/ai/model_tester.dart';
 import '../../core/ai/protocol_icons.dart';
@@ -53,10 +54,7 @@ class SettingsPage extends ConsumerWidget {
 
           // 关于
           _buildSectionHeader(context, '关于'),
-          const ListTile(
-            title: Text('版本'),
-            subtitle: Text('1.0.0'),
-          ),
+          const ListTile(title: Text('版本'), subtitle: Text('1.0.0')),
         ],
       ),
     );
@@ -133,11 +131,7 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  void _showThresholdDialog(
-    BuildContext context,
-    WidgetRef ref,
-    int current,
-  ) {
+  void _showThresholdDialog(BuildContext context, WidgetRef ref, int current) {
     double value = current.toDouble();
 
     showDialog(
@@ -150,7 +144,10 @@ class SettingsPage extends ConsumerWidget {
             children: [
               Text(
                 '${value.toInt()} tokens',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -169,17 +166,28 @@ class SettingsPage extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('500', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-                  Text('10000', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                  Text(
+                    '500',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
+                  Text(
+                    '10000',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
                 ],
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () {
-                ref.read(compressThresholdProvider.notifier).setThreshold(value.toInt());
+                ref
+                    .read(compressThresholdProvider.notifier)
+                    .setThreshold(value.toInt());
                 Navigator.pop(ctx);
               },
               child: const Text('确定'),
@@ -226,7 +234,11 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  Widget _buildChannelTile(BuildContext context, WidgetRef ref, ModelChannel channel) {
+  Widget _buildChannelTile(
+    BuildContext context,
+    WidgetRef ref,
+    ModelChannel channel,
+  ) {
     return ExpansionTile(
       leading: Icon(getProtocolIcon(channel.protocol)),
       title: Text(channel.name),
@@ -239,7 +251,8 @@ class SettingsPage extends ConsumerWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.edit, size: 18),
-            onPressed: () => _showChannelEditDialog(context, ref, channel: channel),
+            onPressed: () =>
+                _showChannelEditDialog(context, ref, channel: channel),
           ),
           IconButton(
             icon: const Icon(Icons.delete, size: 18, color: Colors.red),
@@ -258,20 +271,47 @@ class SettingsPage extends ConsumerWidget {
               children: [
                 for (final m in models)
                   ListTile(
-                    title: Text(m.modelName, style: const TextStyle(fontSize: 13)),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            m.modelName,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          ModelCapability.label(m.capability),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ],
+                    ),
                     dense: true,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.play_arrow, size: 18, color: Colors.green),
+                          icon: const Icon(
+                            Icons.play_arrow,
+                            size: 18,
+                            color: Colors.green,
+                          ),
                           tooltip: '测试连接',
                           onPressed: () => _testModel(context, ref, channel, m),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            size: 18,
+                            color: Colors.red,
+                          ),
                           onPressed: () async {
-                            await ref.read(channelDaoProvider).deleteModel(m.id);
+                            await ref
+                                .read(channelDaoProvider)
+                                .deleteModel(m.id);
                             refreshModels(ref);
                           },
                         ),
@@ -292,7 +332,11 @@ class SettingsPage extends ConsumerWidget {
                 ),
                 if (models.isNotEmpty)
                   ListTile(
-                    leading: const Icon(Icons.speed, size: 18, color: Colors.blue),
+                    leading: const Icon(
+                      Icons.speed,
+                      size: 18,
+                      color: Colors.blue,
+                    ),
                     title: const Text('一键测试全部', style: TextStyle(fontSize: 13)),
                     dense: true,
                     onTap: () => _testAllModels(context, ref, channel, models),
@@ -326,12 +370,18 @@ class SettingsPage extends ConsumerWidget {
               children: [
                 TextField(
                   controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: '渠道名称', hintText: '如 OpenAI'),
+                  decoration: const InputDecoration(
+                    labelText: '渠道名称',
+                    hintText: '如 OpenAI',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: urlCtrl,
-                  decoration: const InputDecoration(labelText: 'Base URL', hintText: 'https://api.openai.com'),
+                  decoration: const InputDecoration(
+                    labelText: 'Base URL',
+                    hintText: 'https://api.openai.com',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -344,8 +394,14 @@ class SettingsPage extends ConsumerWidget {
                   initialValue: protocol,
                   decoration: const InputDecoration(labelText: '协议类型'),
                   items: const [
-                    DropdownMenuItem(value: 'openai_chat', child: Text('OpenAI Chat')),
-                    DropdownMenuItem(value: 'openai_response', child: Text('OpenAI Response')),
+                    DropdownMenuItem(
+                      value: 'openai_chat',
+                      child: Text('OpenAI Chat'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'openai_response',
+                      child: Text('OpenAI Response'),
+                    ),
                     DropdownMenuItem(value: 'claude', child: Text('Claude')),
                     DropdownMenuItem(value: 'gemini', child: Text('Gemini')),
                     DropdownMenuItem(value: 'ollama', child: Text('Ollama')),
@@ -356,7 +412,10 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () async {
                 final channelDao = ref.read(channelDaoProvider);
@@ -377,7 +436,9 @@ class SettingsPage extends ConsumerWidget {
                     channel.id,
                     name: nameCtrl.text,
                     baseUrl: urlCtrl.text,
-                    apiKeyEncrypted: keyCtrl.text.isNotEmpty ? encryptedKey : null,
+                    apiKeyEncrypted: keyCtrl.text.isNotEmpty
+                        ? encryptedKey
+                        : null,
                     protocol: protocol,
                   );
                 }
@@ -413,34 +474,71 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  void _showAddModelDialog(BuildContext context, WidgetRef ref, String channelId) {
+  void _showAddModelDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String channelId,
+  ) {
     final modelCtrl = TextEditingController();
+    var capability = ModelCapability.chat;
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加模型'),
-        content: TextField(
-          controller: modelCtrl,
-          decoration: const InputDecoration(labelText: '模型名称', hintText: '如 gpt-4o'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(
-            onPressed: () async {
-              if (modelCtrl.text.isNotEmpty) {
-                await ref.read(channelDaoProvider).addModel(
-                  id: const Uuid().v4(),
-                  channelId: channelId,
-                  modelName: modelCtrl.text,
-                );
-                refreshModels(ref);
-                if (ctx.mounted) Navigator.pop(ctx);
-              }
-            },
-            child: const Text('添加'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('添加模型'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: modelCtrl,
+                decoration: const InputDecoration(
+                  labelText: '模型名称',
+                  hintText: '如 gpt-4o / BAAI/bge-m3',
+                ),
+                autofocus: true,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: capability,
+                decoration: const InputDecoration(labelText: '模型能力'),
+                items: const [
+                  DropdownMenuItem(
+                    value: ModelCapability.chat,
+                    child: Text('Chat 对话'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.embedding,
+                    child: Text('Embedding 向量'),
+                  ),
+                ],
+                onChanged: (v) => setDialogState(() => capability = v!),
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                if (modelCtrl.text.isNotEmpty) {
+                  await ref
+                      .read(channelDaoProvider)
+                      .addModel(
+                        id: const Uuid().v4(),
+                        channelId: channelId,
+                        modelName: modelCtrl.text,
+                        capability: capability,
+                      );
+                  refreshModels(ref);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                }
+              },
+              child: const Text('添加'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -468,7 +566,7 @@ class SettingsPage extends ConsumerWidget {
     var loadingDismissed = false;
     try {
       final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
-      final models = await ModelFetcher.fetchModels(
+      final models = await ModelFetcher.fetchModelInfos(
         protocol: channel.protocol,
         baseUrl: channel.baseUrl,
         apiKey: apiKey,
@@ -483,7 +581,7 @@ class SettingsPage extends ConsumerWidget {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('未获取到可用的对话模型（可能只有 embedding 模型）'),
+              content: Text('未获取到可用模型'),
               duration: Duration(seconds: 3),
             ),
           );
@@ -492,16 +590,22 @@ class SettingsPage extends ConsumerWidget {
       }
 
       // 获取已有的模型列表
-      final existingModels = await ref.read(channelDaoProvider).getModelsByChannel(channel.id);
-      final existingNames = existingModels.map((m) => m.modelName).toSet();
+      final existingModels = await ref
+          .read(channelDaoProvider)
+          .getModelsByChannel(channel.id);
+      final existingKeys = existingModels
+          .map((m) => '${m.capability}::${m.modelName}')
+          .toSet();
 
       // 过滤出新模型
-      final newModels = models.where((m) => !existingNames.contains(m)).toList();
+      final newModels = models
+          .where((m) => !existingKeys.contains('${m.capability}::${m.id}'))
+          .toList();
 
       if (newModels.isEmpty) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('所有 ${models.length} 个对话模型已存在，无需添加')),
+            SnackBar(content: Text('所有 ${models.length} 个模型已存在，无需添加')),
           );
         }
         return;
@@ -514,9 +618,9 @@ class SettingsPage extends ConsumerWidget {
     } catch (e) {
       if (!loadingDismissed && context.mounted) Navigator.pop(context);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('获取失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('获取失败: $e')));
       }
     }
   }
@@ -525,9 +629,9 @@ class SettingsPage extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     String channelId,
-    List<String> models,
+    List<FetchedModel> models,
   ) {
-    final selected = Set<String>.from(models);
+    final selected = models.map((m) => m.id).toSet();
 
     showDialog(
       context: context,
@@ -542,15 +646,19 @@ class SettingsPage extends ConsumerWidget {
               itemBuilder: (_, index) {
                 final model = models[index];
                 return CheckboxListTile(
-                  title: Text(model, style: const TextStyle(fontSize: 13)),
-                  value: selected.contains(model),
+                  title: Text(model.id, style: const TextStyle(fontSize: 13)),
+                  subtitle: Text(
+                    ModelCapability.label(model.capability),
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+                  value: selected.contains(model.id),
                   dense: true,
                   onChanged: (checked) {
                     setDialogState(() {
                       if (checked == true) {
-                        selected.add(model);
+                        selected.add(model.id);
                       } else {
-                        selected.remove(model);
+                        selected.remove(model.id);
                       }
                     });
                   },
@@ -559,15 +667,21 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () async {
                 final channelDao = ref.read(channelDaoProvider);
+                final byId = {for (final model in models) model.id: model};
                 for (final modelName in selected) {
+                  final model = byId[modelName];
                   await channelDao.addModel(
                     id: const Uuid().v4(),
                     channelId: channelId,
                     modelName: modelName,
+                    capability: model?.capability ?? ModelCapability.chat,
                   );
                 }
                 refreshModels(ref);
@@ -586,14 +700,21 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  void _deleteChannel(BuildContext context, WidgetRef ref, ModelChannel channel) {
+  void _deleteChannel(
+    BuildContext context,
+    WidgetRef ref,
+    ModelChannel channel,
+  ) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除渠道'),
         content: Text('确定删除「${channel.name}」及其所有模型？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
@@ -629,6 +750,7 @@ class SettingsPage extends ConsumerWidget {
         baseUrl: channel.baseUrl,
         apiKey: apiKey,
         model: model.modelName,
+        capability: model.capability,
       );
 
       if (!context.mounted) return;
@@ -696,14 +818,39 @@ class SettingsPage extends ConsumerWidget {
                   dense: true,
                   leading: done
                       ? (result == null
-                          ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
-                          : const Icon(Icons.cancel, color: Colors.red, size: 20))
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: Colors.green,
+                                size: 20,
+                              )
+                            : const Icon(
+                                Icons.cancel,
+                                color: Colors.red,
+                                size: 20,
+                              ))
                       : testing
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.radio_button_unchecked, color: Colors.grey, size: 20),
-                  title: Text(m.modelName, style: const TextStyle(fontSize: 13)),
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(
+                          Icons.radio_button_unchecked,
+                          color: Colors.grey,
+                          size: 20,
+                        ),
+                  title: Text(
+                    m.modelName,
+                    style: const TextStyle(fontSize: 13),
+                  ),
                   subtitle: done && result != null
-                      ? Text(result, style: const TextStyle(fontSize: 11, color: Colors.red))
+                      ? Text(
+                          result,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.red,
+                          ),
+                        )
                       : null,
                 );
               },
@@ -765,10 +912,15 @@ class SettingsPage extends ConsumerWidget {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.edit, size: 18),
-                      onPressed: () => _showPromptEditDialog(context, ref, prompt: p),
+                      onPressed: () =>
+                          _showPromptEditDialog(context, ref, prompt: p),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.delete, size: 18, color: Colors.red),
+                      icon: const Icon(
+                        Icons.delete,
+                        size: 18,
+                        color: Colors.red,
+                      ),
                       onPressed: () => _deletePrompt(context, ref, p),
                     ),
                   ],
@@ -792,7 +944,9 @@ class SettingsPage extends ConsumerWidget {
   }) {
     final nameCtrl = TextEditingController(text: prompt?.name ?? '');
     final contentCtrl = TextEditingController(text: prompt?.content ?? '');
-    final categoryCtrl = TextEditingController(text: prompt?.category ?? 'general');
+    final categoryCtrl = TextEditingController(
+      text: prompt?.category ?? 'general',
+    );
 
     showDialog(
       context: context,
@@ -804,13 +958,19 @@ class SettingsPage extends ConsumerWidget {
             children: [
               TextField(
                 controller: nameCtrl,
-                decoration: const InputDecoration(labelText: '名称', hintText: '如 翻译助手'),
+                decoration: const InputDecoration(
+                  labelText: '名称',
+                  hintText: '如 翻译助手',
+                ),
                 autofocus: true,
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: categoryCtrl,
-                decoration: const InputDecoration(labelText: '分类', hintText: 'general'),
+                decoration: const InputDecoration(
+                  labelText: '分类',
+                  hintText: 'general',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -826,7 +986,10 @@ class SettingsPage extends ConsumerWidget {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () async {
               if (nameCtrl.text.isEmpty || contentCtrl.text.isEmpty) return;
@@ -861,11 +1024,16 @@ class SettingsPage extends ConsumerWidget {
         title: const Text('删除提示词'),
         content: Text('确定删除「${prompt.name}」？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
-              await ref.read(promptNotifierProvider.notifier).deletePrompt(prompt.id);
+              await ref
+                  .read(promptNotifierProvider.notifier)
+                  .deletePrompt(prompt.id);
               if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('删除'),
@@ -946,14 +1114,20 @@ class SettingsPage extends ConsumerWidget {
               children: [
                 TextField(
                   controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: '名称', hintText: '如 filesystem'),
+                  decoration: const InputDecoration(
+                    labelText: '名称',
+                    hintText: '如 filesystem',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: transport,
                   decoration: const InputDecoration(labelText: '传输方式'),
                   items: const [
-                    DropdownMenuItem(value: 'stdio', child: Text('Stdio（本地进程）')),
+                    DropdownMenuItem(
+                      value: 'stdio',
+                      child: Text('Stdio（本地进程）'),
+                    ),
                     DropdownMenuItem(value: 'sse', child: Text('SSE（远程服务）')),
                   ],
                   onChanged: (v) => setDialogState(() => transport = v!),
@@ -964,7 +1138,8 @@ class SettingsPage extends ConsumerWidget {
                     controller: commandCtrl,
                     decoration: const InputDecoration(
                       labelText: '命令',
-                      hintText: 'npx -y @modelcontextprotocol/server-filesystem',
+                      hintText:
+                          'npx -y @modelcontextprotocol/server-filesystem',
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -988,7 +1163,10 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
             FilledButton(
               onPressed: () async {
                 if (nameCtrl.text.isEmpty) return;
@@ -1008,9 +1186,9 @@ class SettingsPage extends ConsumerWidget {
                   await manager.connectServer(config);
                 } catch (e) {
                   if (ctx.mounted) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(content: Text('连接失败: $e')),
-                    );
+                    ScaffoldMessenger.of(
+                      ctx,
+                    ).showSnackBar(SnackBar(content: Text('连接失败: $e')));
                   }
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -1022,5 +1200,4 @@ class SettingsPage extends ConsumerWidget {
       ),
     );
   }
-
 }

@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import '../../ai/model_capability.dart';
 import '../app_database.dart';
 import '../tables.dart';
 
@@ -9,7 +10,9 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   ChannelDao(super.db);
 
   Future<List<ModelChannel>> getEnabledChannels() {
-    return (select(modelChannels)..where((t) => t.isEnabled.equals(true))).get();
+    return (select(
+      modelChannels,
+    )..where((t) => t.isEnabled.equals(true))).get();
   }
 
   Future<List<ModelChannel>> getAllChannels() {
@@ -17,17 +20,44 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   }
 
   Future<List<ChannelModel>> getModelsByChannel(String channelId) {
-    return (select(channelModels)..where((t) => t.channelId.equals(channelId)))
-        .get();
+    return (select(
+      channelModels,
+    )..where((t) => t.channelId.equals(channelId))).get();
   }
 
   Future<List<ChannelModelWithChannel>> getAllModels() async {
-    final query = select(channelModels).join([
-      innerJoin(modelChannels,
-          modelChannels.id.equalsExp(channelModels.channelId)),
-    ])
-      ..where(modelChannels.isEnabled.equals(true))
-      ..orderBy([OrderingTerm.asc(modelChannels.name)]);
+    final query =
+        select(channelModels).join([
+            innerJoin(
+              modelChannels,
+              modelChannels.id.equalsExp(channelModels.channelId),
+            ),
+          ])
+          ..where(modelChannels.isEnabled.equals(true))
+          ..orderBy([OrderingTerm.asc(modelChannels.name)]);
+
+    final results = await query.get();
+    return results.map((row) {
+      return ChannelModelWithChannel(
+        channelModel: row.readTable(channelModels),
+        channel: row.readTable(modelChannels),
+      );
+    }).toList();
+  }
+
+  Future<List<ChannelModelWithChannel>> getChatModels() async {
+    final query =
+        select(channelModels).join([
+            innerJoin(
+              modelChannels,
+              modelChannels.id.equalsExp(channelModels.channelId),
+            ),
+          ])
+          ..where(
+            modelChannels.isEnabled.equals(true) &
+                channelModels.capability.equals(ModelCapability.chat),
+          )
+          ..orderBy([OrderingTerm.asc(modelChannels.name)]);
 
     final results = await query.get();
     return results.map((row) {
@@ -45,17 +75,20 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
     required String apiKeyEncrypted,
     required String protocol,
   }) {
-    return into(modelChannels).insert(ModelChannelsCompanion.insert(
-      id: id,
-      name: name,
-      baseUrl: baseUrl,
-      apiKeyEncrypted: apiKeyEncrypted,
-      protocol: protocol,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    ));
+    return into(modelChannels).insert(
+      ModelChannelsCompanion.insert(
+        id: id,
+        name: name,
+        baseUrl: baseUrl,
+        apiKeyEncrypted: apiKeyEncrypted,
+        protocol: protocol,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
   }
 
-  Future<void> updateChannel(String id, {
+  Future<void> updateChannel(
+    String id, {
     String? name,
     String? baseUrl,
     String? apiKeyEncrypted,
@@ -83,12 +116,16 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
     required String id,
     required String channelId,
     required String modelName,
+    String capability = ModelCapability.chat,
   }) {
-    return into(channelModels).insert(ChannelModelsCompanion.insert(
-      id: id,
-      channelId: channelId,
-      modelName: modelName,
-    ));
+    return into(channelModels).insert(
+      ChannelModelsCompanion.insert(
+        id: id,
+        channelId: channelId,
+        modelName: modelName,
+        capability: Value(ModelCapability.normalize(capability)),
+      ),
+    );
   }
 
   Future<void> deleteModel(String id) {
@@ -98,16 +135,18 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   Future<void> setDefaultModel(String channelId, String modelId) async {
     await (update(channelModels)..where((t) => t.channelId.equals(channelId)))
         .write(const ChannelModelsCompanion(isDefault: Value(false)));
-    await (update(channelModels)..where((t) => t.id.equals(modelId)))
-        .write(const ChannelModelsCompanion(isDefault: Value(true)));
+    await (update(channelModels)..where((t) => t.id.equals(modelId))).write(
+      const ChannelModelsCompanion(isDefault: Value(true)),
+    );
   }
 
   Future<ChannelModelWithChannel?> getModelWithChannel(String modelId) async {
     final query = select(channelModels).join([
-      innerJoin(modelChannels,
-          modelChannels.id.equalsExp(channelModels.channelId)),
-    ])
-      ..where(channelModels.id.equals(modelId));
+      innerJoin(
+        modelChannels,
+        modelChannels.id.equalsExp(channelModels.channelId),
+      ),
+    ])..where(channelModels.id.equals(modelId));
 
     final results = await query.get();
     if (results.isEmpty) return null;

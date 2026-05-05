@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'latex_markdown_widget.dart';
 
-/// 消息气泡组件（用户/AI）
+const double _kChatContentMaxWidth = 860;
+
+/// ChatGPT-style message row: assistant answers are plain content blocks;
+/// user messages are compact right-aligned bubbles.
 class MessageBubble extends StatelessWidget {
   final String role;
   final String content;
@@ -29,111 +32,97 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isUser) ...[
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              child: Icon(Icons.auto_awesome, size: 16,
-                  color: Theme.of(context).colorScheme.primary),
-            ),
-            const SizedBox(width: 8),
-          ],
-          Flexible(
-            child: Column(
-              crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                // 思考内容（可折叠）
-                if (!isUser && thinkingContent != null && thinkingContent!.isNotEmpty)
-                  _ThinkingBlock(content: thinkingContent!),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _kChatContentMaxWidth),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: isUser
+              ? _buildUserMessage(context)
+              : _buildAssistantMessage(context),
+        ),
+      ),
+    );
+  }
 
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isUser
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(16),
-                      topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(isUser ? 16 : 4),
-                      bottomRight: Radius.circular(isUser ? 4 : 16),
-                    ),
-                  ),
-                  child: isUser
-                      ? SelectableText(
-                          content,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.onPrimary,
-                            fontSize: 14,
-                          ),
-                        )
-                      : LatexMarkdownWidget(data: content),
-                ),
-                // AI 消息的操作按钮
-                if (!isUser)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _ActionButton(
-                          icon: Icons.copy,
-                          tooltip: '复制',
-                          onTap: () {
-                            if (onCopy != null) {
-                              onCopy!();
-                            } else {
-                              Clipboard.setData(ClipboardData(text: content));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)),
-                              );
-                            }
-                          },
-                        ),
-                        _ActionButton(
-                          icon: Icons.refresh,
-                          tooltip: '重试',
-                          onTap: onRetry ?? () {},
-                        ),
-                        if (onFork != null)
-                          _ActionButton(
-                            icon: Icons.call_split,
-                            tooltip: '复制会话',
-                            onTap: onFork!,
-                          ),
-                      ],
-                    ),
-                  ),
-                // AI 消息元数据
-                if (!isUser && (tokens > 0 || responseMs != null))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: _MessageMeta(tokens: tokens, responseMs: responseMs),
-                  ),
-              ],
+  Widget _buildUserMessage(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Flexible(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 620),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: SelectableText(
+              content,
+              style: TextStyle(
+                color: scheme.onSurface,
+                fontSize: 15,
+                height: 1.45,
+              ),
             ),
           ),
-          if (isUser) ...[
-            const SizedBox(width: 8),
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Theme.of(context).colorScheme.tertiaryContainer,
-              child: Icon(Icons.person, size: 16, color: Theme.of(context).colorScheme.tertiary),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAssistantMessage(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (thinkingContent != null && thinkingContent!.isNotEmpty)
+          _ThinkingBlock(content: thinkingContent!),
+        LatexMarkdownWidget(data: content),
+        const SizedBox(height: 6),
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          runSpacing: 4,
+          children: [
+            _IconActionButton(
+              icon: Icons.copy_all_outlined,
+              tooltip: '复制',
+              onTap: () {
+                if (onCopy != null) {
+                  onCopy!();
+                } else {
+                  Clipboard.setData(ClipboardData(text: content));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('已复制'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                }
+              },
             ),
+            _IconActionButton(
+              icon: Icons.refresh,
+              tooltip: '重新生成',
+              onTap: onRetry ?? () {},
+            ),
+            if (onFork != null)
+              _IconActionButton(
+                icon: Icons.call_split,
+                tooltip: '复制分支',
+                onTap: onFork!,
+              ),
+            if (tokens > 0 || responseMs != null)
+              _MessageMeta(tokens: tokens, responseMs: responseMs),
           ],
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-/// 可折叠的思考内容块
 class _ThinkingBlock extends StatefulWidget {
   final String content;
   const _ThinkingBlock({required this.content});
@@ -147,43 +136,42 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.grey[100],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? Colors.white10 : Colors.grey[300]!,
-          width: 0.5,
-        ),
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               child: Row(
                 children: [
-                  Icon(Icons.psychology, size: 14,
-                      color: isDark ? Colors.white54 : Colors.grey[600]),
-                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.psychology_alt_outlined,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
                   Text(
                     '思考过程',
                     style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: isDark ? Colors.white54 : Colors.grey[600],
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
                   const Spacer(),
                   Icon(
-                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                    size: 16,
-                    color: isDark ? Colors.white54 : Colors.grey[500],
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
                   ),
                 ],
               ),
@@ -191,13 +179,13 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
           ),
           if (_expanded)
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               child: SelectableText(
                 widget.content,
                 style: TextStyle(
                   fontSize: 13,
-                  color: isDark ? Colors.white70 : Colors.grey[700],
                   height: 1.5,
+                  color: scheme.onSurfaceVariant,
                 ),
               ),
             ),
@@ -207,12 +195,12 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
   }
 }
 
-class _ActionButton extends StatelessWidget {
+class _IconActionButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
 
-  const _ActionButton({
+  const _IconActionButton({
     required this.icon,
     required this.tooltip,
     required this.onTap,
@@ -220,19 +208,14 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: Colors.grey[500]),
-            const SizedBox(width: 2),
-            Text(tooltip, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
-          ],
-        ),
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: onTap,
+        icon: Icon(icon, size: 17),
+        visualDensity: VisualDensity.compact,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+        style: IconButton.styleFrom(minimumSize: const Size(32, 32)),
       ),
     );
   }
@@ -249,19 +232,21 @@ class _MessageMeta extends StatelessWidget {
     final parts = <String>[];
     if (tokens > 0) parts.add('$tokens tokens');
     if (responseMs != null) {
-      if (responseMs! >= 1000) {
-        parts.add('${(responseMs! / 1000).toStringAsFixed(1)}s');
-      } else {
-        parts.add('${responseMs!}ms');
-      }
+      parts.add(
+        responseMs! >= 1000
+            ? '${(responseMs! / 1000).toStringAsFixed(1)}s'
+            : '${responseMs!}ms',
+      );
     }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.info_outline, size: 12, color: Colors.grey[400]),
-        const SizedBox(width: 4),
-        Text(parts.join(' · '), style: TextStyle(fontSize: 11, color: Colors.grey[400])),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Text(
+        parts.join(' · '),
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
     );
   }
 }
