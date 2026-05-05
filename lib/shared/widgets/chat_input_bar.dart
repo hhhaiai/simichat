@@ -285,7 +285,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
           // Token 计数
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: widget.controller,
-            builder: (_, value, __) {
+            builder: (context, value, child) {
               final text = value.text.trim();
               if (text.isEmpty) return const SizedBox.shrink();
               final tokens = TokenEstimator.estimate(text);
