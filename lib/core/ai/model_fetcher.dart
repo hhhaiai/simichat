@@ -8,6 +8,23 @@ class ModelFetcher {
     'zembed', 'jina', 'embedding', 'retriever',
   ];
 
+  static Dio _createDio() => Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 30),
+      ));
+
+  static String _errorMessage(DioException e) {
+    final status = e.response?.statusCode;
+    if (status == 401) return '认证失败，请检查 API Key';
+    if (status == 403) return '权限不足，请检查 API Key 权限';
+    if (status == 404) return '接口不存在，请检查 Base URL';
+    if (status == 429) return '请求过于频繁，请稍后再试';
+    if (e.type == DioExceptionType.connectionTimeout) return '连接超时，请检查网络';
+    if (e.type == DioExceptionType.receiveTimeout) return '响应超时，请检查网络';
+    if (e.type == DioExceptionType.connectionError) return '无法连接，请检查 Base URL 和网络';
+    return '请求失败: ${e.message}';
+  }
+
   /// 获取模型列表（OpenAI Chat / Response 协议通用）
   /// 返回模型 ID 列表，按字母排序
   /// 自动过滤 embedding/reranker 等非对话模型
@@ -15,7 +32,7 @@ class ModelFetcher {
     required String baseUrl,
     required String apiKey,
   }) async {
-    final dio = Dio();
+    final dio = _createDio();
     final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/models';
 
     try {
@@ -57,7 +74,7 @@ class ModelFetcher {
 
       return models;
     } on DioException catch (e) {
-      throw Exception('获取模型列表失败: ${e.message}');
+      throw Exception(_errorMessage(e));
     } finally {
       dio.close();
     }
@@ -73,6 +90,10 @@ class ModelFetcher {
     return [
       'claude-opus-4-20250514',
       'claude-sonnet-4-20250514',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-haiku-20241022',
+      'claude-3-opus-20240229',
+      'claude-3-haiku-20240307',
       'claude-haiku-4-5-20251001',
     ];
   }
@@ -82,7 +103,7 @@ class ModelFetcher {
     required String baseUrl,
     required String apiKey,
   }) async {
-    final dio = Dio();
+    final dio = _createDio();
     final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1beta/models';
 
     try {
@@ -112,7 +133,7 @@ class ModelFetcher {
 
       return models;
     } on DioException catch (e) {
-      throw Exception('获取模型列表失败: ${e.message}');
+      throw Exception(_errorMessage(e));
     } finally {
       dio.close();
     }
@@ -122,7 +143,7 @@ class ModelFetcher {
   static Future<List<String>> fetchOllamaModels({
     required String baseUrl,
   }) async {
-    final dio = Dio();
+    final dio = _createDio();
     final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/api/tags';
     try {
       final response = await dio.get(url);
@@ -130,12 +151,17 @@ class ModelFetcher {
       final models = data['models'] as List?;
       if (models == null) return [];
       return models
-          .map((m) => (m as Map<String, dynamic>)['name'] as String?)
+          .map((m) {
+            final name = (m as Map<String, dynamic>)['name'] as String?;
+            if (name == null) return null;
+            // 去除 :latest 后缀
+            return name.endsWith(':latest') ? name.substring(0, name.length - 7) : name;
+          })
           .whereType<String>()
           .toList()
         ..sort();
     } on DioException catch (e) {
-      throw Exception('获取 Ollama 模型列表失败: ${e.message}');
+      throw Exception(_errorMessage(e));
     } finally {
       dio.close();
     }
