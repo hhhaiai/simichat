@@ -76,7 +76,8 @@ class ContextCompressor {
       messages: [AiMessage(role: 'user', content: prompt)],
       systemPrompt: '你是一个对话摘要助手，擅长提炼关键信息。',
     )) {
-      buffer.write(token);
+      if (token.content != null) buffer.write(token.content);
+      if (token.thinking != null) buffer.write(token.thinking);
     }
 
     final summaryContent = buffer.toString();

@@ -23,7 +23,8 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
   }) {
     return (select(messages)
           ..where((t) => t.sessionId.equals(sessionId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)])
+          ..limit(limit, offset: offset))
         .get();
   }
 
