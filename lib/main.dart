@@ -6,8 +6,10 @@ import 'l10n/generated/app_localizations.dart';
 
 import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
+import 'core/database/app_database.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
+import 'shared/providers/channel_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
 
@@ -190,6 +192,51 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     );
   }
 
+  /// 移动端 AppBar 标题：会话名 + 当前模型（hamburger 旁边可见）
+  Widget _buildMobileTitle(
+    BuildContext context,
+    WidgetRef ref,
+    AsyncValue<Session?> activeSession,
+  ) {
+    final modelsAsync = ref.watch(allModelsProvider);
+    final selectedId = ref.watch(selectedModelIdProvider);
+
+    final sessionTitle = activeSession.when(
+      loading: () => 'AI Chat',
+      error: (_, _) => 'AI Chat',
+      data: (s) => s?.title ?? 'AI Chat',
+    );
+
+    final modelLabel = modelsAsync.whenOrNull(
+      data: (models) {
+        if (selectedId != null) {
+          try {
+            return models.firstWhere((m) => m.channelModel.id == selectedId).displayLabel;
+          } catch (_) {}
+        }
+        return models.isNotEmpty ? models.first.displayLabel : null;
+      },
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          sessionTitle,
+          style: const TextStyle(fontSize: 16),
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (modelLabel != null)
+          Text(
+            modelLabel,
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            overflow: TextOverflow.ellipsis,
+          ),
+      ],
+    );
+  }
+
   PreferredSizeWidget _buildChatAppBar(
     BuildContext context,
     WidgetRef ref, {
@@ -206,15 +253,17 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
               ),
             )
           : null,
-      title: activeSession.when(
-        loading: () => const Text('AI Chat'),
-        error: (_, _) => const Text('AI Chat'),
-        data: (session) => Text(
-          session?.title ?? 'AI Chat',
-          style: const TextStyle(fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
+      title: showMenuButton
+          ? _buildMobileTitle(context, ref, activeSession)
+          : activeSession.when(
+              loading: () => const Text('AI Chat'),
+              error: (_, _) => const Text('AI Chat'),
+              data: (session) => Text(
+                session?.title ?? 'AI Chat',
+                style: const TextStyle(fontSize: 16),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
       centerTitle: true,
       actions: [
         IconButton(

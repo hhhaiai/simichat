@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/crypto/key_encryptor.dart';
 import '../../core/ai/model_fetcher.dart';
+import '../../core/ai/model_tester.dart';
 import '../../core/ai/protocol_icons.dart';
 import '../../core/database/app_database.dart';
 import '../../shared/providers/database_provider.dart';
@@ -259,12 +260,22 @@ class SettingsPage extends ConsumerWidget {
                   ListTile(
                     title: Text(m.modelName, style: const TextStyle(fontSize: 13)),
                     dense: true,
-                    trailing: IconButton(
-                      icon: const Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
-                      onPressed: () async {
-                        await ref.read(channelDaoProvider).deleteModel(m.id);
-                        refreshModels(ref);
-                      },
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.play_arrow, size: 18, color: Colors.green),
+                          tooltip: '测试连接',
+                          onPressed: () => _testModel(context, ref, channel, m),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline, size: 18, color: Colors.red),
+                          onPressed: () async {
+                            await ref.read(channelDaoProvider).deleteModel(m.id);
+                            refreshModels(ref);
+                          },
+                        ),
+                      ],
                     ),
                   ),
                 ListTile(
@@ -343,10 +354,12 @@ class SettingsPage extends ConsumerWidget {
               onPressed: () async {
                 final channelDao = ref.read(channelDaoProvider);
                 final encryptedKey = KeyEncryptor.encrypt(keyCtrl.text);
+                final isNew = channel == null;
+                final channelId = channel?.id ?? const Uuid().v4();
 
-                if (channel == null) {
+                if (isNew) {
                   await channelDao.createChannel(
-                    id: const Uuid().v4(),
+                    id: channelId,
                     name: nameCtrl.text,
                     baseUrl: urlCtrl.text,
                     apiKeyEncrypted: encryptedKey,
@@ -363,6 +376,27 @@ class SettingsPage extends ConsumerWidget {
                 }
                 refreshModels(ref);
                 if (ctx.mounted) Navigator.pop(ctx);
+
+                // 新建渠道后自动获取模型列表
+                if (isNew && context.mounted) {
+                  await Future.delayed(const Duration(milliseconds: 400));
+                  if (context.mounted) {
+                    _fetchAndAddModels(
+                      context,
+                      ref,
+                      ModelChannel(
+                        id: channelId,
+                        name: nameCtrl.text,
+                        baseUrl: urlCtrl.text,
+                        apiKeyEncrypted: encryptedKey,
+                        protocol: protocol,
+                        isEnabled: true,
+                        isDefault: false,
+                        createdAt: DateTime.now().millisecondsSinceEpoch,
+                      ),
+                    );
+                  }
+                }
               },
               child: const Text('保存'),
             ),
@@ -561,6 +595,63 @@ class SettingsPage extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _testModel(
+    BuildContext context,
+    WidgetRef ref,
+    ModelChannel channel,
+    ChannelModel model,
+  ) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: Text('正在测试 ${model.modelName}...'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+
+    try {
+      final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+      final error = await ModelTester.testModel(
+        protocol: channel.protocol,
+        baseUrl: channel.baseUrl,
+        apiKey: apiKey,
+        model: model.modelName,
+      );
+
+      if (!context.mounted) return;
+      scaffoldMessenger.hideCurrentSnackBar();
+
+      if (error == null) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('✅ ${model.modelName} 连接成功'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('❌ ${model.modelName} 连接失败: $error'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        scaffoldMessenger.hideCurrentSnackBar();
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text('❌ 测试异常: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
   }
 
   // ====== 提示词库 ======
