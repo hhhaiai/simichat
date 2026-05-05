@@ -24,6 +24,7 @@ class ChatInputBar extends StatefulWidget {
   final bool isStreaming;
   final ValueNotifier<bool> hasTextNotifier;
   final void Function(String text, List<PendingAttachment> attachments) onSend;
+  final Widget? modelSelector;
 
   const ChatInputBar({
     super.key,
@@ -32,6 +33,7 @@ class ChatInputBar extends StatefulWidget {
     required this.isStreaming,
     required this.hasTextNotifier,
     required this.onSend,
+    this.modelSelector,
   });
 
   @override
@@ -167,6 +169,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_pendingAttachments.isNotEmpty) _buildAttachmentPreview(),
+                if (widget.modelSelector != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: widget.modelSelector!,
+                  ),
                 Container(
                   padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
                   decoration: BoxDecoration(

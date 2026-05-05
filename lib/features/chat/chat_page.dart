@@ -13,6 +13,8 @@ import '../../shared/widgets/message_bubble.dart';
 import '../../shared/widgets/streaming_bubble.dart';
 import '../../shared/widgets/chat_input_bar.dart'
     show ChatInputBar, PendingAttachment;
+import '../../shared/widgets/compact_model_selector.dart';
+import '../skills/skills_hub_page.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
@@ -33,6 +35,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // 滚动监听：距底部超过一屏时显示 FAB
   bool _showScrollFab = false;
   bool _shouldAutoScroll = true;
+
+  // 会话内临时模型覆盖
+  String? _pendingModelId;
 
   @override
   void initState() {
@@ -104,8 +109,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ref: ref,
       sessionId: activeSessionId,
       content: content,
+      overrideModelId: _pendingModelId,
       attachments: attachments,
     );
+    setState(() => _pendingModelId = null);
     _focusNode.requestFocus();
   }
 
@@ -223,6 +230,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         if (index < messages.length) {
                           final msg = messages[index];
                           final isUser = msg.role == 'user';
+                          // 解析模型名
+                          final modelsAsync = ref.watch(allModelsProvider);
+                          final modelName = modelsAsync.whenOrNull(
+                            data: (models) {
+                              if (msg.channelModelId != null) {
+                                try {
+                                  return models.firstWhere(
+                                    (m) => m.channelModel.id == msg.channelModelId,
+                                  ).displayLabel;
+                                } catch (_) {}
+                              }
+                              return null;
+                            },
+                          );
                           return MessageBubble(
                             role: msg.role,
                             content: msg.content,
@@ -230,15 +251,31 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             tokens: msg.tokens,
                             responseMs: msg.responseMs,
                             isUser: isUser,
+                            modelName: modelName,
                             onRetry: isUser ? null : _handleRetry,
                             onFork: () => _handleFork(msg.id),
                           );
                         }
                         // 流式输出中的气泡
+                        final modelsAsync = ref.watch(allModelsProvider);
+                        final streamingModelName = modelsAsync.whenOrNull(
+                          data: (models) {
+                            final id = _pendingModelId ?? ref.read(selectedModelIdProvider);
+                            if (id != null) {
+                              try {
+                                return models.firstWhere(
+                                  (m) => m.channelModel.id == id,
+                                ).displayLabel;
+                              } catch (_) {}
+                            }
+                            return models.isNotEmpty ? models.first.displayLabel : null;
+                          },
+                        );
                         return RepaintBoundary(
                           child: StreamingBubble(
                             content: streamState.currentContent,
                             thinking: streamState.currentThinking,
+                            modelName: streamingModelName,
                           ),
                         );
                       },
@@ -279,6 +316,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               isStreaming: streamState.isStreaming,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
+              modelSelector: CompactModelSelector(
+                selectedModelId: _pendingModelId,
+                onModelSelected: (modelId) {
+                  setState(() => _pendingModelId = modelId);
+                },
+              ),
             ),
           ],
         ),
@@ -424,6 +467,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   const Spacer(),
                   IconButton(
                     icon: Icon(
+                      Icons.extension_outlined,
+                      size: 19,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    tooltip: 'Skills 市场',
+                    onPressed: () => showSkillsHubSheet(context),
+                  ),
+                  IconButton(
+                    icon: Icon(
                       Icons.tune,
                       size: 19,
                       color: hasPrompt
@@ -448,51 +500,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final current = ref.read(systemPromptsProvider)[sessionId] ?? '';
     final controller = TextEditingController(text: current);
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('系统提示词'),
-        content: SizedBox(
-          width: 400,
-          child: TextField(
-            controller: controller,
-            maxLines: 8,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '输入系统提示词（留空则使用默认）...',
-              border: OutlineInputBorder(),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton.icon(
-            onPressed: () => _showPromptPicker(ctx, controller),
-            icon: const Icon(Icons.library_books, size: 16),
-            label: const Text('从提示词库选择'),
-          ),
-          const Spacer(),
-          TextButton(
-            onPressed: () {
-              controller.clear();
-              ref.read(systemPromptsProvider.notifier).setPrompt(sessionId, '');
-              Navigator.pop(ctx);
-            },
-            child: const Text('清除'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              ref
-                  .read(systemPromptsProvider.notifier)
-                  .setPrompt(sessionId, controller.text);
-              Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => _SystemPromptSheet(
+        controller: controller,
+        sessionId: sessionId,
+        onSave: (text) {
+          ref.read(systemPromptsProvider.notifier).setPrompt(sessionId, text);
+        },
+        onPickPrompt: () => _showPromptPicker(ctx, controller),
       ),
     );
   }
@@ -509,34 +527,53 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ).showSnackBar(const SnackBar(content: Text('提示词库为空，请先在设置中添加')));
         return;
       }
-      showDialog(
+      showModalBottomSheet(
         context: context,
-        builder: (ctx) => SimpleDialog(
-          title: const Text('选择提示词'),
-          children: [
-            for (final p in prompts)
-              SimpleDialogOption(
-                onPressed: () {
-                  controller.text = p.content;
-                  Navigator.pop(ctx);
-                },
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: Row(
                   children: [
+                    const Icon(Icons.library_books_outlined),
+                    const SizedBox(width: 10),
                     Text(
-                      p.name,
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    Text(
-                      p.content,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      '选择提示词',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
               ),
-          ],
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: prompts.length,
+                  itemBuilder: (_, i) {
+                    final p = prompts[i];
+                    return ListTile(
+                      leading: const Icon(Icons.text_snippet_outlined),
+                      title: Text(p.name),
+                      subtitle: Text(
+                        p.content,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () {
+                        controller.text = p.content;
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       );
     });
@@ -666,6 +703,156 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 系统提示词编辑底部弹出 sheet（类 ChatGPT 风格）
+class _SystemPromptSheet extends StatefulWidget {
+  const _SystemPromptSheet({
+    required this.controller,
+    required this.sessionId,
+    required this.onSave,
+    required this.onPickPrompt,
+  });
+
+  final TextEditingController controller;
+  final String sessionId;
+  final ValueChanged<String> onSave;
+  final VoidCallback onPickPrompt;
+
+  @override
+  State<_SystemPromptSheet> createState() => _SystemPromptSheetState();
+}
+
+class _SystemPromptSheetState extends State<_SystemPromptSheet> {
+  late bool _hasChanges;
+
+  @override
+  void initState() {
+    super.initState();
+    _hasChanges = false;
+    widget.controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  void _onTextChanged() {
+    if (!_hasChanges) setState(() => _hasChanges = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottomInset),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 标题栏
+            Row(
+              children: [
+                Icon(Icons.tune, size: 20, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '系统提示词',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                // 从提示词库选择
+                TextButton.icon(
+                  onPressed: widget.onPickPrompt,
+                  icon: const Icon(Icons.library_books_outlined, size: 16),
+                  label: const Text('提示词库'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '设定 AI 的角色和行为准则，留空则使用模型默认。',
+              style: TextStyle(
+                fontSize: 13,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // 输入区域（大尺寸，类 ChatGPT）
+            Container(
+              constraints: const BoxConstraints(minHeight: 200, maxHeight: 400),
+              decoration: BoxDecoration(
+                border: Border.all(color: scheme.outlineVariant),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: TextField(
+                controller: widget.controller,
+                maxLines: null,
+                expands: true,
+                autofocus: true,
+                textAlignVertical: TextAlignVertical.top,
+                style: const TextStyle(fontSize: 14, height: 1.6),
+                decoration: InputDecoration(
+                  hintText: '例如：你是一个专业的技术写作助手，请用简洁清晰的语言回答...',
+                  hintStyle: TextStyle(
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                    fontSize: 14,
+                  ),
+                  contentPadding: const EdgeInsets.all(14),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // 底部操作栏
+            Row(
+              children: [
+                // 字数统计
+                Text(
+                  '${widget.controller.text.length} 字',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+                const Spacer(),
+                // 清除按钮
+                TextButton(
+                  onPressed: () {
+                    widget.controller.clear();
+                    widget.onSave('');
+                    Navigator.pop(context);
+                  },
+                  child: const Text('清除'),
+                ),
+                const SizedBox(width: 8),
+                // 保存按钮
+                FilledButton(
+                  onPressed: () {
+                    widget.onSave(widget.controller.text);
+                    Navigator.pop(context);
+                  },
+                  child: const Text('保存'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

@@ -7,8 +7,9 @@ const double _kChatContentMaxWidth = 860;
 class StreamingBubble extends StatelessWidget {
   final String content;
   final String thinking;
+  final String? modelName;
 
-  const StreamingBubble({super.key, required this.content, this.thinking = ''});
+  const StreamingBubble({super.key, required this.content, this.thinking = '', this.modelName});
 
   @override
   Widget build(BuildContext context) {
@@ -21,6 +22,17 @@ class StreamingBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (modelName != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    modelName!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
               if (content.isEmpty)
                 Row(
                   mainAxisSize: MainAxisSize.min,

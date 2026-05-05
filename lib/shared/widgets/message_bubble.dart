@@ -16,6 +16,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onCopy;
   final VoidCallback? onFork;
+  final String? modelName;
 
   const MessageBubble({
     super.key,
@@ -28,6 +29,7 @@ class MessageBubble extends StatelessWidget {
     this.onRetry,
     this.onCopy,
     this.onFork,
+    this.modelName,
   });
 
   @override
@@ -74,9 +76,21 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _buildAssistantMessage(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (modelName != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              modelName!,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
         if (thinkingContent != null && thinkingContent!.isNotEmpty)
           _ThinkingBlock(content: thinkingContent!),
         LatexMarkdownWidget(data: content),
