@@ -8,6 +8,7 @@ import '../../core/context/context_builder.dart';
 import '../../core/context/context_compressor.dart';
 import '../../core/context/token_estimator.dart';
 import '../../core/crypto/key_encryptor.dart';
+import '../../core/skills/skill.dart' as skill_model;
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../core/notification/notification_service.dart';
@@ -79,6 +80,7 @@ Future<void> sendMessage({
   required WidgetRef ref,
   required String sessionId,
   required String content,
+  String? overrideModelId,
   List<PendingAttachment> attachments = const [],
 }) async {
   final messageDao = ref.read(messageDaoProvider);
@@ -90,8 +92,8 @@ Future<void> sendMessage({
   final session = await sessionDao.getSession(sessionId);
   if (session == null) return;
 
-  // 获取模型信息
-  final modelId = session.defaultChannelModelId;
+  // 获取模型信息（支持单次覆盖）
+  final modelId = overrideModelId ?? session.defaultChannelModelId;
   ChannelModelWithChannel? modelInfo;
   if (modelId != null) {
     modelInfo = await channelDao.getModelWithChannel(modelId);
@@ -139,12 +141,21 @@ Future<void> sendMessage({
   // 解密 API Key
   final apiKey = KeyEncryptor.decrypt(modelInfo.channel.apiKeyEncrypted);
 
-  // 构建上下文（包含系统提示词）
+  // 构建上下文（包含系统提示词 + Skills）
   final customPrompt = ref.read(systemPromptsProvider.notifier).getPrompt(sessionId);
+  final dbSkills = await ref.read(skillDaoProvider).getEnabledSkills();
+  final skills = dbSkills.map((s) => skill_model.Skill(
+    id: s.id, name: s.name, description: s.description,
+    instructions: s.instructions, sourceUrl: s.sourceUrl,
+    sourceSha256: s.sourceSha256, sha256Verified: s.sha256Verified,
+    online: s.online, isEnabled: s.isEnabled, createdAt: s.createdAt,
+  )).toList();
+  final skillsPrompt = skill_model.buildSkillsSystemPrompt(skills);
   final contextBuilder = ContextBuilder(messageDao);
   var (systemPrompt, contextMessages) = await contextBuilder.buildContext(
     sessionId,
     customSystemPrompt: customPrompt,
+    skillsPrompt: skillsPrompt,
   );
 
   // 如果有附件，给最后一条 user 消息附加文件

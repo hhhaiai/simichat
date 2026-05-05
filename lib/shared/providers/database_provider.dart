@@ -13,3 +13,5 @@ final channelDaoProvider = Provider((ref) => ref.watch(databaseProvider).channel
 final folderDaoProvider = Provider((ref) => ref.watch(databaseProvider).folderDao);
 final attachmentDaoProvider = Provider((ref) => ref.watch(databaseProvider).attachmentDao);
 final promptDaoProvider = Provider((ref) => ref.watch(databaseProvider).promptDao);
+final mcpDaoProvider = Provider((ref) => ref.watch(databaseProvider).mcpDao);
+final skillDaoProvider = Provider((ref) => ref.watch(databaseProvider).skillDao);

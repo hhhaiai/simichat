@@ -108,3 +108,36 @@ class Prompts extends Table {
   @override
   Set<Column> get primaryKey => {id};
 }
+
+class Skills extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get description => text().withDefault(const Constant(''))();
+  TextColumn get instructions => text()();
+  TextColumn get sourceUrl => text().nullable()();
+  TextColumn get sourceSha256 => text().nullable()();
+  BoolColumn get sha256Verified => boolean().withDefault(const Constant(false))();
+  BoolColumn get online => boolean().withDefault(const Constant(false))();
+  BoolColumn get isEnabled => boolean().withDefault(const Constant(true))();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class McpServers extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get transport => text()(); // 'stdio' | 'sse'
+  TextColumn get command => text().nullable()();
+  TextColumn get args => text().nullable()();       // JSON array string
+  TextColumn get url => text().nullable()();
+  TextColumn get headers => text().nullable()();     // JSON map string
+  BoolColumn get isEnabled => boolean().withDefault(const Constant(true))();
+  TextColumn get source => text().withDefault(const Constant('manual'))(); // 'manual' | 'marketplace'
+  TextColumn get marketplaceId => text().nullable()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}

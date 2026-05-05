@@ -21,6 +21,7 @@ class ContextBuilder {
     String sessionId, {
     int recentK = 20,
     String? customSystemPrompt,
+    String? skillsPrompt,
   }) async {
     final summaries = await _messageDao.getSummaries(sessionId);
     final originals = await _messageDao.getUnsummarizedOriginals(sessionId);
@@ -47,7 +48,10 @@ class ContextBuilder {
       messages.insert(0, const AiMessage(role: 'user', content: '请继续我们的对话。'));
     }
 
-    final systemPrompt = customSystemPrompt ?? defaultSystemPrompt;
+    var systemPrompt = customSystemPrompt ?? defaultSystemPrompt;
+    if (skillsPrompt != null && skillsPrompt.isNotEmpty) {
+      systemPrompt = '$systemPrompt\n\n$skillsPrompt';
+    }
     return (systemPrompt, messages);
   }
 }

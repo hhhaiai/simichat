@@ -12,6 +12,8 @@ import '../../shared/providers/channel_provider.dart';
 import '../../shared/providers/mcp_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
 import '../../shared/providers/settings_provider.dart';
+import '../../shared/providers/skill_provider.dart';
+import '../skills/skills_hub_page.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -49,6 +51,12 @@ class SettingsPage extends ConsumerWidget {
           // MCP 服务器
           _buildSectionHeader(context, 'MCP 服务器'),
           _buildMcpSection(context, ref),
+
+          const Divider(),
+
+          // Skills
+          _buildSectionHeader(context, 'Skills 技能'),
+          _buildSkillsSection(context, ref),
 
           const Divider(),
 
@@ -1092,6 +1100,12 @@ class SettingsPage extends ConsumerWidget {
           title: const Text('添加 MCP 服务器'),
           onTap: () => _showMcpServerDialog(context, ref),
         ),
+        ListTile(
+          leading: Icon(Icons.store_outlined, color: Theme.of(context).colorScheme.primary),
+          title: const Text('浏览 MCP 市场'),
+          subtitle: const Text('发现和安装热门 MCP 服务器', style: TextStyle(fontSize: 12)),
+          onTap: () => Navigator.pushNamed(context, '/marketplace'),
+        ),
       ],
     );
   }
@@ -1199,5 +1213,72 @@ class SettingsPage extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  // ====== Skills 技能 ======
+
+  Widget _buildSkillsSection(BuildContext context, WidgetRef ref) {
+    final skillsAsync = ref.watch(skillsProvider);
+
+    return skillsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => ListTile(title: Text('加载失败: $e')),
+      data: (skills) {
+        final enabledCount = skills.where((s) => s.isEnabled).length;
+        return Column(
+          children: [
+            for (final skill in skills)
+              ListTile(
+                leading: Icon(
+                  skill.online ? Icons.cloud_outlined : Icons.inventory_2_outlined,
+                  size: 20,
+                  color: skill.isEnabled ? Theme.of(context).colorScheme.primary : null,
+                ),
+                title: Text(skill.name, style: const TextStyle(fontSize: 14)),
+                subtitle: skill.description.isNotEmpty
+                    ? Text(skill.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))
+                    : null,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (skill.sourceSha256 != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Icon(
+                          skill.sha256Verified ? Icons.verified : Icons.warning_amber,
+                          size: 14,
+                          color: skill.sha256Verified ? Colors.green : Colors.orange,
+                        ),
+                      ),
+                    Switch(
+                      value: skill.isEnabled,
+                      onChanged: (v) => toggleSkill(ref, skill.id, v),
+                    ),
+                    if (skill.online)
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        onPressed: () => uninstallSkill(ref, skill.id),
+                      ),
+                  ],
+                ),
+              ),
+            ListTile(
+              leading: Icon(Icons.extension_outlined, color: Theme.of(context).colorScheme.primary),
+              title: const Text('Skills Hub'),
+              subtitle: Text(
+                '已启用 $enabledCount / ${skills.length}',
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _showSkillsHubSheet(context),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showSkillsHubSheet(BuildContext context) {
+    showSkillsHubSheet(context);
   }
 }

@@ -11,6 +11,8 @@ import 'dao/channel_dao.dart';
 import 'dao/folder_dao.dart';
 import 'dao/attachment_dao.dart';
 import 'dao/prompt_dao.dart';
+import 'dao/mcp_dao.dart';
+import 'dao/skill_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -23,6 +25,8 @@ part 'app_database.g.dart';
     Messages,
     Attachments,
     Prompts,
+    McpServers,
+    Skills,
   ],
   daos: [
     SessionDao,
@@ -31,13 +35,15 @@ part 'app_database.g.dart';
     FolderDao,
     AttachmentDao,
     PromptDao,
+    McpDao,
+    SkillDao,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -48,6 +54,12 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 3) {
         await m.addColumn(channelModels, channelModels.capability);
+      }
+      if (from < 4) {
+        await m.createTable(mcpServers);
+      }
+      if (from < 5) {
+        await m.createTable(skills);
       }
     },
   );
