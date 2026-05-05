@@ -290,6 +290,13 @@ class SettingsPage extends ConsumerWidget {
                   dense: true,
                   onTap: () => _fetchAndAddModels(context, ref, channel),
                 ),
+                if (models.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.speed, size: 18, color: Colors.blue),
+                    title: const Text('一键测试全部', style: TextStyle(fontSize: 13)),
+                    dense: true,
+                    onTap: () => _testAllModels(context, ref, channel, models),
+                  ),
               ],
             );
           },
@@ -655,6 +662,80 @@ class SettingsPage extends ConsumerWidget {
           ),
         );
       }
+    }
+  }
+
+  Future<void> _testAllModels(
+    BuildContext context,
+    WidgetRef ref,
+    ModelChannel channel,
+    List<ChannelModel> models,
+  ) async {
+    // 显示进度对话框
+    final results = <String, String?>{}; // modelName → null(成功) / error
+    final progressNotifier = ValueNotifier<int>(0);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: progressNotifier,
+        builder: (context, progress, child) => AlertDialog(
+          title: const Text('测试全部模型'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 400,
+            child: ListView.builder(
+              itemCount: models.length,
+              itemBuilder: (_, i) {
+                final m = models[i];
+                final done = i < progress;
+                final testing = i == progress;
+                final result = results[m.modelName];
+                return ListTile(
+                  dense: true,
+                  leading: done
+                      ? (result == null
+                          ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                          : const Icon(Icons.cancel, color: Colors.red, size: 20))
+                      : testing
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.radio_button_unchecked, color: Colors.grey, size: 20),
+                  title: Text(m.modelName, style: const TextStyle(fontSize: 13)),
+                  subtitle: done && result != null
+                      ? Text(result, style: const TextStyle(fontSize: 11, color: Colors.red))
+                      : null,
+                );
+              },
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(progress >= models.length ? '完成' : '跳过'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+
+    // 逐个测试（并行会太重）
+    for (int i = 0; i < models.length; i++) {
+      final m = models[i];
+      try {
+        final error = await ModelTester.testModel(
+          protocol: channel.protocol,
+          baseUrl: channel.baseUrl,
+          apiKey: apiKey,
+          model: m.modelName,
+        );
+        results[m.modelName] = error;
+      } catch (e) {
+        results[m.modelName] = e.toString();
+      }
+      progressNotifier.value = i + 1;
     }
   }
 
