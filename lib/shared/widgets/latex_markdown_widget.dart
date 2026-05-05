@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:cached_network_image/cached_network_image.dart';
 import 'code_block_widget.dart';
 import 'mermaid_widget.dart';
+import 'image_viewer.dart';
 
 /// 支持 LaTeX 数学公式的 Markdown 渲染组件
 /// 处理 $$...$$ 块级公式和 $...$ 行内公式
@@ -31,6 +34,8 @@ class LatexMarkdownWidget extends StatelessWidget {
       ),
     );
 
+    final imgBuilder = _buildImageBuilder(context);
+
     // 如果没有 LaTeX 内容，直接用 MarkdownBody
     if (segments.length == 1 && segments[0].type == _SegmentType.markdown) {
       return MarkdownBody(
@@ -38,6 +43,7 @@ class LatexMarkdownWidget extends StatelessWidget {
         selectable: selectable,
         builders: {'code': _CodeBlockBuilder()},
         styleSheet: defaultStyle,
+        sizedImageBuilder: imgBuilder,
       );
     }
 
@@ -54,10 +60,67 @@ class LatexMarkdownWidget extends StatelessWidget {
               selectable: selectable,
               builders: {'code': _CodeBlockBuilder()},
               styleSheet: defaultStyle,
+              sizedImageBuilder: imgBuilder,
             );
         }
       }).toList(),
     );
+  }
+
+  /// 构建图片渲染器：支持网络图片缓存 + 点击放大 + data URI
+  Widget Function(MarkdownImageConfig) _buildImageBuilder(BuildContext context) {
+    return (MarkdownImageConfig config) {
+      final uri = config.uri;
+      final uriStr = uri.toString();
+
+      // data: URI (base64 图片)
+      if (uri.scheme == 'data') {
+        try {
+          final data = uriStr.split(',').last;
+          final bytes = base64Decode(data);
+          return GestureDetector(
+            onTap: () => showImageViewer(
+              context,
+              imageProvider: MemoryImage(bytes),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.memory(bytes, fit: BoxFit.contain),
+            ),
+          );
+        } catch (_) {
+          return const SizedBox.shrink();
+        }
+      }
+
+      // 网络图片
+      return GestureDetector(
+        onTap: () => showImageViewer(
+          context,
+          imageProvider: CachedNetworkImageProvider(uriStr),
+          imageUrl: uriStr,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: CachedNetworkImage(
+            imageUrl: uriStr,
+            placeholder: (_, __) => const SizedBox(
+              height: 100,
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+            errorWidget: (_, __, ___) => Container(
+              height: 100,
+              color: Colors.grey[200],
+              child: const Center(
+                child: Icon(Icons.broken_image, color: Colors.grey),
+              ),
+            ),
+            maxWidthDiskCache: 1200,
+            fit: BoxFit.contain,
+          ),
+        ),
+      );
+    };
   }
 
   Widget _buildBlockLatex(BuildContext context, String latex) {
