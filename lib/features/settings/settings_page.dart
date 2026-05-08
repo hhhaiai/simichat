@@ -13,6 +13,7 @@ import '../../shared/providers/mcp_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
 import '../../shared/providers/settings_provider.dart';
 import '../../shared/providers/skill_provider.dart';
+import '../../shared/providers/session_provider.dart';
 import '../skills/skills_hub_page.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -247,6 +248,7 @@ class SettingsPage extends ConsumerWidget {
     WidgetRef ref,
     ModelChannel channel,
   ) {
+    final selectedModelId = ref.watch(selectedModelIdProvider);
     return ExpansionTile(
       leading: Icon(getProtocolIcon(channel.protocol)),
       title: Text(channel.name),
@@ -286,6 +288,10 @@ class SettingsPage extends ConsumerWidget {
                   children: [
                     for (final m in models)
                       ListTile(
+                        selected: selectedModelId == m.id,
+                        selectedTileColor: Theme.of(
+                          context,
+                        ).colorScheme.primary.withValues(alpha: 0.08),
                         title: Row(
                           children: [
                             Expanded(
@@ -305,9 +311,24 @@ class SettingsPage extends ConsumerWidget {
                           ],
                         ),
                         dense: true,
+                        onTap: () => _applyModelSelection(
+                          context,
+                          ref,
+                          modelId: m.id,
+                          modelName: m.modelName,
+                        ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (selectedModelId == m.id)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.check_circle,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
                             IconButton(
                               icon: const Icon(
                                 Icons.play_arrow,
@@ -374,6 +395,28 @@ class SettingsPage extends ConsumerWidget {
             ),
       ],
     );
+  }
+
+  Future<void> _applyModelSelection(
+    BuildContext context,
+    WidgetRef ref, {
+    required String modelId,
+    required String modelName,
+  }) async {
+    ref.read(selectedModelIdProvider.notifier).state = modelId;
+    final activeSessionId = ref.read(activeSessionIdProvider);
+    if (activeSessionId != null) {
+      await ref.read(sessionDaoProvider).updateDefaultModel(activeSessionId, modelId);
+      refreshSessions(ref);
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(activeSessionId != null ? '已切换到 $modelName，并立即作用于当前对话' : '已选中 $modelName'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _showChannelEditDialog(

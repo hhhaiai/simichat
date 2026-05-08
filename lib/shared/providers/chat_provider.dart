@@ -352,7 +352,9 @@ Future<void> _runAssistantResponse({
 
       stopwatch.stop();
 
-      var responseContent = buffer.toString();
+      final rawResponseContent = buffer.toString();
+      final toolCalls = _parseToolCalls(rawResponseContent, ref);
+      var responseContent = _stripToolCallMarkup(rawResponseContent);
       var responseThinking = thinkingBuffer.toString();
 
       if (responseContent.isEmpty &&
@@ -381,32 +383,37 @@ Future<void> _runAssistantResponse({
       }
 
       if (responseContent.isEmpty && responseThinking.isEmpty) {
-        ref.read(streamStateProvider(sessionId).notifier).state =
-            const StreamState(isStreaming: false);
-        return;
+        if (toolCalls.isEmpty) {
+          ref.read(streamStateProvider(sessionId).notifier).state =
+              const StreamState(isStreaming: false);
+          return;
+        }
       }
-
-      final toolCalls = _parseToolCalls(responseContent, ref);
 
       if (toolCalls.isNotEmpty && toolRound < maxToolRounds - 1) {
         toolRound++;
         final responseTokens = TokenEstimator.estimate(responseContent);
-        await messageDao.insertMessage(
-          id: assistantMsgId,
-          sessionId: sessionId,
-          role: 'assistant',
-          content: responseContent,
-          thinkingContent: responseThinking.isNotEmpty
-              ? responseThinking
-              : null,
-          channelModelId: modelId,
-          tokens: responseTokens,
-          responseMs: stopwatch.elapsedMilliseconds,
-        );
+        if (responseContent.isNotEmpty || responseThinking.isNotEmpty) {
+          await messageDao.insertMessage(
+            id: assistantMsgId,
+            sessionId: sessionId,
+            role: 'assistant',
+            content: responseContent,
+            thinkingContent: responseThinking.isNotEmpty
+                ? responseThinking
+                : null,
+            channelModelId: modelId,
+            tokens: responseTokens,
+            responseMs: stopwatch.elapsedMilliseconds,
+          );
+        }
 
-        final toolMessages = <ai.AiMessage>[
-          ai.AiMessage(role: 'assistant', content: responseContent),
-        ];
+        final toolMessages = <ai.AiMessage>[];
+        if (rawResponseContent.isNotEmpty) {
+          toolMessages.add(
+            ai.AiMessage(role: 'assistant', content: rawResponseContent),
+          );
+        }
 
         for (final tc in toolCalls) {
           try {
@@ -530,10 +537,17 @@ String? _buildMcpToolsPrompt(WidgetRef ref) {
     'You have access to the following tools provided by MCP servers. '
     'To use a tool, respond with a JSON code block in this exact format:',
   );
+  buf.writeln(
+    'Only use one of the exact tool names listed below. '
+    'Do not invent tool names that are not in the list.',
+  );
   buf.writeln('');
   buf.writeln('```tool_call');
   buf.writeln('{"tool": "<server_name>/<tool_name>", "arguments": {...}}');
   buf.writeln('```');
+  buf.writeln('');
+  buf.writeln('XML-style tool calls are also accepted:');
+  buf.writeln('<tool_call><function=tool_name><parameter=name>value</parameter></function></tool_call>');
   buf.writeln('');
   buf.writeln('Available tools:');
   buf.writeln('');
@@ -554,18 +568,48 @@ String? _buildMcpToolsPrompt(WidgetRef ref) {
 
 /// 解析 AI 回复中的 MCP 工具调用
 List<_ToolCall> _parseToolCalls(String response, WidgetRef ref) {
-  final results = <_ToolCall>[];
-  final pattern = RegExp(r'```tool_call\s*\n(.*?)\n\s*```', dotAll: true);
-  final matches = pattern.allMatches(response);
-
-  // 构建 "serverName/toolName" → serverId 的映射
   final mcpManager = ref.read(mcpManagerProvider.notifier);
   final allTools = mcpManager.getAllTools();
+  return _parseToolCallsFromResponse(response, allTools);
+}
+
+@visibleForTesting
+List<({String serverId, String toolName, Map<String, dynamic> arguments})>
+    parseToolCallsForTesting(
+  String response,
+  List<McpToolWithServer> allTools,
+) {
+  return _parseToolCallsFromResponse(response, allTools)
+      .map(
+        (call) => (
+          serverId: call.serverId,
+          toolName: call.toolName,
+          arguments: call.arguments,
+        ),
+      )
+      .toList();
+}
+
+@visibleForTesting
+String stripToolCallMarkupForTesting(String response) {
+  return _stripToolCallMarkup(response);
+}
+
+List<_ToolCall> _parseToolCallsFromResponse(
+  String response,
+  List<McpToolWithServer> allTools,
+) {
+  final results = <_ToolCall>[];
   final toolMap = <String, String>{};
+  final toolNameMap = <String, List<McpToolWithServer>>{};
   for (final t in allTools) {
     toolMap['${t.serverName}/${t.tool.name}'] = t.serverId;
+    toolNameMap.putIfAbsent(t.tool.name, () => []).add(t);
   }
 
+  // 1) 兼容 JSON fenced code block
+  final pattern = RegExp(r'```tool_call\s*\n(.*?)\n\s*```', dotAll: true);
+  final matches = pattern.allMatches(response);
   for (final match in matches) {
     try {
       final jsonStr = match.group(1)!.trim();
@@ -590,7 +634,90 @@ List<_ToolCall> _parseToolCalls(String response, WidgetRef ref) {
       debugPrint('[Chat] Failed to parse tool_call: $e');
     }
   }
+
+  // 2) 兼容 XML/标签式 tool_call
+  final xmlPattern = RegExp(
+    r'<tool_call>\s*(.*?)\s*</tool_call>',
+    caseSensitive: false,
+    dotAll: true,
+  );
+  final functionPattern = RegExp(
+    r'<function(?:=| name=| name=")([^>"\s]+)"?>\s*(.*?)\s*</function>',
+    caseSensitive: false,
+    dotAll: true,
+  );
+  final parameterPattern = RegExp(
+    r'<parameter(?:=| name=| name=")([^>"\s]+)"?>(.*?)</parameter>',
+    caseSensitive: false,
+    dotAll: true,
+  );
+
+  for (final callMatch in xmlPattern.allMatches(response)) {
+    final callBody = callMatch.group(1)?.trim();
+    if (callBody == null || callBody.isEmpty) continue;
+
+    for (final functionMatch in functionPattern.allMatches(callBody)) {
+      final rawFunctionName = functionMatch.group(1)?.trim();
+      final functionBody = functionMatch.group(2) ?? '';
+      if (rawFunctionName == null || rawFunctionName.isEmpty) continue;
+
+      final arguments = <String, dynamic>{};
+      for (final parameterMatch in parameterPattern.allMatches(functionBody)) {
+        final key = parameterMatch.group(1)?.trim();
+        final value = parameterMatch.group(2)?.trim() ?? '';
+        if (key == null || key.isEmpty) continue;
+        arguments[key] = value;
+      }
+
+      final normalizedFunctionName = rawFunctionName.replaceAll('"', '');
+      if (normalizedFunctionName.contains('/')) {
+        final serverId = toolMap[normalizedFunctionName];
+        if (serverId == null) continue;
+        final parts = normalizedFunctionName.split('/');
+        results.add(
+          _ToolCall(
+            serverId: serverId,
+            toolName: parts.sublist(1).join('/'),
+            arguments: arguments,
+          ),
+        );
+        continue;
+      }
+
+      final candidates = toolNameMap[normalizedFunctionName];
+      if (candidates == null || candidates.isEmpty) continue;
+      if (candidates.length > 1) {
+        debugPrint(
+          '[Chat] Ambiguous MCP function name: $normalizedFunctionName',
+        );
+        continue;
+      }
+      final match = candidates.single;
+      results.add(
+        _ToolCall(
+          serverId: match.serverId,
+          toolName: match.tool.name,
+          arguments: arguments,
+        ),
+      );
+    }
+  }
+
   return results;
+}
+
+String _stripToolCallMarkup(String response) {
+  var cleaned = response;
+  cleaned = cleaned.replaceAll(
+    RegExp(r'```tool_call\s*\n.*?\n\s*```', dotAll: true),
+    '',
+  );
+  cleaned = cleaned.replaceAll(
+    RegExp(r'<tool_call>\s*.*?\s*</tool_call>', dotAll: true, caseSensitive: false),
+    '',
+  );
+  cleaned = cleaned.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+  return cleaned.trim();
 }
 
 class _ToolCall {

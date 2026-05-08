@@ -86,3 +86,5 @@ linux/flutter/ephemeral/
 *.env
 .env.*
 .omx/
+
+artifacts/
