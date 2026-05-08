@@ -41,11 +41,16 @@ void refreshSessions(WidgetRef ref) {
 }
 
 /// 创建新会话并设为活跃
-Future<String> createNewSession(WidgetRef ref) async {
+Future<String> createNewSession(
+  WidgetRef ref, {
+  String? defaultModelId,
+}) async {
   final sessionDao = ref.read(sessionDaoProvider);
-  final selectedModelId = ref.read(selectedModelIdProvider);
   final id = _uuid.v4();
-  await sessionDao.createSession(id: id, defaultChannelModelId: selectedModelId);
+  await sessionDao.createSession(
+    id: id,
+    defaultChannelModelId: defaultModelId ?? ref.read(selectedModelIdProvider),
+  );
   ref.read(activeSessionIdProvider.notifier).state = id;
   refreshSessions(ref);
   return id;

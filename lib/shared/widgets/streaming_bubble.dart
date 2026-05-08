@@ -14,7 +14,8 @@ class StreamingBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Center(
+    return Align(
+      alignment: Alignment.centerLeft,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: _kChatContentMaxWidth),
         child: Padding(

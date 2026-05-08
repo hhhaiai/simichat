@@ -24,6 +24,7 @@ class ChatPage extends ConsumerStatefulWidget {
 }
 
 class _ChatPageState extends ConsumerState<ChatPage> {
+  static const _kDesktopBreakpoint = 720.0;
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -102,6 +103,119 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<String?> _ensureModelBeforeSend(String? activeSessionId) async {
+    final models = await ref.read(allModelsProvider.future);
+    final currentModelId = _pendingModelId ?? ref.read(selectedModelIdProvider);
+
+    if (currentModelId != null &&
+        models.any((m) => m.channelModel.id == currentModelId)) {
+      return currentModelId;
+    }
+
+    if (!mounted) return null;
+
+    if (models.isEmpty) {
+      final goSettings = await _showNoModelsDialog();
+      if (goSettings == true && mounted) {
+        await Navigator.pushNamed(context, '/settings');
+      }
+      return null;
+    }
+
+    final selectedModelId = await _showModelSelectionDialog(models);
+    if (selectedModelId == null) return null;
+
+    ref.read(selectedModelIdProvider.notifier).state = selectedModelId;
+    if (activeSessionId != null) {
+      await ref
+          .read(sessionDaoProvider)
+          .updateDefaultModel(activeSessionId, selectedModelId);
+    }
+    if (mounted) {
+      setState(() => _pendingModelId = selectedModelId);
+    } else {
+      _pendingModelId = selectedModelId;
+    }
+    return selectedModelId;
+  }
+
+  Future<bool?> _showNoModelsDialog() {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('还没有可用模型'),
+        content: const Text('请先去设置里添加模型渠道和模型，然后再发送消息。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('去设置'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<String?> _showModelSelectionDialog(
+    List<ChannelModelWithChannel> models,
+  ) {
+    final grouped = <String, List<ChannelModelWithChannel>>{};
+    for (final model in models) {
+      grouped.putIfAbsent(model.channel.name, () => []).add(model);
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('选择基础模型'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('发送前请先选择一个模型。'),
+                const SizedBox(height: 12),
+                for (final entry in grouped.entries) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      entry.key,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  ...entry.value.map(
+                    (model) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(model.channelModel.modelName),
+                      subtitle: Text(model.displayLabel),
+                      onTap: () => Navigator.of(context).pop(model.channelModel.id),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<bool> _handleSend(
     String content,
     List<PendingAttachment> attachments,
@@ -127,13 +241,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
 
     try {
-      activeSessionId ??= await createNewSession(ref);
+      final resolvedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (resolvedModelId == null) return false;
+
+      activeSessionId ??= await createNewSession(
+        ref,
+        defaultModelId: resolvedModelId,
+      );
       if (!mounted) return false;
+
+      await ref
+          .read(sessionDaoProvider)
+          .updateDefaultModel(activeSessionId, resolvedModelId);
+
       final sent = await sendMessage(
         ref: ref,
         sessionId: activeSessionId,
         content: content,
-        overrideModelId: _pendingModelId,
+        overrideModelId: resolvedModelId,
         attachments: attachments,
       );
       if (!mounted) return false;
@@ -174,26 +299,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// 重试最后一条 user 消息（从 DB 读取，不依赖内存状态）
   void _handleRetry() {
-    final activeSessionId = ref.read(activeSessionIdProvider);
-    if (activeSessionId == null) return;
-
-    final messagesAsync = ref.read(messagesProvider(activeSessionId));
-    messagesAsync.whenData((messages) {
-      if (messages.isEmpty) return;
-      // 找最后一条 user 消息
-      for (int i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role == 'user') {
-          ref.read(streamStateProvider(activeSessionId).notifier).state =
-              const StreamState();
-          sendMessage(
-            ref: ref,
-            sessionId: activeSessionId,
-            content: messages[i].content,
-          );
-          return;
-        }
-      }
-    });
+    retryLastUserMessage(ref);
   }
 
   /// 从指定消息位置复制会话
@@ -227,6 +333,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final activeSessionId = ref.watch(activeSessionIdProvider);
+    final isMobile = MediaQuery.of(context).size.width <= _kDesktopBreakpoint;
 
     // 会话切换时恢复草稿（listener 在 build 外执行，不会干扰 IME）
     ref.listen(activeSessionIdProvider, (prev, next) {
@@ -258,7 +365,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         Column(
           children: [
             // 顶部模型选择器
-            _buildModelSelector(),
+            if (!isMobile) _buildModelSelector(),
 
             // 消息列表（点击消息区域不收起键盘）
             Expanded(
@@ -383,12 +490,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               isStreaming: streamState.isStreaming,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
-              modelSelector: CompactModelSelector(
-                selectedModelId: _pendingModelId,
-                onModelSelected: (modelId) {
-                  setState(() => _pendingModelId = modelId);
-                },
-              ),
+              modelSelector: isMobile
+                  ? null
+                  : CompactModelSelector(
+                      selectedModelId: _pendingModelId,
+                      onModelSelected: (modelId) {
+                        setState(() => _pendingModelId = modelId);
+                      },
+                    ),
             ),
           ],
         ),
@@ -679,6 +788,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Widget _buildEmptyState() {
     final scheme = Theme.of(context).colorScheme;
+    final isMobile = MediaQuery.of(context).size.width <= _kDesktopBreakpoint;
 
     return Column(
       children: [
@@ -702,14 +812,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      '下面是当前模型，开始前可以先切换。',
+                      '我们从哪里开始呢？',
                       style: TextStyle(
                         fontSize: 14,
                         color: scheme.onSurfaceVariant,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
-                    _buildLandingModelSelector(),
+                    if (!isMobile) _buildLandingModelSelector(),
                     const SizedBox(height: 28),
                     _buildEmptyChat(),
                   ],
@@ -724,6 +835,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           isStreaming: false,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
+          modelSelector: isMobile
+              ? null
+              : CompactModelSelector(
+                  selectedModelId: _pendingModelId,
+                  onModelSelected: (modelId) {
+                    setState(() => _pendingModelId = modelId);
+                  },
+                ),
         ),
       ],
     );

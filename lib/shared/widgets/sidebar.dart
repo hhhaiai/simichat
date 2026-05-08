@@ -7,6 +7,8 @@ import '../../core/database/app_database.dart';
 import '../providers/session_provider.dart';
 import '../providers/folder_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/channel_provider.dart';
+import 'compact_model_selector.dart';
 
 /// 侧边栏：模型选择器 + 搜索 + 历史会话列表
 class Sidebar extends ConsumerStatefulWidget {
@@ -64,6 +66,36 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   onPressed: () => Navigator.pushNamed(context, '/settings'),
                 ),
               ],
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final modelsAsync = ref.watch(allModelsProvider);
+                  return modelsAsync.when(
+                    loading: () => const SizedBox.shrink(),
+                    error: (_, _) => const SizedBox.shrink(),
+                    data: (models) {
+                      if (models.isEmpty) return const SizedBox.shrink();
+                      return CompactModelSelector(
+                        onModelSelected: (modelId) {
+                          ref.read(selectedModelIdProvider.notifier).state = modelId;
+                          final activeSessionId = ref.read(activeSessionIdProvider);
+                          if (activeSessionId != null) {
+                            ref
+                                .read(sessionDaoProvider)
+                                .updateDefaultModel(activeSessionId, modelId);
+                          }
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ),
 

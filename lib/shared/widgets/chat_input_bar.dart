@@ -311,14 +311,16 @@ class _ChatInputBarState extends State<ChatInputBar> {
             : '~${TokenEstimator.estimate(text)} tokens';
         return Padding(
           padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            tokenText ?? 'AI 可能会出错，请核查重要信息。',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 11,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
+          child: tokenText == null
+              ? const SizedBox.shrink()
+              : Text(
+                  tokenText,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
         );
       },
     );

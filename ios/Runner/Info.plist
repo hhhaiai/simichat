@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍照并将图片作为对话附件发送。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择图片并在应用内查看图片。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于将聊天中的图片保存到系统相册。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

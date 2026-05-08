@@ -11,9 +11,11 @@ import 'features/search/search_sheet.dart';
 import 'core/database/app_database.dart';
 import 'core/skills/skill.dart' show builtInSkills;
 import 'core/notification/notification_service.dart';
+import 'core/database/dao/channel_dao.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
 import 'shared/providers/channel_provider.dart';
+import 'shared/providers/database_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
 
@@ -241,40 +243,146 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   ) {
     final modelsAsync = ref.watch(allModelsProvider);
     final selectedId = ref.watch(selectedModelIdProvider);
-
-    final sessionTitle = activeSession.when(
-      loading: () => 'AI Chat',
-      error: (_, _) => 'AI Chat',
-      data: (s) => s?.title ?? 'AI Chat',
+    final activeSessionId = ref.watch(activeSessionIdProvider);
+    final sessionDefaultModelId = activeSession.whenOrNull(
+      data: (session) => session?.defaultChannelModelId,
     );
+    final currentModelId = selectedId ?? sessionDefaultModelId;
 
     final modelLabel = modelsAsync.whenOrNull(
       data: (models) {
-        if (selectedId != null) {
-          final match = models.where((m) => m.channelModel.id == selectedId).firstOrNull;
+        if (currentModelId != null) {
+          final match = models
+              .where((m) => m.channelModel.id == currentModelId)
+              .firstOrNull;
           if (match != null) return match.displayLabel;
         }
-        return models.isNotEmpty ? models.first.displayLabel : null;
+        return null;
       },
     );
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          sessionTitle,
-          style: const TextStyle(fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (modelLabel != null)
-          Text(
-            modelLabel,
+        const Text('AI Chat', style: TextStyle(fontSize: 16)),
+        modelsAsync.when(
+          loading: () => Text(
+            '加载模型中…',
             style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-            overflow: TextOverflow.ellipsis,
           ),
+          error: (_, _) => Text(
+            '未选择模型',
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+          ),
+          data: (models) {
+            if (models.isEmpty) {
+              return Text(
+                '未选择模型',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              );
+            }
+
+            return PopupMenuButton<String>(
+              padding: EdgeInsets.zero,
+              tooltip: '切换模型',
+              onSelected: (modelId) async {
+                ref.read(selectedModelIdProvider.notifier).state = modelId;
+                if (activeSessionId != null) {
+                  await ref
+                      .read(sessionDaoProvider)
+                      .updateDefaultModel(activeSessionId, modelId);
+                }
+              },
+              itemBuilder: (_) => _buildMobileModelMenuItems(
+                context,
+                models,
+                currentModelId,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      modelLabel ?? '未选择模型',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(Icons.expand_more, size: 14, color: Colors.grey[500]),
+                ],
+              ),
+            );
+          },
+        ),
       ],
     );
+  }
+
+  List<PopupMenuEntry<String>> _buildMobileModelMenuItems(
+    BuildContext context,
+    List<ChannelModelWithChannel> models,
+    String? selectedId,
+  ) {
+    final items = <PopupMenuEntry<String>>[];
+    final grouped = <String, List<ChannelModelWithChannel>>{};
+
+    for (final model in models) {
+      grouped.putIfAbsent(model.channel.name, () => []).add(model);
+    }
+
+    for (final entry in grouped.entries) {
+      items.add(
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Text(
+            entry.key,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[500],
+            ),
+          ),
+        ),
+      );
+
+      for (final model in entry.value) {
+        final isSelected = model.channelModel.id == selectedId;
+        items.add(
+          PopupMenuItem<String>(
+            value: model.channelModel.id,
+            child: Row(
+              children: [
+                if (isSelected)
+                  Icon(
+                    Icons.check,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary,
+                  )
+                else
+                  const SizedBox(width: 16),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    model.channelModel.modelName,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
+    return items;
   }
 
   PreferredSizeWidget _buildChatAppBar(
@@ -283,6 +391,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     bool showMenuButton = false,
   }) {
     final activeSession = ref.watch(activeSessionProvider);
+    final activeSessionId = ref.watch(activeSessionIdProvider);
 
     return AppBar(
       leading: showMenuButton
@@ -310,6 +419,13 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
           icon: const Icon(Icons.add),
           tooltip: '新建会话',
           onPressed: () => createNewSession(ref),
+        ),
+        IconButton(
+          icon: const Icon(Icons.refresh),
+          tooltip: '重试回复',
+          onPressed: activeSessionId == null
+              ? null
+              : () => retryLastUserMessage(ref, sessionId: activeSessionId),
         ),
         IconButton(
           icon: const Icon(Icons.settings),
