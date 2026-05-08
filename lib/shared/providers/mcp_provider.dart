@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/mcp/mcp_client.dart';
 import '../../core/database/dao/mcp_dao.dart';
@@ -99,8 +100,9 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
       if (config.isEnabled) {
         try {
           await connectServer(config);
-        } catch (_) {
-          // 连接失败不阻塞启动
+        } catch (e) {
+          // 连接失败不阻塞启动，但记录日志
+          debugPrint('[MCP] Failed to connect ${config.name}: $e');
         }
       }
     }
@@ -130,6 +132,8 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   }
 
   Future<void> updateServer(McpServerConfig config) async {
+    // 断开旧连接（配置可能已变）
+    await disconnectServer(config.id);
     await _dao.updateServer(
       id: config.id,
       name: config.name,
@@ -143,13 +147,22 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   }
 
   Future<void> connectServer(McpServerConfig config) async {
+    // 断开已有连接（避免资源泄漏）
+    await disconnectServer(config.id);
+
     McpTransport transport;
     if (config.transport == 'stdio') {
+      if (config.command == null || config.command!.isEmpty) {
+        throw Exception('MCP stdio server requires a command');
+      }
       transport = StdioTransport(
         command: config.command!,
         args: config.args ?? [],
       );
     } else {
+      if (config.url == null || config.url!.isEmpty) {
+        throw Exception('MCP SSE server requires a URL');
+      }
       transport = SseTransport(
         url: config.url!,
         headers: config.headers ?? {},

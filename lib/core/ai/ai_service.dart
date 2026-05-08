@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart' show CancelToken;
 import 'ai_protocol.dart';
 import 'openai_chat_protocol.dart';
 import 'openai_response_protocol.dart';
@@ -30,6 +31,7 @@ class AiService {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) {
     return getProtocol(protocol).sendStream(
       baseUrl: baseUrl,
@@ -37,6 +39,7 @@ class AiService {
       model: model,
       messages: messages,
       systemPrompt: systemPrompt,
+      cancelToken: cancelToken,
     );
   }
 }

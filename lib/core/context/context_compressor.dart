@@ -77,7 +77,7 @@ class ContextCompressor {
       systemPrompt: '你是一个对话摘要助手，擅长提炼关键信息。',
     )) {
       if (token.content != null) buffer.write(token.content);
-      if (token.thinking != null) buffer.write(token.thinking);
+      // thinking tokens 不写入摘要（它们是模型内部推理，不是对话内容）
     }
 
     final summaryContent = buffer.toString();

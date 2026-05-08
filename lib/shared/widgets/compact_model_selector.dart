@@ -28,9 +28,7 @@ class CompactModelSelector extends ConsumerWidget {
 
         ChannelModelWithChannel? current;
         if (activeId != null) {
-          try {
-            current = models.firstWhere((m) => m.channelModel.id == activeId);
-          } catch (_) {}
+          current = models.where((m) => m.channelModel.id == activeId).firstOrNull;
         }
         current ??= models.first;
 

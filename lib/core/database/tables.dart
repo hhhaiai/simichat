@@ -48,7 +48,7 @@ class Sessions extends Table {
   TextColumn get folderId =>
       text().nullable().references(Folders, #id, onDelete: KeyAction.setNull)();
   TextColumn get defaultChannelModelId =>
-      text().nullable().references(ChannelModels, #id)();
+      text().nullable().references(ChannelModels, #id, onDelete: KeyAction.setNull)();
   IntColumn get totalTokens => integer().withDefault(const Constant(0))();
   IntColumn get createdAt => integer()();
   IntColumn get lastMessageAt => integer()();
@@ -70,7 +70,7 @@ class Messages extends Table {
   TextColumn get summaryEndId => text().nullable()();
   BoolColumn get isSummarized => boolean().withDefault(const Constant(false))();
   TextColumn get channelModelId =>
-      text().nullable().references(ChannelModels, #id)();
+      text().nullable().references(ChannelModels, #id, onDelete: KeyAction.setNull)();
   IntColumn get tokens => integer().withDefault(const Constant(0))();
   IntColumn get responseMs => integer().nullable()();
   IntColumn get createdAt => integer()();

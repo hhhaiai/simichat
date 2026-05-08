@@ -274,6 +274,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
         padding: EdgeInsets.zero,
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('重命名')),
+          PopupMenuItem(
+            value: 'moveToFolder',
+            child: const Text('移动到文件夹'),
+          ),
           const PopupMenuItem(
             value: 'delete',
             child: Text('删除', style: TextStyle(color: Colors.red)),
@@ -297,6 +301,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
           refreshSessions(ref);
         }
         break;
+      case 'moveToFolder':
+        await _showMoveToFolderDialog(session);
+        break;
       case 'delete':
         final confirmed = await _showDeleteConfirmDialog(
           session.title ?? '新会话',
@@ -314,6 +321,67 @@ class _SidebarState extends ConsumerState<Sidebar> {
         }
         break;
     }
+  }
+
+  /// 移动会话到文件夹（含"移出文件夹"选项）
+  Future<void> _showMoveToFolderDialog(Session session) async {
+    final folders = await ref.read(folderDaoProvider).getAllFolders();
+    if (!mounted) return;
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('移动到文件夹'),
+        children: [
+          // "移出文件夹" 选项
+          if (session.folderId != null)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, ''), // 空字符串 = 移出
+              child: const ListTile(
+                leading: Icon(Icons.folder_off_outlined),
+                title: Text('移出文件夹'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          for (final f in folders)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, f.id),
+              child: ListTile(
+                leading: Icon(
+                  session.folderId == f.id
+                      ? Icons.folder_special
+                      : Icons.folder_outlined,
+                  color: session.folderId == f.id ? Colors.amber : null,
+                ),
+                title: Text(f.name),
+                trailing: session.folderId == f.id
+                    ? const Icon(Icons.check, size: 18)
+                    : null,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          if (folders.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('暂无文件夹，请先创建', style: TextStyle(color: Colors.grey)),
+            ),
+        ],
+      ),
+    );
+
+    if (result == null || !mounted) return;
+
+    final sessionDao = ref.read(sessionDaoProvider);
+    if (result.isEmpty) {
+      // 移出文件夹
+      await sessionDao.moveToFolder(session.id, null);
+    } else {
+      await sessionDao.moveToFolder(session.id, result);
+    }
+    refreshSessions(ref);
+    refreshFolders(ref);
   }
 
   Future<bool?> _showDeleteConfirmDialog(String title) {
@@ -346,11 +414,18 @@ class _SidebarState extends ConsumerState<Sidebar> {
         content: TextField(controller: controller, autofocus: true),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () {
+              controller.dispose();
+              Navigator.pop(ctx);
+            },
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
+            onPressed: () {
+              final text = controller.text;
+              controller.dispose();
+              Navigator.pop(ctx, text);
+            },
             child: const Text('确定'),
           ),
         ],
@@ -371,7 +446,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () {
+              controller.dispose();
+              Navigator.pop(ctx);
+            },
             child: const Text('取消'),
           ),
           FilledButton(
@@ -381,7 +459,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
                     .read(folderDaoProvider)
                     .createFolder(id: const Uuid().v4(), name: controller.text);
                 refreshFolders(ref);
+                controller.dispose();
                 if (ctx.mounted) Navigator.pop(ctx);
+              } else {
+                controller.dispose();
               }
             },
             child: const Text('创建'),

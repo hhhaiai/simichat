@@ -28,7 +28,7 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
 
   String get _language => widget.language ?? 'text';
 
-  List<String> get _lines => widget.code.split('\n');
+  late final List<String> _lines = widget.code.split('\n');
 
   bool get _isLong => _lines.length > _maxCollapsedLines;
 

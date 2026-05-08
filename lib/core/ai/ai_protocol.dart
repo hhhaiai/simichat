@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart' show CancelToken;
 
 /// 统一的 AI 消息格式
 class AiMessage {
@@ -38,5 +39,6 @@ abstract class AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   });
 }

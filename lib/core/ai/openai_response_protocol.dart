@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
@@ -12,8 +13,9 @@ class OpenAiResponseProtocol implements AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) async* {
-    final normalized = normalizeUrl(baseUrl);
+    final normalized = normalizeOpenAiBaseUrl(baseUrl);
     final url = '$normalized/v1/responses';
 
     final inputList = <Map<String, dynamic>>[];
@@ -34,7 +36,10 @@ class OpenAiResponseProtocol implements AiProtocol {
               'image_url': 'data:${att.mimeType};base64,${att.base64}',
             });
           } else {
-            content.add({'type': 'input_text', 'text': '[附件: ${att.type}] base64 数据已省略'});
+            content.add({
+              'type': 'input_text',
+              'text': '[附件: ${att.type}] base64 数据已省略',
+            });
           }
         }
         inputList.add({'role': m.role, 'content': content});
@@ -43,30 +48,33 @@ class OpenAiResponseProtocol implements AiProtocol {
       }
     }
 
-    final byteStream = await openSseStream(SseRequestConfig(
-      url: url,
-      headers: {'Authorization': 'Bearer $apiKey'},
-      body: {'model': model, 'input': inputList, 'stream': true},
-    ));
+    final byteStream = await openSseStream(
+      SseRequestConfig(
+        url: url,
+        headers: {'Authorization': 'Bearer $apiKey'},
+        body: {'model': model, 'input': inputList, 'stream': true},
+        cancelToken: cancelToken,
+      ),
+    );
 
-    try {
-      await for (final event in parseSseStream(byteStream)) {
-        try {
-          final json = jsonDecode(event.data) as Map<String, dynamic>;
-          final type = json['type'] as String?;
-          if (type == 'response.output_text.delta') {
-            final delta = json['delta'] as String?;
-            if (delta != null) yield AiChunk(content: delta);
-          } else if (type == 'response.reasoning_text.delta') {
-            final delta = json['delta'] as String?;
-            if (delta != null) yield AiChunk(thinking: delta);
-          } else if (type == 'response.completed') {
-            return;
-          }
-        } catch (e) {
-          debugPrint('[OpenAI Response] SSE parse error: $e\nLine: ${event.data}');
+    await for (final event in parseSseStream(byteStream)) {
+      try {
+        final json = jsonDecode(event.data) as Map<String, dynamic>;
+        final type = json['type'] as String?;
+        if (type == 'response.output_text.delta') {
+          final delta = json['delta'] as String?;
+          if (delta != null) yield AiChunk(content: delta);
+        } else if (type == 'response.reasoning_text.delta') {
+          final delta = json['delta'] as String?;
+          if (delta != null) yield AiChunk(thinking: delta);
+        } else if (type == 'response.completed') {
+          return;
         }
+      } catch (e) {
+        debugPrint(
+          '[OpenAI Response] SSE parse error: $e\nLine: ${event.data}',
+        );
       }
-    } finally {}
+    }
   }
 }

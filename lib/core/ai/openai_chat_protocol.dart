@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
@@ -12,8 +13,9 @@ class OpenAiChatProtocol implements AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) async* {
-    final normalized = normalizeUrl(baseUrl);
+    final normalized = normalizeOpenAiBaseUrl(baseUrl);
     final url = '$normalized/v1/chat/completions';
 
     final msgList = <Map<String, dynamic>>[];
@@ -34,7 +36,10 @@ class OpenAiChatProtocol implements AiProtocol {
               'image_url': {'url': 'data:${att.mimeType};base64,${att.base64}'},
             });
           } else {
-            content.add({'type': 'text', 'text': '[附件: ${att.type}] base64 数据已省略'});
+            content.add({
+              'type': 'text',
+              'text': '[附件: ${att.type}] base64 数据已省略',
+            });
           }
         }
         msgList.add({'role': m.role, 'content': content});
@@ -43,15 +48,17 @@ class OpenAiChatProtocol implements AiProtocol {
       }
     }
 
-    final byteStream = await openSseStream(SseRequestConfig(
-      url: url,
-      headers: {'Authorization': 'Bearer $apiKey'},
-      body: {'model': model, 'messages': msgList, 'stream': true},
-    ));
+    final byteStream = await openSseStream(
+      SseRequestConfig(
+        url: url,
+        headers: {'Authorization': 'Bearer $apiKey'},
+        body: {'model': model, 'messages': msgList, 'stream': true},
+        cancelToken: cancelToken,
+      ),
+    );
 
-    try {
-      await for (final event in parseSseStream(byteStream)) {
-        try {
+    await for (final event in parseSseStream(byteStream)) {
+      try {
           final json = jsonDecode(event.data) as Map<String, dynamic>;
           final choices = json['choices'] as List?;
           if (choices != null && choices.isNotEmpty) {
@@ -72,7 +79,6 @@ class OpenAiChatProtocol implements AiProtocol {
         } catch (e) {
           debugPrint('[OpenAI Chat] SSE parse error: $e\nLine: ${event.data}');
         }
-      }
-    } finally {}
+    }
   }
 }

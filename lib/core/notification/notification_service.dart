@@ -57,7 +57,7 @@ class NotificationService {
     );
 
     await _plugin.show(
-      0, // 固定 id，同一条会覆盖前一条
+      sessionTitle.hashCode & 0x7FFFFFFF, // 每个会话独立 id，避免互相覆盖
       '回复完成 — $sessionTitle',
       body,
       const NotificationDetails(

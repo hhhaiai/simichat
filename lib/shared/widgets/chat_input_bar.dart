@@ -23,7 +23,8 @@ class ChatInputBar extends StatefulWidget {
   final FocusNode focusNode;
   final bool isStreaming;
   final ValueNotifier<bool> hasTextNotifier;
-  final void Function(String text, List<PendingAttachment> attachments) onSend;
+  final Future<bool> Function(String text, List<PendingAttachment> attachments)
+  onSend;
   final Widget? modelSelector;
 
   const ChatInputBar({
@@ -44,16 +45,16 @@ class _ChatInputBarState extends State<ChatInputBar> {
   final _imagePicker = ImagePicker();
   final List<PendingAttachment> _pendingAttachments = [];
 
-  void _handleSend() {
+  Future<void> _handleSend() async {
     if (widget.isStreaming) {
-      widget.onSend('', const []);
+      await widget.onSend('', const []);
       return;
     }
     final content = widget.controller.text.trim();
     if (content.isEmpty && _pendingAttachments.isEmpty) return;
-    widget.controller.clear();
     final attachments = List<PendingAttachment>.from(_pendingAttachments);
-    widget.onSend(content, attachments);
+    final sent = await widget.onSend(content, attachments);
+    if (!sent || !mounted) return;
     setState(() => _pendingAttachments.clear());
   }
 
@@ -103,7 +104,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   Future<void> _pickImage(ImageSource source) async {
     try {
       final xFile = await _imagePicker.pickImage(source: source);
-      if (xFile == null) return;
+      if (xFile == null || !mounted) return;
       setState(() {
         _pendingAttachments.add(
           PendingAttachment(path: xFile.path, name: xFile.name, type: 'image'),
@@ -121,7 +122,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles();
-      if (result == null || result.files.isEmpty) return;
+      if (result == null || result.files.isEmpty || !mounted) return;
       final file = result.files.first;
       final path = file.path;
       if (path == null) return;

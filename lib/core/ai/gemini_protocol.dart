@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
@@ -12,9 +13,10 @@ class GeminiProtocol implements AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) async* {
     final normalized = normalizeUrl(baseUrl);
-    final url = '$normalized/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey';
+    final url = '$normalized/v1beta/models/$model:streamGenerateContent?alt=sse';
 
     final contents = <Map<String, dynamic>>[];
     for (final m in messages) {
@@ -52,13 +54,13 @@ class GeminiProtocol implements AiProtocol {
 
     final byteStream = await openSseStream(SseRequestConfig(
       url: url,
-      headers: {},
+      headers: {'x-goog-api-key': apiKey},
       body: body,
+      cancelToken: cancelToken,
     ));
 
-    try {
-      await for (final event in parseSseStream(byteStream)) {
-        try {
+    await for (final event in parseSseStream(byteStream)) {
+      try {
           final json = jsonDecode(event.data) as Map<String, dynamic>;
           final candidates = json['candidates'] as List?;
           if (candidates != null && candidates.isNotEmpty) {
@@ -80,7 +82,6 @@ class GeminiProtocol implements AiProtocol {
         } catch (e) {
           debugPrint('[Gemini] SSE parse error: $e\nLine: ${event.data}');
         }
-      }
-    } finally {}
+    }
   }
 }

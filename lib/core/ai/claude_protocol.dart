@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
@@ -12,6 +13,7 @@ class ClaudeProtocol implements AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) async* {
     final normalized = normalizeUrl(baseUrl);
     final url = '$normalized/v1/messages';
@@ -58,11 +60,11 @@ class ClaudeProtocol implements AiProtocol {
         'anthropic-version': '2023-06-01',
       },
       body: body,
+      cancelToken: cancelToken,
     ));
 
-    try {
-      await for (final event in parseSseStream(byteStream)) {
-        try {
+    await for (final event in parseSseStream(byteStream)) {
+      try {
           final json = jsonDecode(event.data) as Map<String, dynamic>;
           final type = json['type'] as String?;
           if (type == 'content_block_delta') {
@@ -83,7 +85,6 @@ class ClaudeProtocol implements AiProtocol {
         } catch (e) {
           debugPrint('[Claude] SSE parse error: $e\nLine: ${event.data}');
         }
-      }
-    } finally {}
+    }
   }
 }

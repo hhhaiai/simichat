@@ -81,6 +81,7 @@ lib/
 - [x] Markdown 图片查看（点击放大 + photo_view 缩放 + gal 保存本地）
 - [x] 全局搜索（Ctrl+Shift+K，搜索会话标题 + 消息内容）
 - [x] 紧凑模型选择器（CompactModelSelector，渠道分组 + 会话级切换）
+- [x] MCP 工具调用循环（AI → tool_call 解析 → 执行 → 结果回传 → AI 最终回复，最多 3 轮）
 
 ## 参考项目
 
@@ -182,13 +183,13 @@ lib/
 | # | 问题 | 文件 | 状态 |
 |---|------|------|------|
 | HI-1 | KeyEncryptor 只是 base64 编码，不是真正加密 | `key_encryptor.dart` | ✅ 已修复（AES-256-CBC） |
-| HI-2 | Gemini API Key 暴露在 URL query 参数中 | `gemini_protocol.dart:17` | 待修复 |
+| HI-2 | Gemini API Key 暴露在 URL query 参数中 | `gemini_protocol.dart:17` | ✅ 已修复（改用 x-goog-api-key header） |
 | HI-3 | MCP SSE POST 无错误处理 | `mcp_client.dart:244-251` | ✅ 已修复 |
 | HI-4 | MCP 请求无超时机制 | `mcp_client.dart:97-115` | ✅ 已修复（30s 超时） |
 | HI-5 | StdioTransport 忽略 stderr | `mcp_client.dart:163-177` | ✅ 已修复 |
-| HI-6 | SSE utf8.decode 多字节字符跨块切分异常 | `sse_helper.dart` | 待修复 |
-| HI-7 | KeyEncryptor.decrypt 未 try-catch，流状态卡死 | `chat_provider.dart:142` | 待修复 |
-| HI-8 | MCP tools 从未注入对话上下文，工具调用形同虚设 | `mcp_provider.dart` + `chat_provider.dart` | 待修复 |
+| HI-6 | SSE utf8.decode 多字节字符跨块切分异常 | `sse_helper.dart` | ✅ 已修复（_trimIncompleteUtf8） |
+| HI-7 | KeyEncryptor.decrypt 未 try-catch，流状态卡死 | `chat_provider.dart:142` | ✅ 已修复（try-catch 包裹） |
+| HI-8 | MCP tools 从未注入对话上下文，工具调用形同虚设 | `mcp_provider.dart` + `chat_provider.dart` | ✅ 已修复（工具调用循环 + 解析执行） |
 
 ### 中等问题
 

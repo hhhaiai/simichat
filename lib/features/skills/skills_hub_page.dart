@@ -7,24 +7,21 @@ import '../../core/skills/skill_hub_repository.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/skill_provider.dart';
 
-/// 打开 Skills Hub 底部弹出 sheet
-Future<void> showSkillsHubSheet(BuildContext context) {
-  return showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (_) => const _SkillsHubSheet(),
+/// 打开 Skills Hub 全屏页面
+void showSkillsHubSheet(BuildContext context) {
+  Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => const SkillsHubPage()),
   );
 }
 
-class _SkillsHubSheet extends ConsumerStatefulWidget {
-  const _SkillsHubSheet();
+class SkillsHubPage extends ConsumerStatefulWidget {
+  const SkillsHubPage({super.key});
 
   @override
-  ConsumerState<_SkillsHubSheet> createState() => _SkillsHubSheetState();
+  ConsumerState<SkillsHubPage> createState() => _SkillsHubPageState();
 }
 
-class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
+class _SkillsHubPageState extends ConsumerState<SkillsHubPage> {
   final _importController = TextEditingController();
   final _hubSearchController = TextEditingController();
   bool _importing = false;
@@ -33,7 +30,6 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
   @override
   void initState() {
     super.initState();
-    // 自动加载市场
     Future.microtask(() {
       ref.read(skillHubSearchProvider.notifier).search();
     });
@@ -143,57 +139,62 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
     ref.invalidate(enabledSkillsProvider);
   }
 
+  void _searchHub() {
+    ref.read(skillHubSearchProvider.notifier).search(
+          keyword: _hubSearchController.text,
+        );
+  }
+
   // ─── UI ───
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final skillsAsync = ref.watch(skillsProvider);
     final searchState = ref.watch(skillHubSearchProvider);
+    final screenWidth = MediaQuery.of(context).size.width;
 
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottomInset),
-        child: DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.86,
-          minChildSize: 0.5,
-          maxChildSize: 0.95,
-          builder: (context, scrollController) => ListView(
-            controller: scrollController,
+    // 响应式列数：根据屏幕宽度自适应
+    final crossAxisCount = screenWidth > 1200 ? 4 : screenWidth > 800 ? 3 : 2;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Skills 市场'),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(
+                text: SkillHubRepository.skillHubHomeUrl,
+              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('已复制 SkillHub.cn 链接'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+            icon: const Icon(Icons.link, size: 16),
+            label: const Text('skillhub.cn'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1200),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
             children: [
-              // ─── 标题 ───
-              Row(
-                children: [
-                  Icon(Icons.extension_outlined, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Skills 市场',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '从 SkillHub.cn 搜索并导入 Skills，导入后注入到系统提示词中使用。',
-                style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-              ),
-              const SizedBox(height: 16),
-
-              // ─── SkillHub 搜索区 ───
+              // ─── 搜索栏 ───
               Card(
                 elevation: 0,
                 color: scheme.surfaceContainerHighest,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -201,32 +202,16 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
                         children: [
                           const Icon(Icons.travel_explore_outlined, size: 20),
                           const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '浏览 SkillHub 目录',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Clipboard.setData(const ClipboardData(
-                                text: SkillHubRepository.skillHubHomeUrl,
-                              ));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('已复制 SkillHub.cn 链接'),
-                                  duration: Duration(seconds: 1),
-                                ),
-                              );
-                            },
-                            child: const Text('skillhub.cn'),
+                          Text(
+                            '浏览 SkillHub 目录',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
@@ -236,20 +221,22 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
                                 hintText: '搜索 skills...',
                                 isDense: true,
                                 border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
                                 contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 10,
+                                  horizontal: 14,
+                                  vertical: 12,
                                 ),
+                                prefixIcon: const Icon(Icons.search, size: 20),
                               ),
                               textInputAction: TextInputAction.search,
                               onSubmitted: (_) => _searchHub(),
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 12),
                           FilledButton(
-                            onPressed: searchState.isLoading ? null : _searchHub,
+                            onPressed:
+                                searchState.isLoading ? null : _searchHub,
                             child: searchState.isLoading
                                 ? const SizedBox(
                                     width: 16,
@@ -273,59 +260,80 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
                           ),
                         ),
                       ],
-                      if (searchState.result != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          searchState.result!.keyword.isEmpty
-                              ? '热门：${searchState.result!.total} 个 skills'
-                              : '"${searchState.result!.keyword}"：${searchState.result!.total} 个结果',
-                          style: Theme.of(context).textTheme.labelLarge,
-                        ),
-                        const SizedBox(height: 6),
-                        for (final s in searchState.result!.skills.take(10))
-                          _SkillHubTile(
-                            summary: s,
-                            importing: _importingSlugs.contains(s.slug),
-                            onImport: () => _importFromHub(s),
-                          ),
-                      ],
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
               // ─── URL 导入 ───
-              TextField(
-                controller: _importController,
-                decoration: InputDecoration(
-                  hintText: '粘贴 SKILL.md URL（GitHub raw / 直链）',
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _importController,
+                      decoration: InputDecoration(
+                        hintText: '粘贴 SKILL.md URL（GitHub raw / 直链）',
+                        isDense: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    onPressed: _importing ? null : _importFromUrl,
+                    icon: _importing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_download_outlined, size: 18),
+                    label: Text(_importing ? '导入中...' : '从 URL 导入'),
                   ),
-                ),
+                ],
               ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _importing ? null : _importFromUrl,
-                  icon: _importing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.cloud_download_outlined, size: 18),
-                  label: Text(_importing ? '导入中...' : '从 URL 导入'),
+              const SizedBox(height: 24),
+
+              // ─── SkillHub 搜索结果 ───
+              if (searchState.result != null) ...[
+                Text(
+                  searchState.result!.keyword.isEmpty
+                      ? '热门 Skills（${searchState.result!.total}）'
+                      : '"${searchState.result!.keyword}"（${searchState.result!.total} 个结果）',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
-              ),
-              const SizedBox(height: 18),
+                const SizedBox(height: 12),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxisCount,
+                    mainAxisExtent: 160,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 12,
+                  ),
+                  itemCount: searchState.result!.skills.length,
+                  itemBuilder: (_, index) {
+                    final s = searchState.result!.skills[index];
+                    return _SkillHubCard(
+                      summary: s,
+                      importing: _importingSlugs.contains(s.slug),
+                      onImport: () => _importFromHub(s),
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+              ],
 
               // ─── 已导入 Skills ───
               Text(
@@ -335,41 +343,57 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
                     .titleSmall
                     ?.copyWith(fontWeight: FontWeight.w700),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               skillsAsync.when(
                 loading: () => const Padding(
-                  padding: EdgeInsets.all(16),
+                  padding: EdgeInsets.all(32),
                   child: Center(child: CircularProgressIndicator()),
                 ),
                 error: (e, _) => Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text('加载失败：$e'),
+                  padding: const EdgeInsets.all(32),
+                  child: Center(child: Text('加载失败：$e')),
                 ),
                 data: (skills) {
                   if (skills.isEmpty) {
                     return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      padding: const EdgeInsets.symmetric(vertical: 40),
                       child: Center(
-                        child: Text(
-                          '还没有导入任何 Skill',
-                          style: TextStyle(
-                            color: scheme.onSurfaceVariant,
-                            fontSize: 13,
-                          ),
+                        child: Column(
+                          children: [
+                            Icon(Icons.extension_off_outlined,
+                                size: 48, color: scheme.onSurfaceVariant),
+                            const SizedBox(height: 12),
+                            Text(
+                              '还没有导入任何 Skill',
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     );
                   }
-                  return Column(
-                    children: [
-                      for (final skill in skills)
-                        _SkillTile(
-                          skill: skill,
-                          onToggle: (enabled) =>
-                              _toggleSkill(skill.id, enabled),
-                          onDelete: () => _deleteSkill(skill.id),
-                        ),
-                    ],
+                  return GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: crossAxisCount,
+                      mainAxisExtent: 140,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
+                    itemCount: skills.length,
+                    itemBuilder: (_, index) {
+                      final skill = skills[index];
+                      return _SkillCard(
+                        skill: skill,
+                        onToggle: (enabled) =>
+                            _toggleSkill(skill.id, enabled),
+                        onDelete: () => _deleteSkill(skill.id),
+                      );
+                    },
                   );
                 },
               ),
@@ -379,17 +403,11 @@ class _SkillsHubSheetState extends ConsumerState<_SkillsHubSheet> {
       ),
     );
   }
-
-  void _searchHub() {
-    ref.read(skillHubSearchProvider.notifier).search(
-          keyword: _hubSearchController.text,
-        );
-  }
 }
 
-/// SkillHub 搜索结果条目
-class _SkillHubTile extends StatelessWidget {
-  const _SkillHubTile({
+/// SkillHub 搜索结果卡片（网格项）
+class _SkillHubCard extends StatelessWidget {
+  const _SkillHubCard({
     required this.summary,
     required this.importing,
     required this.onImport,
@@ -401,37 +419,92 @@ class _SkillHubTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final metadata = [
       if (summary.ownerName.isNotEmpty) '@${summary.ownerName}',
       if (summary.category.isNotEmpty) summary.category,
       if (summary.version.isNotEmpty) 'v${summary.version}',
+    ].join(' · ');
+
+    final stats = [
       '${_compactCount(summary.downloads)} 下载',
       '${_compactCount(summary.stars)} 星',
       if (summary.requiresApiKey) '需要 API key',
     ].join(' · ');
 
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.extension_outlined, size: 22),
-      title: Text(summary.name, style: const TextStyle(fontSize: 14)),
-      subtitle: Text(
-        [if (summary.description.isNotEmpty) summary.description, metadata]
-            .join('\n'),
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12),
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: scheme.outlineVariant),
       ),
-      trailing: TextButton(
-        onPressed: importing ? null : onImport,
-        child: Text(importing ? '导入中' : '导入'),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.extension_outlined, size: 18, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    summary.name,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: Text(
+                summary.description.isNotEmpty
+                    ? summary.description
+                    : '暂无描述',
+                style: TextStyle(
+                    fontSize: 12, color: scheme.onSurfaceVariant),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (metadata.isNotEmpty) ...[
+              Text(metadata,
+                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+              const SizedBox(height: 2),
+            ],
+            if (stats.isNotEmpty) ...[
+              Text(stats,
+                  style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+            ],
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonal(
+                onPressed: importing ? null : onImport,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  importing ? '导入中...' : '导入',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// 已导入 Skill 条目
-class _SkillTile extends StatelessWidget {
-  const _SkillTile({
+/// 已导入 Skill 卡片（网格项）
+class _SkillCard extends StatelessWidget {
+  const _SkillCard({
     required this.skill,
     required this.onToggle,
     required this.onDelete,
@@ -443,41 +516,86 @@ class _SkillTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(
-        skill.isEnabled
-            ? Icons.check_circle_outline
-            : Icons.circle_outlined,
-        size: 22,
-        color: skill.isEnabled ? Colors.green : null,
+    final scheme = Theme.of(context).colorScheme;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: skill.isEnabled ? scheme.primary.withValues(alpha: 0.3) : scheme.outlineVariant,
+        ),
       ),
-      title: Text(skill.name, style: const TextStyle(fontSize: 14)),
-      subtitle: Text(
-        [
-          skill.description,
-          if (skill.online && skill.sourceUrl != null)
-            '来源：${skill.sourceUrl}',
-          if (skill.sha256Verified) 'SHA-256 已验证',
-        ].join('\n'),
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 12),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Switch(
-            value: skill.isEnabled,
-            onChanged: onToggle,
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, size: 18),
-            onPressed: onDelete,
-            tooltip: '删除',
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  skill.isEnabled
+                      ? Icons.check_circle_outline
+                      : Icons.circle_outlined,
+                  size: 18,
+                  color: skill.isEnabled ? Colors.green : scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    skill.name,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: skill.isEnabled ? null : scheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: Text(
+                skill.description.isNotEmpty ? skill.description : '暂无描述',
+                style: TextStyle(
+                    fontSize: 12, color: scheme.onSurfaceVariant),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (skill.sha256Verified) ...[
+              Row(
+                children: [
+                  Icon(Icons.verified, size: 12, color: scheme.primary),
+                  const SizedBox(width: 4),
+                  Text('SHA-256 已验证',
+                      style: TextStyle(fontSize: 11, color: scheme.primary)),
+                ],
+              ),
+              const SizedBox(height: 6),
+            ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Switch(
+                  value: skill.isEnabled,
+                  onChanged: onToggle,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                IconButton(
+                  icon: Icon(Icons.delete_outline,
+                      size: 18, color: scheme.error),
+                  onPressed: onDelete,
+                  tooltip: '删除',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

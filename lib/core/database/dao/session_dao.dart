@@ -4,7 +4,7 @@ import '../tables.dart';
 
 part 'session_dao.g.dart';
 
-@DriftAccessor(tables: [Sessions])
+@DriftAccessor(tables: [Sessions, Messages])
 class SessionDao extends DatabaseAccessor<AppDatabase> with _$SessionDaoMixin {
   SessionDao(super.db);
 
@@ -65,8 +65,9 @@ class SessionDao extends DatabaseAccessor<AppDatabase> with _$SessionDaoMixin {
         .write(SessionsCompanion(folderId: Value(folderId)));
   }
 
-  Future<void> deleteSession(String id) {
-    return (delete(sessions)..where((t) => t.id.equals(id))).go();
+  Future<void> deleteSession(String id) async {
+    // Messages are cascade-deleted via onDelete: KeyAction.cascade in tables.dart
+    await (delete(sessions)..where((t) => t.id.equals(id))).go();
   }
 
   Future<List<Session>> searchSessions(String query) {

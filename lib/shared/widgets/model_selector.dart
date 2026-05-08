@@ -44,9 +44,7 @@ class ModelSelector extends ConsumerWidget {
         // 找到当前选中的模型
         ChannelModelWithChannel? selected;
         if (selectedId != null) {
-          try {
-            selected = models.firstWhere((m) => m.channelModel.id == selectedId);
-          } catch (_) {}
+          selected = models.where((m) => m.channelModel.id == selectedId).firstOrNull;
         }
         selected ??= models.first;
 

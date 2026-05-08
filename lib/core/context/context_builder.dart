@@ -22,6 +22,7 @@ class ContextBuilder {
     int recentK = 20,
     String? customSystemPrompt,
     String? skillsPrompt,
+    String? mcpToolsPrompt,
   }) async {
     final summaries = await _messageDao.getSummaries(sessionId);
     final originals = await _messageDao.getUnsummarizedOriginals(sessionId);
@@ -51,6 +52,9 @@ class ContextBuilder {
     var systemPrompt = customSystemPrompt ?? defaultSystemPrompt;
     if (skillsPrompt != null && skillsPrompt.isNotEmpty) {
       systemPrompt = '$systemPrompt\n\n$skillsPrompt';
+    }
+    if (mcpToolsPrompt != null && mcpToolsPrompt.isNotEmpty) {
+      systemPrompt = '$systemPrompt\n\n$mcpToolsPrompt';
     }
     return (systemPrompt, messages);
   }

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import 'http_helper.dart';
+import 'sse_helper.dart';
 
 class EmbeddingResponse {
   final String model;
@@ -49,7 +50,8 @@ class OpenAiEmbeddingClient {
   }
 
   static String buildEmbeddingsUrl(String baseUrl) {
-    return "${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/embeddings";
+    final normalized = normalizeOpenAiBaseUrl(baseUrl);
+    return '$normalized/v1/embeddings';
   }
 
   static EmbeddingResponse parseEmbeddingResponse(

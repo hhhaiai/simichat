@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 
+import 'http_helper.dart';
 import 'model_capability.dart';
+import 'sse_helper.dart';
 
 class FetchedModel {
   final String id;
@@ -19,17 +21,14 @@ class ModelFetcher {
   );
 
   static String _errorMessage(DioException e) {
+    // HTTP status code errors provide more specific context
     final status = e.response?.statusCode;
     if (status == 401) return '认证失败，请检查 API Key';
     if (status == 403) return '权限不足，请检查 API Key 权限';
     if (status == 404) return '接口不存在，请检查 Base URL';
     if (status == 429) return '请求过于频繁，请稍后再试';
-    if (e.type == DioExceptionType.connectionTimeout) return '连接超时，请检查网络';
-    if (e.type == DioExceptionType.receiveTimeout) return '响应超时，请检查网络';
-    if (e.type == DioExceptionType.connectionError) {
-      return '无法连接，请检查 Base URL 和网络';
-    }
-    return '请求失败: ${e.message}';
+    // Delegate to centralized formatter for timeout and connection errors
+    return formatDioError(e);
   }
 
   /// 获取 OpenAI 兼容接口的模型列表，并尽量识别 chat / embedding 能力。
@@ -38,7 +37,7 @@ class ModelFetcher {
     required String apiKey,
   }) async {
     final dio = _createDio();
-    final normalizedUrl = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/models';
+    final normalizedUrl = '${normalizeOpenAiBaseUrl(baseUrl)}/v1/models';
 
     try {
       final response = await dio.get(

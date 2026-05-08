@@ -127,7 +127,9 @@ class McpClient {
   }
 
   void _onMessage(Map<String, dynamic> message) {
-    final id = message['id'] as int?;
+    // JSON-RPC 2.0: id 可以是 int 或 String
+    final rawId = message['id'];
+    final id = rawId is int ? rawId : (rawId is String ? int.tryParse(rawId) : null);
     if (id != null && _pendingRequests.containsKey(id)) {
       final error = message['error'];
       if (error != null) {
@@ -142,6 +144,13 @@ class McpClient {
   }
 
   Future<void> dispose() async {
+    // 清理所有未完成的请求
+    for (final entry in _pendingRequests.entries) {
+      if (!entry.value.isCompleted) {
+        entry.value.completeError(Exception('MCP client disposed'));
+      }
+    }
+    _pendingRequests.clear();
     await _transport.disconnect();
     await _toolsController.close();
     await _resourcesController.close();
@@ -160,13 +169,15 @@ class StdioTransport implements McpTransport {
   final String command;
   final List<String> args;
   Process? _process;
+  StreamSubscription<String>? _stdoutSub;
+  StreamSubscription<String>? _stderrSub;
 
   StdioTransport({required this.command, this.args = const []});
 
   @override
   Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
     _process = await Process.start(command, args);
-    _process!.stdout
+    _stdoutSub = _process!.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
@@ -178,7 +189,7 @@ class StdioTransport implements McpTransport {
         debugPrint('[MCP Stdio] Parse error: $e');
       }
     });
-    _process!.stderr
+    _stderrSub = _process!.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
@@ -190,6 +201,10 @@ class StdioTransport implements McpTransport {
 
   @override
   Future<void> disconnect() async {
+    await _stdoutSub?.cancel();
+    await _stderrSub?.cancel();
+    _stdoutSub = null;
+    _stderrSub = null;
     _process?.kill();
     _process = null;
   }
@@ -231,6 +246,7 @@ class SseTransport implements McpTransport {
         if (line.startsWith('event:')) {
           eventType = line.substring(6).trim();
         } else if (line.startsWith('data:')) {
+          if (dataBuffer.isNotEmpty) dataBuffer += '\n';
           dataBuffer += line.substring(5).trim();
         } else if (line.isEmpty && dataBuffer.isNotEmpty) {
           if (eventType == 'endpoint') {

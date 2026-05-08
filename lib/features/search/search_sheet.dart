@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/database/app_database.dart';
@@ -27,6 +28,7 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
   String _query = '';
   bool _isSearching = false;
   List<_SearchResult> _results = [];
+  Timer? _debounceTimer;
 
   @override
   void initState() {
@@ -36,6 +38,7 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -109,11 +112,13 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
         ));
       }
 
+      if (!mounted) return;
       setState(() {
         _results = results;
         _isSearching = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isSearching = false);
     }
   }
@@ -165,7 +170,10 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
               ),
               onChanged: (v) {
                 setState(() {});
-                _doSearch(v);
+                _debounceTimer?.cancel();
+                _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+                  _doSearch(v);
+                });
               },
               onSubmitted: _doSearch,
             ),

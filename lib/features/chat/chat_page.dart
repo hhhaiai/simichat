@@ -31,6 +31,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   // 输入草稿缓存：按 sessionId 保存未发送文本
   static final Map<String, String> _draftCache = {};
+  static const _maxDraftCacheSize = 50;
 
   // 滚动监听：距底部超过一屏时显示 FAB
   bool _showScrollFab = false;
@@ -38,6 +39,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   // 会话内临时模型覆盖
   String? _pendingModelId;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -66,6 +68,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final currentId = ref.read(activeSessionIdProvider);
     if (currentId != null) {
       _draftCache[currentId] = _inputController.text;
+      // 限制缓存大小，移除最旧的条目
+      if (_draftCache.length > _maxDraftCacheSize) {
+        final keysToRemove = _draftCache.keys.take(_draftCache.length - _maxDraftCacheSize).toList();
+        for (final key in keysToRemove) {
+          _draftCache.remove(key);
+        }
+      }
     }
   }
 
@@ -93,27 +102,74 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
-  void _handleSend(String content, List<PendingAttachment> attachments) {
-    final activeSessionId = ref.read(activeSessionIdProvider);
-    if (activeSessionId == null) return;
+  Future<bool> _handleSend(
+    String content,
+    List<PendingAttachment> attachments,
+  ) async {
+    if (_isSubmitting) return false;
 
-    final streamState = ref.read(streamStateProvider(activeSessionId));
-    if (streamState.isStreaming) {
-      cancelStreaming(ref, activeSessionId);
-      return;
+    var activeSessionId = ref.read(activeSessionIdProvider);
+
+    if (activeSessionId != null) {
+      final streamState = ref.read(streamStateProvider(activeSessionId));
+      if (streamState.isStreaming) {
+        cancelStreaming(ref, activeSessionId);
+        return true;
+      }
     }
 
-    if (content.isEmpty && attachments.isEmpty) return;
-    _draftCache.remove(activeSessionId);
-    sendMessage(
-      ref: ref,
-      sessionId: activeSessionId,
-      content: content,
-      overrideModelId: _pendingModelId,
-      attachments: attachments,
-    );
-    setState(() => _pendingModelId = null);
-    _focusNode.requestFocus();
+    if (content.isEmpty && attachments.isEmpty) return false;
+
+    if (mounted) {
+      setState(() => _isSubmitting = true);
+    } else {
+      _isSubmitting = true;
+    }
+
+    try {
+      activeSessionId ??= await createNewSession(ref);
+      if (!mounted) return false;
+      final sent = await sendMessage(
+        ref: ref,
+        sessionId: activeSessionId,
+        content: content,
+        overrideModelId: _pendingModelId,
+        attachments: attachments,
+      );
+      if (!mounted) return false;
+      if (!sent) {
+        _draftCache[activeSessionId] = content;
+        _inputController.text = content;
+        _inputController.selection = TextSelection.fromPosition(
+          TextPosition(offset: content.length),
+        );
+        _hasTextNotifier.value = content.trim().isNotEmpty;
+        return false;
+      }
+      _draftCache.remove(activeSessionId);
+      _inputController.clear();
+      _hasTextNotifier.value = false;
+      setState(() => _pendingModelId = null);
+      _focusNode.requestFocus();
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      _inputController.text = content;
+      _inputController.selection = TextSelection.fromPosition(
+        TextPosition(offset: content.length),
+      );
+      _hasTextNotifier.value = content.trim().isNotEmpty;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('发送失败: $e')));
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      } else {
+        _isSubmitting = false;
+      }
+    }
   }
 
   /// 重试最后一条 user 消息（从 DB 读取，不依赖内存状态）
@@ -178,6 +234,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         final draft = next != null ? _draftCache[next] : null;
         _inputController.text = draft ?? '';
         _hasTextNotifier.value = (_inputController.text.trim().isNotEmpty);
+        _pendingModelId = null;
+        if (next != null) {
+          ref.read(sessionDaoProvider).getSession(next).then((session) {
+            if (!mounted || ref.read(activeSessionIdProvider) != next) return;
+            ref.read(selectedModelIdProvider.notifier).state =
+                session?.defaultChannelModelId;
+          });
+        }
       }
     });
 
@@ -206,7 +270,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   }
                 },
                 child: messagesAsync.when(
-                  loading: () => const Center(child: CircularProgressIndicator()),
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
                   error: (e, _) => Center(child: Text('加载失败: $e')),
                   data: (messages) {
                     if (messages.isEmpty && !streamState.isStreaming) {
@@ -235,11 +300,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           final modelName = modelsAsync.whenOrNull(
                             data: (models) {
                               if (msg.channelModelId != null) {
-                                try {
-                                  return models.firstWhere(
-                                    (m) => m.channelModel.id == msg.channelModelId,
-                                  ).displayLabel;
-                                } catch (_) {}
+                                  return models
+                                      .where((m) => m.channelModel.id == msg.channelModelId)
+                                      .firstOrNull
+                                      ?.displayLabel;
                               }
                               return null;
                             },
@@ -260,15 +324,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         final modelsAsync = ref.watch(allModelsProvider);
                         final streamingModelName = modelsAsync.whenOrNull(
                           data: (models) {
-                            final id = _pendingModelId ?? ref.read(selectedModelIdProvider);
+                            final id =
+                                _pendingModelId ??
+                                ref.read(selectedModelIdProvider);
                             if (id != null) {
-                              try {
-                                return models.firstWhere(
-                                  (m) => m.channelModel.id == id,
-                                ).displayLabel;
-                              } catch (_) {}
+                                final match = models
+                                    .where((m) => m.channelModel.id == id)
+                                    .firstOrNull;
+                                if (match != null) return match.displayLabel;
                             }
-                            return models.isNotEmpty ? models.first.displayLabel : null;
+                            return models.isNotEmpty
+                                ? models.first.displayLabel
+                                : null;
                           },
                         );
                         return RepaintBoundary(
@@ -364,6 +431,50 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildLandingModelSelector() {
+    final modelsAsync = ref.watch(allModelsProvider);
+    final selectedId = _pendingModelId ?? ref.watch(selectedModelIdProvider);
+    final scheme = Theme.of(context).colorScheme;
+
+    return modelsAsync.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (models) {
+        if (models.isEmpty) return const SizedBox.shrink();
+
+        ChannelModelWithChannel selected = models.first;
+        if (selectedId != null) {
+          try {
+            selected = models.firstWhere(
+              (m) => m.channelModel.id == selectedId,
+            );
+          } catch (_) {}
+        }
+
+        return Column(
+          children: [
+            Text(
+              '当前模型',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            CompactModelSelector(
+              selectedModelId: selected.channelModel.id,
+              onModelSelected: (modelId) {
+                ref.read(selectedModelIdProvider.notifier).state = modelId;
+                setState(() => _pendingModelId = modelId);
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -498,85 +609,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   void _showSystemPromptDialog(String sessionId) {
     final current = ref.read(systemPromptsProvider)[sessionId] ?? '';
-    final controller = TextEditingController(text: current);
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => _SystemPromptSheet(
-        controller: controller,
-        sessionId: sessionId,
-        onSave: (text) {
-          ref.read(systemPromptsProvider.notifier).setPrompt(sessionId, text);
-        },
-        onPickPrompt: () => _showPromptPicker(ctx, controller),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _SystemPromptPage(
+          initialPrompt: current,
+          onSave: (text) {
+            ref.read(systemPromptsProvider.notifier).setPrompt(sessionId, text);
+          },
+        ),
       ),
     );
-  }
-
-  void _showPromptPicker(
-    BuildContext context,
-    TextEditingController controller,
-  ) {
-    final promptsAsync = ref.read(promptNotifierProvider);
-    promptsAsync.whenData((prompts) {
-      if (prompts.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('提示词库为空，请先在设置中添加')));
-        return;
-      }
-      showModalBottomSheet(
-        context: context,
-        showDragHandle: true,
-        builder: (ctx) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.library_books_outlined),
-                    const SizedBox(width: 10),
-                    Text(
-                      '选择提示词',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: prompts.length,
-                  itemBuilder: (_, i) {
-                    final p = prompts[i];
-                    return ListTile(
-                      leading: const Icon(Icons.text_snippet_outlined),
-                      title: Text(p.name),
-                      subtitle: Text(
-                        p.content,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () {
-                        controller.text = p.content;
-                        Navigator.pop(ctx);
-                      },
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      );
-    });
   }
 
   List<PopupMenuEntry<String>> _buildModelMenuItems(
@@ -635,7 +678,55 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Widget _buildEmptyState() {
-    return const Center(child: Text('选择或新建一个会话'));
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      children: [
+        Expanded(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'AI Chat',
+                      style: TextStyle(
+                        fontSize: 42,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                        letterSpacing: -0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '下面是当前模型，开始前可以先切换。',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildLandingModelSelector(),
+                    const SizedBox(height: 28),
+                    _buildEmptyChat(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        ChatInputBar(
+          controller: _inputController,
+          focusNode: _focusNode,
+          isStreaming: false,
+          hasTextNotifier: _hasTextNotifier,
+          onSend: _handleSend,
+        ),
+      ],
+    );
   }
 
   void _fillInputAndFocus(String text) {
@@ -686,7 +777,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                              color: scheme.outlineVariant.withValues(alpha: 0.8),
+                              color: scheme.outlineVariant.withValues(
+                                alpha: 0.8,
+                              ),
                             ),
                           ),
                           child: Text(
@@ -709,37 +802,48 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 }
 
-/// 系统提示词编辑底部弹出 sheet（类 ChatGPT 风格）
-class _SystemPromptSheet extends StatefulWidget {
-  const _SystemPromptSheet({
-    required this.controller,
-    required this.sessionId,
-    required this.onSave,
-    required this.onPickPrompt,
-  });
+/// 系统提示词页面：分类浏览 + 自定义编辑
+class _SystemPromptPage extends StatefulWidget {
+  const _SystemPromptPage({required this.initialPrompt, required this.onSave});
 
-  final TextEditingController controller;
-  final String sessionId;
+  final String initialPrompt;
   final ValueChanged<String> onSave;
-  final VoidCallback onPickPrompt;
 
   @override
-  State<_SystemPromptSheet> createState() => _SystemPromptSheetState();
+  State<_SystemPromptPage> createState() => _SystemPromptPageState();
 }
 
-class _SystemPromptSheetState extends State<_SystemPromptSheet> {
-  late bool _hasChanges;
+class _SystemPromptPageState extends State<_SystemPromptPage>
+    with SingleTickerProviderStateMixin {
+  late final TextEditingController _controller;
+  late final TabController _tabController;
+  bool _hasChanges = false;
+
+  static const _categories = [
+    _CategoryDef('全部', Icons.apps_outlined, 'all'),
+    _CategoryDef('创作', Icons.brush_outlined, '创作'),
+    _CategoryDef('办公', Icons.business_center_outlined, '办公'),
+    _CategoryDef('医疗健康', Icons.health_and_safety_outlined, '医疗'),
+    _CategoryDef('学习辅导', Icons.school_outlined, '学习'),
+    _CategoryDef('使用工具', Icons.build_outlined, '工具'),
+    _CategoryDef('教学辅助', Icons.menu_book_outlined, '教学'),
+    _CategoryDef('法律服务', Icons.gavel_outlined, '法律'),
+    _CategoryDef('生活', Icons.favorite_outline, '生活'),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _hasChanges = false;
-    widget.controller.addListener(_onTextChanged);
+    _controller = TextEditingController(text: widget.initialPrompt);
+    _controller.addListener(_onTextChanged);
+    _tabController = TabController(length: _categories.length, vsync: this);
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onTextChanged);
+    _controller.removeListener(_onTextChanged);
+    _controller.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
@@ -747,114 +851,252 @@ class _SystemPromptSheetState extends State<_SystemPromptSheet> {
     if (!_hasChanges) setState(() => _hasChanges = true);
   }
 
+  void _usePrompt(String content) {
+    _controller.text = content;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + bottomInset),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 标题栏
-            Row(
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text('系统提示词'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              widget.onSave(_controller.text);
+              Navigator.pop(context);
+            },
+            child: const Text('保存'),
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: _categories
+              .map((c) => Tab(icon: Icon(c.icon, size: 18), text: c.label))
+              .toList(),
+        ),
+      ),
+      body: Column(
+        children: [
+          // 当前自定义提示词区域
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            color: scheme.surfaceContainerLow,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.tune, size: 20, color: scheme.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '系统提示词',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
+                Text('当前提示词', style: Theme.of(context).textTheme.labelLarge),
+                const SizedBox(height: 4),
+                Text(
+                  '设定 AI 的角色和行为准则，留空则使用模型默认。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  constraints: const BoxConstraints(
+                    minHeight: 80,
+                    maxHeight: 160,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surface,
+                    border: Border.all(color: scheme.outlineVariant),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: TextField(
+                    controller: _controller,
+                    maxLines: null,
+                    expands: true,
+                    textAlignVertical: TextAlignVertical.top,
+                    style: const TextStyle(fontSize: 13, height: 1.5),
+                    decoration: InputDecoration(
+                      hintText: '点击输入自定义系统提示词...',
+                      hintStyle: TextStyle(
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        fontSize: 13,
+                      ),
+                      contentPadding: const EdgeInsets.all(12),
+                      border: InputBorder.none,
                     ),
                   ),
                 ),
-                // 从提示词库选择
-                TextButton.icon(
-                  onPressed: widget.onPickPrompt,
-                  icon: const Icon(Icons.library_books_outlined, size: 16),
-                  label: const Text('提示词库'),
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Text(
+                      '${_controller.text.length} 字',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_controller.text.isNotEmpty)
+                      TextButton(
+                        onPressed: () {
+                          _controller.clear();
+                          widget.onSave('');
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text('清除', style: TextStyle(fontSize: 12)),
+                      ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              '设定 AI 的角色和行为准则，留空则使用模型默认。',
-              style: TextStyle(
-                fontSize: 13,
-                color: scheme.onSurfaceVariant,
-              ),
+          ),
+          const Divider(height: 1),
+          // 提示词库 Tab 浏览
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: _categories.map((cat) {
+                return _PromptListView(category: cat.key, onUse: _usePrompt);
+              }).toList(),
             ),
-            const SizedBox(height: 14),
-
-            // 输入区域（大尺寸，类 ChatGPT）
-            Container(
-              constraints: const BoxConstraints(minHeight: 200, maxHeight: 400),
-              decoration: BoxDecoration(
-                border: Border.all(color: scheme.outlineVariant),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: TextField(
-                controller: widget.controller,
-                maxLines: null,
-                expands: true,
-                autofocus: true,
-                textAlignVertical: TextAlignVertical.top,
-                style: const TextStyle(fontSize: 14, height: 1.6),
-                decoration: InputDecoration(
-                  hintText: '例如：你是一个专业的技术写作助手，请用简洁清晰的语言回答...',
-                  hintStyle: TextStyle(
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
-                    fontSize: 14,
-                  ),
-                  contentPadding: const EdgeInsets.all(14),
-                  border: InputBorder.none,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // 底部操作栏
-            Row(
-              children: [
-                // 字数统计
-                Text(
-                  '${widget.controller.text.length} 字',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
-                  ),
-                ),
-                const Spacer(),
-                // 清除按钮
-                TextButton(
-                  onPressed: () {
-                    widget.controller.clear();
-                    widget.onSave('');
-                    Navigator.pop(context);
-                  },
-                  child: const Text('清除'),
-                ),
-                const SizedBox(width: 8),
-                // 保存按钮
-                FilledButton(
-                  onPressed: () {
-                    widget.onSave(widget.controller.text);
-                    Navigator.pop(context);
-                  },
-                  child: const Text('保存'),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
+  }
+}
+
+class _CategoryDef {
+  final String label;
+  final IconData icon;
+  final String key;
+  const _CategoryDef(this.label, this.icon, this.key);
+}
+
+/// 提示词列表（按分类）
+class _PromptListView extends ConsumerWidget {
+  const _PromptListView({required this.category, required this.onUse});
+
+  final String category;
+  final ValueChanged<String> onUse;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final promptsAsync = ref.watch(promptNotifierProvider);
+
+    return promptsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('加载失败: $e')),
+      data: (prompts) {
+        final filtered = category == 'all'
+            ? prompts
+            : prompts
+                  .where(
+                    (p) => p.category == category || p.category == 'general',
+                  )
+                  .toList();
+
+        if (filtered.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.library_books_outlined,
+                  size: 48,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '暂无提示词',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '可在设置 → 提示词库中添加',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: filtered.length,
+          separatorBuilder: (_, _) => const Divider(height: 1, indent: 56),
+          itemBuilder: (_, i) {
+            final p = filtered[i];
+            return ListTile(
+              leading: CircleAvatar(
+                radius: 18,
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                child: Icon(
+                  _categoryIcon(p.category),
+                  size: 18,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+              title: Text(p.name, style: const TextStyle(fontSize: 14)),
+              subtitle: Text(
+                p.content,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+              trailing: TextButton(
+                onPressed: () => onUse(p.content),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('使用'),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  IconData _categoryIcon(String category) {
+    switch (category) {
+      case '创作':
+        return Icons.brush_outlined;
+      case '办公':
+        return Icons.business_center_outlined;
+      case '医疗':
+        return Icons.health_and_safety_outlined;
+      case '学习':
+        return Icons.school_outlined;
+      case '工具':
+        return Icons.build_outlined;
+      case '教学':
+        return Icons.menu_book_outlined;
+      case '法律':
+        return Icons.gavel_outlined;
+      case '生活':
+        return Icons.favorite_outline;
+      default:
+        return Icons.text_snippet_outlined;
+    }
   }
 }

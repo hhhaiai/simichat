@@ -270,89 +270,108 @@ class SettingsPage extends ConsumerWidget {
       ),
       children: [
         // 模型列表
-        FutureBuilder<List<ChannelModel>>(
-          future: ref.read(channelDaoProvider).getModelsByChannel(channel.id),
-          builder: (_, snapshot) {
-            if (!snapshot.hasData) return const SizedBox();
-            final models = snapshot.data!;
-            return Column(
-              children: [
-                for (final m in models)
-                  ListTile(
-                    title: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            m.modelName,
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          ModelCapability.label(m.capability),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[500],
-                          ),
-                        ),
-                      ],
-                    ),
-                    dense: true,
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.play_arrow,
-                            size: 18,
-                            color: Colors.green,
-                          ),
-                          tooltip: '测试连接',
-                          onPressed: () => _testModel(context, ref, channel, m),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.remove_circle_outline,
-                            size: 18,
-                            color: Colors.red,
-                          ),
-                          onPressed: () async {
-                            await ref
-                                .read(channelDaoProvider)
-                                .deleteModel(m.id);
-                            refreshModels(ref);
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ListTile(
-                  leading: const Icon(Icons.add, size: 18),
-                  title: const Text('手动添加模型', style: TextStyle(fontSize: 13)),
-                  dense: true,
-                  onTap: () => _showAddModelDialog(context, ref, channel.id),
+        ref
+            .watch(modelsByChannelProvider(channel.id))
+            .when(
+              loading: () => const SizedBox(),
+              error: (e, _) => Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
                 ),
-                ListTile(
-                  leading: const Icon(Icons.cloud_download, size: 18),
-                  title: const Text('自动获取模型', style: TextStyle(fontSize: 13)),
-                  dense: true,
-                  onTap: () => _fetchAndAddModels(context, ref, channel),
-                ),
-                if (models.isNotEmpty)
-                  ListTile(
-                    leading: const Icon(
-                      Icons.speed,
-                      size: 18,
-                      color: Colors.blue,
+                child: Text('加载模型失败: $e', style: const TextStyle(fontSize: 12)),
+              ),
+              data: (models) {
+                return Column(
+                  children: [
+                    for (final m in models)
+                      ListTile(
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                m.modelName,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              ModelCapability.label(m.capability),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[500],
+                              ),
+                            ),
+                          ],
+                        ),
+                        dense: true,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(
+                                Icons.play_arrow,
+                                size: 18,
+                                color: Colors.green,
+                              ),
+                              tooltip: '测试连接',
+                              onPressed: () =>
+                                  _testModel(context, ref, channel, m),
+                            ),
+                            IconButton(
+                              icon: const Icon(
+                                Icons.remove_circle_outline,
+                                size: 18,
+                                color: Colors.red,
+                              ),
+                              onPressed: () async {
+                                await ref
+                                    .read(channelDaoProvider)
+                                    .deleteModel(m.id);
+                                refreshChannelModels(ref, channel.id);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ListTile(
+                      leading: const Icon(Icons.add, size: 18),
+                      title: const Text(
+                        '手动添加模型',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                      dense: true,
+                      onTap: () =>
+                          _showAddModelDialog(context, ref, channel.id),
                     ),
-                    title: const Text('一键测试全部', style: TextStyle(fontSize: 13)),
-                    dense: true,
-                    onTap: () => _testAllModels(context, ref, channel, models),
-                  ),
-              ],
-            );
-          },
-        ),
+                    ListTile(
+                      leading: const Icon(Icons.cloud_download, size: 18),
+                      title: const Text(
+                        '自动获取模型',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                      dense: true,
+                      onTap: () => _fetchAndAddModels(context, ref, channel),
+                    ),
+                    if (models.isNotEmpty)
+                      ListTile(
+                        leading: const Icon(
+                          Icons.speed,
+                          size: 18,
+                          color: Colors.blue,
+                        ),
+                        title: const Text(
+                          '一键测试全部',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        dense: true,
+                        onTap: () =>
+                            _testAllModels(context, ref, channel, models),
+                      ),
+                  ],
+                );
+              },
+            ),
       ],
     );
   }
@@ -366,117 +385,176 @@ class SettingsPage extends ConsumerWidget {
     final urlCtrl = TextEditingController(text: channel?.baseUrl ?? '');
     final keyCtrl = TextEditingController();
     String protocol = channel?.protocol ?? 'openai_chat';
+    bool obscureKey = true;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(channel == null ? '添加渠道' : '编辑渠道'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '渠道名称',
-                    hintText: '如 OpenAI',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: urlCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Base URL',
-                    hintText: 'https://api.openai.com',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: keyCtrl,
-                  decoration: const InputDecoration(labelText: 'API Key'),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: protocol,
-                  decoration: const InputDecoration(labelText: '协议类型'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'openai_chat',
-                      child: Text('OpenAI Chat'),
+        builder: (ctx, setDialogState) => Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      channel == null ? '添加渠道' : '编辑渠道',
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
-                    DropdownMenuItem(
-                      value: 'openai_response',
-                      child: Text('OpenAI Response'),
+                    const SizedBox(height: 20),
+                    TextField(
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: '渠道名称',
+                        hintText: '如 OpenAI',
+                      ),
                     ),
-                    DropdownMenuItem(value: 'claude', child: Text('Claude')),
-                    DropdownMenuItem(value: 'gemini', child: Text('Gemini')),
-                    DropdownMenuItem(value: 'ollama', child: Text('Ollama')),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: urlCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Base URL',
+                        hintText: 'https://api.openai.com',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: keyCtrl,
+                      obscureText: obscureKey,
+                      decoration: InputDecoration(
+                        labelText: 'API Key',
+                        hintText: channel != null ? '留空则不修改' : '请输入 API Key',
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureKey
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                          onPressed: () {
+                            setDialogState(() => obscureKey = !obscureKey);
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: protocol,
+                      decoration: const InputDecoration(labelText: '协议类型'),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'openai_chat',
+                          child: Text('OpenAI Chat'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'openai_response',
+                          child: Text('OpenAI Response'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'claude',
+                          child: Text('Claude'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'gemini',
+                          child: Text('Gemini'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'ollama',
+                          child: Text('Ollama'),
+                        ),
+                      ],
+                      onChanged: (v) => setDialogState(() => protocol = v!),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('取消'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () async {
+                            final channelDao = ref.read(channelDaoProvider);
+                            final name = nameCtrl.text.trim();
+                            final baseUrl = urlCtrl.text.trim();
+                            final apiKey = keyCtrl.text.trim();
+                            final encryptedKey = KeyEncryptor.encrypt(apiKey);
+                            final isNew = channel == null;
+                            final channelId = channel?.id ?? const Uuid().v4();
+
+                            if (name.isEmpty ||
+                                baseUrl.isEmpty ||
+                                (isNew && apiKey.isEmpty)) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      '请完整填写渠道名称、Base URL 和 API Key',
+                                    ),
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+
+                            if (isNew) {
+                              await channelDao.createChannel(
+                                id: channelId,
+                                name: name,
+                                baseUrl: baseUrl,
+                                apiKeyEncrypted: encryptedKey,
+                                protocol: protocol,
+                              );
+                            } else {
+                              await channelDao.updateChannel(
+                                channel.id,
+                                name: name,
+                                baseUrl: baseUrl,
+                                apiKeyEncrypted: apiKey.isNotEmpty
+                                    ? encryptedKey
+                                    : null,
+                                protocol: protocol,
+                              );
+                            }
+                            refreshModels(ref);
+                            if (ctx.mounted) Navigator.pop(ctx);
+
+                            if (isNew && context.mounted) {
+                              await Future.delayed(
+                                const Duration(milliseconds: 400),
+                              );
+                              if (context.mounted) {
+                                _fetchAndAddModels(
+                                  context,
+                                  ref,
+                                  ModelChannel(
+                                    id: channelId,
+                                    name: name,
+                                    baseUrl: baseUrl,
+                                    apiKeyEncrypted: encryptedKey,
+                                    protocol: protocol,
+                                    isEnabled: true,
+                                    isDefault: false,
+                                    createdAt:
+                                        DateTime.now().millisecondsSinceEpoch,
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                          child: const Text('保存'),
+                        ),
+                      ],
+                    ),
                   ],
-                  onChanged: (v) => setDialogState(() => protocol = v!),
                 ),
-              ],
+              ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final channelDao = ref.read(channelDaoProvider);
-                final encryptedKey = KeyEncryptor.encrypt(keyCtrl.text);
-                final isNew = channel == null;
-                final channelId = channel?.id ?? const Uuid().v4();
-
-                if (isNew) {
-                  await channelDao.createChannel(
-                    id: channelId,
-                    name: nameCtrl.text,
-                    baseUrl: urlCtrl.text,
-                    apiKeyEncrypted: encryptedKey,
-                    protocol: protocol,
-                  );
-                } else {
-                  await channelDao.updateChannel(
-                    channel.id,
-                    name: nameCtrl.text,
-                    baseUrl: urlCtrl.text,
-                    apiKeyEncrypted: keyCtrl.text.isNotEmpty
-                        ? encryptedKey
-                        : null,
-                    protocol: protocol,
-                  );
-                }
-                refreshModels(ref);
-                if (ctx.mounted) Navigator.pop(ctx);
-
-                // 新建渠道后自动获取模型列表
-                if (isNew && context.mounted) {
-                  await Future.delayed(const Duration(milliseconds: 400));
-                  if (context.mounted) {
-                    _fetchAndAddModels(
-                      context,
-                      ref,
-                      ModelChannel(
-                        id: channelId,
-                        name: nameCtrl.text,
-                        baseUrl: urlCtrl.text,
-                        apiKeyEncrypted: encryptedKey,
-                        protocol: protocol,
-                        isEnabled: true,
-                        isDefault: false,
-                        createdAt: DateTime.now().millisecondsSinceEpoch,
-                      ),
-                    );
-                  }
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
         ),
       ),
     );
@@ -530,16 +608,16 @@ class SettingsPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () async {
-                if (modelCtrl.text.isNotEmpty) {
+                if (modelCtrl.text.trim().isNotEmpty) {
                   await ref
                       .read(channelDaoProvider)
                       .addModel(
                         id: const Uuid().v4(),
                         channelId: channelId,
-                        modelName: modelCtrl.text,
+                        modelName: modelCtrl.text.trim(),
                         capability: capability,
                       );
-                  refreshModels(ref);
+                  refreshChannelModels(ref, channelId);
                   if (ctx.mounted) Navigator.pop(ctx);
                 }
               },
@@ -692,7 +770,7 @@ class SettingsPage extends ConsumerWidget {
                     capability: model?.capability ?? ModelCapability.chat,
                   );
                 }
-                refreshModels(ref);
+                refreshChannelModels(ref, channelId);
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -802,95 +880,142 @@ class SettingsPage extends ConsumerWidget {
     List<ChannelModel> models,
   ) async {
     // 显示进度对话框
-    final results = <String, String?>{}; // modelName → null(成功) / error
+    final results = <String, String?>{}; // modelId → null(成功) / error
     final progressNotifier = ValueNotifier<int>(0);
+    final globalErrorNotifier = ValueNotifier<String?>(null);
+    var cancelled = false;
 
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => ValueListenableBuilder<int>(
         valueListenable: progressNotifier,
-        builder: (context, progress, child) => AlertDialog(
-          title: const Text('测试全部模型'),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 400,
-            child: ListView.builder(
-              itemCount: models.length,
-              itemBuilder: (_, i) {
-                final m = models[i];
-                final done = i < progress;
-                final testing = i == progress;
-                final result = results[m.modelName];
-                return ListTile(
-                  dense: true,
-                  leading: done
-                      ? (result == null
-                            ? const Icon(
-                                Icons.check_circle,
-                                color: Colors.green,
-                                size: 20,
-                              )
-                            : const Icon(
-                                Icons.cancel,
-                                color: Colors.red,
-                                size: 20,
-                              ))
-                      : testing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(
-                          Icons.radio_button_unchecked,
-                          color: Colors.grey,
-                          size: 20,
-                        ),
-                  title: Text(
-                    m.modelName,
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  subtitle: done && result != null
-                      ? Text(
-                          result,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.red,
+        builder: (context, progress, child) => ValueListenableBuilder<String?>(
+          valueListenable: globalErrorNotifier,
+          builder: (context, globalError, child) => AlertDialog(
+            title: const Text('测试全部模型'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: Column(
+                children: [
+                  if (globalError != null)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        globalError,
+                        style: const TextStyle(fontSize: 12, color: Colors.red),
+                      ),
+                    ),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: models.length,
+                      itemBuilder: (_, i) {
+                        final m = models[i];
+                        final done = i < progress;
+                        final testing = i == progress && globalError == null;
+                        final result = results[m.id];
+                        return ListTile(
+                          dense: true,
+                          leading: done
+                              ? (result == null
+                                    ? const Icon(
+                                        Icons.check_circle,
+                                        color: Colors.green,
+                                        size: 20,
+                                      )
+                                    : const Icon(
+                                        Icons.cancel,
+                                        color: Colors.red,
+                                        size: 20,
+                                      ))
+                              : testing
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.radio_button_unchecked,
+                                  color: Colors.grey,
+                                  size: 20,
+                                ),
+                          title: Text(
+                            m.modelName,
+                            style: const TextStyle(fontSize: 13),
                           ),
-                        )
-                      : null,
-                );
-              },
+                          subtitle: done && result != null
+                              ? Text(
+                                  result,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.red,
+                                  ),
+                                )
+                              : null,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              FilledButton(
+                onPressed: () {
+                  if (progress < models.length) {
+                    cancelled = true;
+                  }
+                  Navigator.pop(ctx);
+                },
+                child: Text(progress >= models.length ? '完成' : '跳过'),
+              ),
+            ],
           ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(progress >= models.length ? '完成' : '跳过'),
-            ),
-          ],
         ),
       ),
     );
 
-    final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+    try {
+      final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
 
-    // 逐个测试（并行会太重）
-    for (int i = 0; i < models.length; i++) {
-      final m = models[i];
-      try {
-        final error = await ModelTester.testModel(
-          protocol: channel.protocol,
-          baseUrl: channel.baseUrl,
-          apiKey: apiKey,
-          model: m.modelName,
-        );
-        results[m.modelName] = error;
-      } catch (e) {
-        results[m.modelName] = e.toString();
+      // 逐个测试（并行会太重）
+      for (int i = 0; i < models.length; i++) {
+        if (cancelled) break;
+        final m = models[i];
+        try {
+          final error = await ModelTester.testModel(
+            protocol: channel.protocol,
+            baseUrl: channel.baseUrl,
+            apiKey: apiKey,
+            model: m.modelName,
+            capability: m.capability,
+          );
+          results[m.id] = error;
+        } catch (e) {
+          results[m.id] = e.toString();
+        }
+        progressNotifier.value = i + 1;
       }
-      progressNotifier.value = i + 1;
+    } catch (e) {
+      if (context.mounted) {
+        globalErrorNotifier.value = '批量测试失败: $e';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('批量测试失败: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
 
@@ -1101,9 +1226,15 @@ class SettingsPage extends ConsumerWidget {
           onTap: () => _showMcpServerDialog(context, ref),
         ),
         ListTile(
-          leading: Icon(Icons.store_outlined, color: Theme.of(context).colorScheme.primary),
+          leading: Icon(
+            Icons.store_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           title: const Text('浏览 MCP 市场'),
-          subtitle: const Text('发现和安装热门 MCP 服务器', style: TextStyle(fontSize: 12)),
+          subtitle: const Text(
+            '发现和安装热门 MCP 服务器',
+            style: TextStyle(fontSize: 12),
+          ),
           onTap: () => Navigator.pushNamed(context, '/marketplace'),
         ),
       ],
@@ -1230,13 +1361,22 @@ class SettingsPage extends ConsumerWidget {
             for (final skill in skills)
               ListTile(
                 leading: Icon(
-                  skill.online ? Icons.cloud_outlined : Icons.inventory_2_outlined,
+                  skill.online
+                      ? Icons.cloud_outlined
+                      : Icons.inventory_2_outlined,
                   size: 20,
-                  color: skill.isEnabled ? Theme.of(context).colorScheme.primary : null,
+                  color: skill.isEnabled
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
                 ),
                 title: Text(skill.name, style: const TextStyle(fontSize: 14)),
                 subtitle: skill.description.isNotEmpty
-                    ? Text(skill.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))
+                    ? Text(
+                        skill.description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      )
                     : null,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1245,9 +1385,13 @@ class SettingsPage extends ConsumerWidget {
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: Icon(
-                          skill.sha256Verified ? Icons.verified : Icons.warning_amber,
+                          skill.sha256Verified
+                              ? Icons.verified
+                              : Icons.warning_amber,
                           size: 14,
-                          color: skill.sha256Verified ? Colors.green : Colors.orange,
+                          color: skill.sha256Verified
+                              ? Colors.green
+                              : Colors.orange,
                         ),
                       ),
                     Switch(
@@ -1263,7 +1407,10 @@ class SettingsPage extends ConsumerWidget {
                 ),
               ),
             ListTile(
-              leading: Icon(Icons.extension_outlined, color: Theme.of(context).colorScheme.primary),
+              leading: Icon(
+                Icons.extension_outlined,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               title: const Text('Skills Hub'),
               subtitle: Text(
                 '已启用 $enabledCount / ${skills.length}',

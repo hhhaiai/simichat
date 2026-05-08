@@ -34,6 +34,9 @@ class _ImageViewerState extends State<ImageViewer> {
       if (widget.imageProvider is NetworkImage) {
         final url = (widget.imageProvider as NetworkImage).url;
         final response = await http.get(Uri.parse(url));
+        if (response.statusCode != 200) {
+          throw Exception('HTTP ${response.statusCode}');
+        }
         bytes = response.bodyBytes;
       } else if (widget.imageProvider is MemoryImage) {
         bytes = (widget.imageProvider as MemoryImage).bytes;
@@ -52,6 +55,11 @@ class _ImageViewerState extends State<ImageViewer> {
       await file.writeAsBytes(bytes);
 
       await Gal.putImage(file.path);
+
+      // 清理临时文件
+      try {
+        await file.delete();
+      } catch (_) {}
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

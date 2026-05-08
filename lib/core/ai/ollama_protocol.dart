@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'ai_protocol.dart';
@@ -14,6 +15,7 @@ class OllamaProtocol implements AiProtocol {
     required String model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
   }) async* {
     final normalized = normalizeUrl(baseUrl);
     final url = '$normalized/api/chat';

@@ -111,6 +111,13 @@ class _MermaidWebViewState extends State<_MermaidWebView> {
       ..loadHtmlString(_buildHtml());
   }
 
+  // Mermaid CDN 地址列表（主 + 备用）
+  static const _mermaidSources = [
+    'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js',
+    'https://unpkg.com/mermaid@10/dist/mermaid.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js',
+  ];
+
   String _buildHtml() {
     final bgColor = widget.isDark ? '#1E1E1E' : '#FFFFFF';
     final textColor = widget.isDark ? '#E0E0E0' : '#333333';
@@ -120,6 +127,9 @@ class _MermaidWebViewState extends State<_MermaidWebView> {
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;');
+
+    // 生成多源加载脚本
+    final sourcesJson = _mermaidSources.map((s) => '"$s"').join(',');
 
     return '''
 <!DOCTYPE html>
@@ -145,20 +155,46 @@ class _MermaidWebViewState extends State<_MermaidWebView> {
   .mermaid {
     color: $textColor;
   }
+  .error-message {
+    color: #ff6b6b;
+    padding: 16px;
+    text-align: center;
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
 <div id="container">
   <pre class="mermaid">$escapedCode</pre>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: '${widget.isDark ? 'dark' : 'default'}',
-    securityLevel: 'loose',
-    fontFamily: 'sans-serif'
-  });
+  // 多源加载：依次尝试 CDN，任一成功即渲染
+  var sources = [$sourcesJson];
+  var idx = 0;
+
+  function tryLoad() {
+    if (idx >= sources.length) {
+      document.getElementById('container').innerHTML =
+        '<div class="error-message">⚠️ 无法加载 Mermaid 库（请检查网络连接）</div>';
+      return;
+    }
+    var script = document.createElement('script');
+    script.src = sources[idx];
+    script.onload = function() {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: '${widget.isDark ? 'dark' : 'default'}',
+        securityLevel: 'loose',
+        fontFamily: 'sans-serif'
+      });
+    };
+    script.onerror = function() {
+      idx++;
+      tryLoad();
+    };
+    document.head.appendChild(script);
+  }
+  tryLoad();
 </script>
 </body>
 </html>''';

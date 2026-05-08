@@ -9,6 +9,7 @@ import 'features/settings/settings_page.dart';
 import 'features/marketplace/marketplace_page.dart';
 import 'features/search/search_sheet.dart';
 import 'core/database/app_database.dart';
+import 'core/skills/skill.dart' show builtInSkills;
 import 'core/notification/notification_service.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
@@ -16,10 +17,40 @@ import 'shared/providers/channel_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  NotificationService().init();
+  try {
+    await NotificationService().init();
+  } catch (e) {
+    debugPrint('Notification init failed: $e');
+  }
+
+  // 初始化数据库并植入内置 Skills
+  final db = AppDatabase();
+  try {
+    await _seedBuiltInSkills(db);
+  } catch (e) {
+    debugPrint('Seed built-in skills failed: $e');
+  }
+  await db.close();
+
   runApp(const ProviderScope(child: AiChatApp()));
+}
+
+/// 首次启动时植入内置 Skills（幂等：已存在则跳过）
+Future<void> _seedBuiltInSkills(AppDatabase db) async {
+  for (final skill in builtInSkills) {
+    final existing = await db.skillDao.getSkill(skill.id);
+    if (existing == null) {
+      await db.skillDao.insertSkill(
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+        instructions: skill.instructions,
+        isEnabled: false, // 默认不启用，用户手动开启
+      );
+    }
+  }
 }
 
 class AiChatApp extends ConsumerWidget {
@@ -85,30 +116,35 @@ class ResponsiveShell extends ConsumerStatefulWidget {
 
 class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   static const _kDesktopBreakpoint = 720.0;
-  bool _autoCreated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 首次启动时，如果没有会话则自动创建
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoSelectOrCreateSession();
+    });
+  }
+
+  void _autoSelectOrCreateSession() {
+    final sessionsAsync = ref.read(sessionsProvider);
+    final activeId = ref.read(activeSessionIdProvider);
+    if (activeId != null) return;
+
+    sessionsAsync.whenData((sessions) {
+      if (sessions.isEmpty) {
+        createNewSession(ref);
+      } else {
+        ref.read(activeSessionIdProvider.notifier).state = sessions.first.id;
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 首次启动时，如果没有会话则自动创建
-    final sessionsAsync = ref.watch(sessionsProvider);
-    final activeId = ref.watch(activeSessionIdProvider);
-
-    if (!_autoCreated) {
-      sessionsAsync.whenData((sessions) {
-        if (sessions.isEmpty && activeId == null) {
-          _autoCreated = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            createNewSession(ref);
-          });
-        } else if (sessions.isNotEmpty && activeId == null) {
-          // 有会话但没选中，选中第一个
-          _autoCreated = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            ref.read(activeSessionIdProvider.notifier).state = sessions.first.id;
-          });
-        }
-      });
-    }
+    // watch 以保持响应式（子组件依赖这些 provider）
+    ref.watch(sessionsProvider);
+    ref.watch(activeSessionIdProvider);
 
     return Shortcuts(
       shortcuts: {
@@ -215,9 +251,8 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     final modelLabel = modelsAsync.whenOrNull(
       data: (models) {
         if (selectedId != null) {
-          try {
-            return models.firstWhere((m) => m.channelModel.id == selectedId).displayLabel;
-          } catch (_) {}
+          final match = models.where((m) => m.channelModel.id == selectedId).firstOrNull;
+          if (match != null) return match.displayLabel;
         }
         return models.isNotEmpty ? models.first.displayLabel : null;
       },
