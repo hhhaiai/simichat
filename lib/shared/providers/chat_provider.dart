@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/ai/ai_protocol.dart' as ai;
+import '../../core/ai/openai_chat_protocol.dart' as ai_openai_chat;
 import '../../core/ai/ai_service.dart';
 import '../../core/context/context_builder.dart';
 import '../../core/context/context_compressor.dart';
@@ -43,6 +44,29 @@ void cancelStreaming(WidgetRef ref, String sessionId) {
   ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
     isStreaming: false,
   );
+}
+
+/// 重试当前会话最后一条 user 消息
+void retryLastUserMessage(WidgetRef ref, {String? sessionId}) {
+  final resolvedSessionId = sessionId ?? ref.read(activeSessionIdProvider);
+  if (resolvedSessionId == null) return;
+
+  final messagesAsync = ref.read(messagesProvider(resolvedSessionId));
+  messagesAsync.whenData((messages) {
+    if (messages.isEmpty) return;
+    for (int i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role == 'user') {
+        ref.read(streamStateProvider(resolvedSessionId).notifier).state =
+            const StreamState();
+        sendMessage(
+          ref: ref,
+          sessionId: resolvedSessionId,
+          content: messages[i].content,
+        );
+        return;
+      }
+    }
+  });
 }
 
 /// 当前会话的消息列表
@@ -328,8 +352,34 @@ Future<void> _runAssistantResponse({
 
       stopwatch.stop();
 
-      final responseContent = buffer.toString();
-      final responseThinking = thinkingBuffer.toString();
+      var responseContent = buffer.toString();
+      var responseThinking = thinkingBuffer.toString();
+
+      if (responseContent.isEmpty &&
+          responseThinking.isNotEmpty &&
+          modelInfo.channel.protocol == 'openai_chat') {
+        try {
+          final fallback = await ai_openai_chat.OpenAiChatProtocol.fetchMessageOnce(
+            baseUrl: modelInfo.channel.baseUrl,
+            apiKey: apiKey,
+            model: modelInfo.channelModel.modelName,
+            messages: contextMessages,
+            systemPrompt: systemPrompt,
+            cancelToken: cancelToken,
+          );
+          if (fallback.content.isNotEmpty) {
+            responseContent = fallback.content;
+          }
+          if ((responseThinking.isEmpty || responseThinking.trim().isEmpty) &&
+              fallback.thinking != null &&
+              fallback.thinking!.isNotEmpty) {
+            responseThinking = fallback.thinking!;
+          }
+        } catch (e) {
+          debugPrint('[Chat] openai_chat fallback fetch failed: $e');
+        }
+      }
+
       if (responseContent.isEmpty && responseThinking.isEmpty) {
         ref.read(streamStateProvider(sessionId).notifier).state =
             const StreamState(isStreaming: false);

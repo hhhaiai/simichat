@@ -50,13 +50,15 @@ Stream<SseEvent> parseSseStream(Stream<List<int>> byteStream) async* {
     lineBuffer = decoded.substring(lastNewline + 1);
 
     // 保留最后一行对应的原始字节（未解码部分）
-    byteBuffer = utf8.encode(decoded.substring(lastNewline + 1));
+    byteBuffer = List<int>.from(
+      utf8.encode(decoded.substring(lastNewline + 1)),
+    );
 
     final lines = completeText.split('\n');
     for (final line in lines) {
       final trimmed = line.trim();
-      if (trimmed.isEmpty || !trimmed.startsWith('data: ')) continue;
-      final data = trimmed.substring(6);
+      if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
+      final data = trimmed.substring(5).trimLeft();
       if (data == '[DONE]') return;
       yield SseEvent(data);
     }
@@ -70,9 +72,10 @@ Stream<SseEvent> parseSseStream(Stream<List<int>> byteStream) async* {
   if (lineBuffer.isNotEmpty) {
     final trimmed = lineBuffer.trim();
     if (trimmed.isNotEmpty &&
-        trimmed.startsWith('data: ') &&
+        trimmed.startsWith('data:') &&
+        trimmed != 'data:[DONE]' &&
         trimmed != 'data: [DONE]') {
-      yield SseEvent(trimmed.substring(6));
+      yield SseEvent(trimmed.substring(5).trimLeft());
     }
   }
 }
