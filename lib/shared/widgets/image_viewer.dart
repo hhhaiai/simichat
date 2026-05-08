@@ -110,10 +110,10 @@ class _ImageViewerState extends State<ImageViewer> {
         minScale: PhotoViewComputedScale.contained,
         maxScale: PhotoViewComputedScale.covered * 3,
         backgroundDecoration: const BoxDecoration(color: Colors.black),
-        loadingBuilder: (_, __) => const Center(
+        loadingBuilder: (_, _) => const Center(
           child: CircularProgressIndicator(color: Colors.white),
         ),
-        errorBuilder: (_, __, ___) => const Center(
+        errorBuilder: (_, _, _) => const Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -137,11 +137,11 @@ void showImageViewer(
   Navigator.of(context).push(
     PageRouteBuilder(
       opaque: false,
-      pageBuilder: (_, __, ___) => ImageViewer(
+      pageBuilder: (_, _, _) => ImageViewer(
         imageProvider: imageProvider,
         imageUrl: imageUrl,
       ),
-      transitionsBuilder: (_, animation, __, child) =>
+      transitionsBuilder: (_, animation, _, child) =>
           FadeTransition(opacity: animation, child: child),
     ),
   );

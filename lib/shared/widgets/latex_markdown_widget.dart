@@ -104,11 +104,11 @@ class LatexMarkdownWidget extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           child: CachedNetworkImage(
             imageUrl: uriStr,
-            placeholder: (_, __) => const SizedBox(
+            placeholder: (_, _) => const SizedBox(
               height: 100,
               child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ),
-            errorWidget: (_, __, ___) => Container(
+            errorWidget: (_, _, _) => Container(
               height: 100,
               color: Colors.grey[200],
               child: const Center(

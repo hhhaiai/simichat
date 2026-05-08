@@ -22,7 +22,7 @@ class CompactModelSelector extends ConsumerWidget {
 
     return modelsAsync.when(
       loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      error: (_, _) => const SizedBox.shrink(),
       data: (models) {
         if (models.isEmpty) return const SizedBox.shrink();
 

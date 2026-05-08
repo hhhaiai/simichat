@@ -61,7 +61,7 @@ class KeyEncryptor {
     final encoded = parts[0];
     final checksum = parts[1];
     final plainText = utf8.decode(base64Decode(encoded));
-    final bytes = utf8.encode(plainText + 'ai_chat_app_2024');
+    final bytes = utf8.encode('${plainText}ai_chat_app_2024');
     final digest = sha256.convert(bytes);
     if (digest.toString().substring(0, 8) != checksum) {
       throw FormatException('Key integrity check failed');

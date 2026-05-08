@@ -76,7 +76,7 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               itemCount: marketplaceCategories.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (_, i) {
                 final cat = marketplaceCategories[i];
                 final selected = state.category == cat;
