@@ -72,12 +72,16 @@ Map<String, String>? _mapFromJson(String? json) =>
 class McpManager extends StateNotifier<List<McpServerConfig>> {
   final McpDao _dao;
   final Map<String, McpClient> _clients = {};
+  final Set<String> _connectedIds = <String>{};
+  final Map<String, String> _connectionErrors = <String, String>{};
 
   McpManager(this._dao) : super([]) {
     _loadFromDb();
   }
 
   Map<String, McpClient> get clients => _clients;
+  bool isConnected(String id) => _connectedIds.contains(id);
+  String? connectionErrorFor(String id) => _connectionErrors[id];
 
   Future<void> _loadFromDb() async {
     final rows = await _dao.getAllServers();
@@ -102,10 +106,12 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
           await connectServer(config);
         } catch (e) {
           // 连接失败不阻塞启动，但记录日志
+          _connectionErrors[config.id] = e.toString();
           debugPrint('[MCP] Failed to connect ${config.name}: $e');
         }
       }
     }
+    state = [...state];
   }
 
   Future<void> addServer(McpServerConfig config) async {
@@ -127,6 +133,8 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   Future<void> removeServer(String id) async {
     _clients[id]?.dispose();
     _clients.remove(id);
+    _connectedIds.remove(id);
+    _connectionErrors.remove(id);
     await _dao.deleteServer(id);
     state = state.where((s) => s.id != id).toList();
   }
@@ -170,13 +178,27 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
     }
 
     final client = McpClient(name: config.name, transport: transport);
-    await client.initialize();
-    _clients[config.id] = client;
+    try {
+      await client.initialize();
+      _clients[config.id] = client;
+      _connectedIds.add(config.id);
+      _connectionErrors.remove(config.id);
+      state = [...state];
+    } catch (e) {
+      _connectedIds.remove(config.id);
+      _connectionErrors[config.id] = e.toString();
+      await client.dispose();
+      state = [...state];
+      rethrow;
+    }
   }
 
   Future<void> disconnectServer(String id) async {
     await _clients[id]?.dispose();
     _clients.remove(id);
+    _connectedIds.remove(id);
+    _connectionErrors.remove(id);
+    state = [...state];
   }
 
   /// 获取所有已连接服务器的工具

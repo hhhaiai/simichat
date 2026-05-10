@@ -25,25 +25,17 @@ class LatexMarkdownWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final segments = _parseLatex(data);
-    final defaultStyle = styleSheet ?? MarkdownStyleSheet(
-      p: const TextStyle(fontSize: 14),
-      code: TextStyle(
-        backgroundColor: Colors.grey[200],
-        fontSize: 13,
-        fontFamily: 'monospace',
-      ),
-    );
+    final defaultStyle = styleSheet ?? _buildMarkdownStyle(context);
 
     final imgBuilder = _buildImageBuilder(context);
 
     // 如果没有 LaTeX 内容，直接用 MarkdownBody
     if (segments.length == 1 && segments[0].type == _SegmentType.markdown) {
-      return MarkdownBody(
+      return _buildMarkdownSections(
+        context,
         data: data,
-        selectable: selectable,
-        builders: {'code': _CodeBlockBuilder()},
         styleSheet: defaultStyle,
-        sizedImageBuilder: imgBuilder,
+        imageBuilder: imgBuilder,
       );
     }
 
@@ -55,15 +47,254 @@ class LatexMarkdownWidget extends StatelessWidget {
             return _buildBlockLatex(context, seg.content);
           case _SegmentType.markdown:
             if (seg.content.trim().isEmpty) return const SizedBox.shrink();
-            return MarkdownBody(
+            return _buildMarkdownSections(
+              context,
               data: seg.content,
-              selectable: selectable,
-              builders: {'code': _CodeBlockBuilder()},
               styleSheet: defaultStyle,
-              sizedImageBuilder: imgBuilder,
+              imageBuilder: imgBuilder,
             );
         }
       }).toList(),
+    );
+  }
+
+  Widget _buildMarkdownSections(
+    BuildContext context, {
+    required String data,
+    required MarkdownStyleSheet styleSheet,
+    required Widget Function(MarkdownImageConfig) imageBuilder,
+  }) {
+    final blocks = _parseMarkdownBlocks(data);
+    if (blocks.length == 1 && blocks.single.type == _MarkdownBlockType.markdown) {
+      return _buildMarkdownBody(
+        context,
+        data: blocks.single.content,
+        styleSheet: styleSheet,
+        imageBuilder: imageBuilder,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: blocks.map((block) {
+        switch (block.type) {
+          case _MarkdownBlockType.markdown:
+            if (block.content.trim().isEmpty) return const SizedBox.shrink();
+            return _buildMarkdownBody(
+              context,
+              data: block.content,
+              styleSheet: styleSheet,
+              imageBuilder: imageBuilder,
+            );
+          case _MarkdownBlockType.details:
+            return _buildDetailsBlock(
+              context,
+              title: block.title ?? '详情',
+              content: block.content,
+              styleSheet: styleSheet,
+            );
+        }
+      }).toList(),
+    );
+  }
+
+  Widget _buildMarkdownBody(
+    BuildContext context, {
+    required String data,
+    required MarkdownStyleSheet styleSheet,
+    required Widget Function(MarkdownImageConfig) imageBuilder,
+  }) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      child: MarkdownBody(
+        data: data,
+        selectable: selectable,
+        builders: {'code': _CodeBlockBuilder()},
+        checkboxBuilder: _buildCheckbox,
+        styleSheet: styleSheet,
+        extensionSet: md.ExtensionSet.gitHubFlavored,
+        softLineBreak: true,
+        sizedImageBuilder: imageBuilder,
+      ),
+    );
+  }
+
+  Widget _buildCheckbox(bool checked) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8, top: 2),
+      child: Icon(
+        checked ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+        size: 18,
+      ),
+    );
+  }
+
+  Widget _buildDetailsBlock(
+    BuildContext context, {
+    required String title,
+    required String content,
+    required MarkdownStyleSheet styleSheet,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? Colors.white12 : const Color(0xFFD0D7DE);
+    final background = isDark
+        ? Colors.white.withValues(alpha: 0.04)
+        : const Color(0xFFF8F9FA);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+          title: Text(
+            title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          children: [
+            LatexMarkdownWidget(
+              data: content,
+              selectable: selectable,
+              styleSheet: styleSheet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  MarkdownStyleSheet _buildMarkdownStyle(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final codeInlineBg = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : const Color(0xFFEFF1F3);
+    final quoteBg = isDark
+        ? Colors.white.withValues(alpha: 0.04)
+        : const Color(0xFFF8F9FA);
+    final quoteBorder = isDark
+        ? Colors.white24
+        : const Color(0xFFD0D7DE);
+    final tableBorder = isDark
+        ? Colors.white24
+        : const Color(0xFFD0D7DE);
+
+    return MarkdownStyleSheet(
+      a: TextStyle(
+        color: scheme.primary,
+        decoration: TextDecoration.underline,
+        decorationColor: scheme.primary.withValues(alpha: 0.55),
+      ),
+      p: TextStyle(
+        fontSize: 15,
+        height: 1.8,
+        color: scheme.onSurface,
+      ),
+      pPadding: const EdgeInsets.only(bottom: 10),
+      h1: TextStyle(
+        fontSize: 28,
+        height: 1.35,
+        fontWeight: FontWeight.w700,
+        color: scheme.onSurface,
+      ),
+      h1Padding: const EdgeInsets.fromLTRB(0, 10, 0, 14),
+      h2: TextStyle(
+        fontSize: 23,
+        height: 1.4,
+        fontWeight: FontWeight.w700,
+        color: scheme.onSurface,
+      ),
+      h2Padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
+      h3: TextStyle(
+        fontSize: 20,
+        height: 1.45,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      h3Padding: const EdgeInsets.fromLTRB(0, 8, 0, 10),
+      h4: TextStyle(
+        fontSize: 17,
+        height: 1.45,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      h4Padding: const EdgeInsets.fromLTRB(0, 6, 0, 8),
+      h5: TextStyle(
+        fontSize: 16,
+        height: 1.45,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurface,
+      ),
+      h6: TextStyle(
+        fontSize: 15,
+        height: 1.45,
+        fontWeight: FontWeight.w600,
+        color: scheme.onSurfaceVariant,
+      ),
+      em: const TextStyle(fontStyle: FontStyle.italic),
+      strong: const TextStyle(fontWeight: FontWeight.w700),
+      code: TextStyle(
+        backgroundColor: codeInlineBg,
+        color: scheme.onSurface,
+        fontSize: 13,
+        height: 1.5,
+        fontFamily: 'monospace',
+      ),
+      codeblockPadding: EdgeInsets.zero,
+      blockquote: TextStyle(
+        fontSize: 14,
+        height: 1.75,
+        color: scheme.onSurfaceVariant,
+      ),
+      blockquotePadding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      blockquoteDecoration: BoxDecoration(
+        color: quoteBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border(left: BorderSide(color: quoteBorder, width: 4)),
+      ),
+      listBullet: TextStyle(
+        fontSize: 15,
+        height: 1.8,
+        color: scheme.onSurface,
+      ),
+      listIndent: 22,
+      tableHead: TextStyle(
+        fontSize: 14,
+        height: 1.6,
+        fontWeight: FontWeight.w700,
+        color: scheme.onSurface,
+      ),
+      tableBody: TextStyle(
+        fontSize: 14,
+        height: 1.65,
+        color: scheme.onSurface,
+      ),
+      tableBorder: TableBorder.all(color: tableBorder, width: 1),
+      tableColumnWidth: const FlexColumnWidth(),
+      tableCellsPadding: const EdgeInsets.symmetric(
+        horizontal: 13,
+        vertical: 8,
+      ),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.white12 : const Color(0xFFEAECEF),
+          ),
+        ),
+      ),
     );
   }
 
@@ -230,14 +461,83 @@ class LatexMarkdownWidget extends StatelessWidget {
 
     return segments;
   }
+
+  List<_MarkdownBlock> _parseMarkdownBlocks(String text) {
+    final lines = text.split('\n');
+    final blocks = <_MarkdownBlock>[];
+    final markdownBuffer = <String>[];
+    int index = 0;
+
+    void flushMarkdown() {
+      if (markdownBuffer.isEmpty) return;
+      blocks.add(
+        _MarkdownBlock(
+          type: _MarkdownBlockType.markdown,
+          content: markdownBuffer.join('\n'),
+        ),
+      );
+      markdownBuffer.clear();
+    }
+
+    while (index < lines.length) {
+      final trimmed = lines[index].trim();
+      final isDetailsStart =
+          trimmed.startsWith(':::details') || trimmed.startsWith(':::collapse');
+      if (!isDetailsStart) {
+        markdownBuffer.add(lines[index]);
+        index++;
+        continue;
+      }
+
+      flushMarkdown();
+
+      final title = trimmed
+          .replaceFirst(RegExp(r'^:::(details|collapse)\s*'), '')
+          .trim();
+      index++;
+      final detailsBuffer = <String>[];
+      while (index < lines.length && lines[index].trim() != ':::') {
+        detailsBuffer.add(lines[index]);
+        index++;
+      }
+      if (index < lines.length && lines[index].trim() == ':::') {
+        index++;
+      }
+
+      blocks.add(
+        _MarkdownBlock(
+          type: _MarkdownBlockType.details,
+          title: title.isEmpty ? '详情' : title,
+          content: detailsBuffer.join('\n').trim(),
+        ),
+      );
+    }
+
+    flushMarkdown();
+    return blocks;
+  }
 }
 
 enum _SegmentType { markdown, blockLatex }
+
+enum _MarkdownBlockType { markdown, details }
 
 class _Segment {
   final _SegmentType type;
   final String content;
   const _Segment(this.type, this.content);
+}
+
+class _MarkdownBlock {
+  final _MarkdownBlockType type;
+  final String content;
+  final String? title;
+
+  const _MarkdownBlock({
+    required this.type,
+    required this.content,
+    this.title,
+  });
 }
 
 class _CodeBlockBuilder extends MarkdownElementBuilder {

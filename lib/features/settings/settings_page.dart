@@ -1225,6 +1225,7 @@ class SettingsPage extends ConsumerWidget {
   Widget _buildMcpSection(BuildContext context, WidgetRef ref) {
     final mcpServers = ref.watch(mcpManagerProvider);
     final manager = ref.read(mcpManagerProvider.notifier);
+    final scheme = Theme.of(context).colorScheme;
 
     return Column(
       children: [
@@ -1236,24 +1237,45 @@ class SettingsPage extends ConsumerWidget {
             ),
             title: Text(server.name),
             subtitle: Text(
-              server.transport == 'stdio'
-                  ? '${server.command} ${(server.args ?? []).join(' ')}'
-                  : server.url ?? '',
-              maxLines: 1,
+              [
+                server.transport == 'stdio'
+                    ? '${server.command} ${(server.args ?? []).join(' ')}'
+                    : server.url ?? '',
+                if (manager.isConnected(server.id))
+                  '状态：已连接'
+                else if (manager.connectionErrorFor(server.id) != null)
+                  '状态：连接失败',
+              ].join('\n'),
+              maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
+              style: TextStyle(
+                fontSize: 12,
+                color: manager.isConnected(server.id)
+                    ? Colors.green[600]
+                    : manager.connectionErrorFor(server.id) != null
+                        ? scheme.error
+                        : null,
+              ),
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Switch(
                   value: server.isEnabled,
-                  onChanged: (v) {
-                    manager.updateServer(server.copyWith(isEnabled: v));
+                  onChanged: (v) async {
+                    await manager.updateServer(server.copyWith(isEnabled: v));
                     if (v) {
-                      manager.connectServer(server);
+                      try {
+                        await manager.connectServer(server);
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('MCP 连接失败: $e')),
+                          );
+                        }
+                      }
                     } else {
-                      manager.disconnectServer(server.id);
+                      await manager.disconnectServer(server.id);
                     }
                   },
                 ),
