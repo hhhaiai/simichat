@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:gal/gal.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-/// 全屏图片查看器，支持缩放/平移 + 保存到相册
+/// 全屏图片查看器，支持缩放/平移 + 导出图片
 class ImageViewer extends StatefulWidget {
   final ImageProvider imageProvider;
   final String? imageUrl;
@@ -23,14 +24,13 @@ class ImageViewer extends StatefulWidget {
 
 class _ImageViewerState extends State<ImageViewer> {
   bool _saving = false;
-  bool get _canSaveToGallery =>
-      !kIsWeb &&
-      (Platform.isAndroid ||
-          Platform.isIOS ||
-          Platform.isMacOS ||
-          Platform.isWindows);
+  bool get _isDesktop =>
+      !kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
+  bool get _canExportImage => !kIsWeb;
+  String get _exportTooltip => _isDesktop ? '保存图片' : '保存到相册';
+  String get _exportSuccessLabel => _isDesktop ? '已保存图片' : '已保存到相册';
 
-  Future<void> _saveToGallery() async {
+  Future<void> _exportImage() async {
     if (_saving) return;
     setState(() => _saving = true);
 
@@ -60,7 +60,20 @@ class _ImageViewerState extends State<ImageViewer> {
       final file = File('${tempDir.path}/$fileName');
       await file.writeAsBytes(bytes);
 
-      await Gal.putImage(file.path);
+      if (_isDesktop) {
+        final downloadsDir = await getDownloadsDirectory();
+        final targetPath = await FilePicker.platform.saveFile(
+          dialogTitle: '保存图片',
+          fileName: fileName,
+          initialDirectory: downloadsDir?.path,
+          type: FileType.custom,
+          allowedExtensions: const ['png'],
+        );
+        if (targetPath == null) return;
+        await file.copy(targetPath);
+      } else {
+        await Gal.putImage(file.path);
+      }
 
       // 清理临时文件
       try {
@@ -69,7 +82,7 @@ class _ImageViewerState extends State<ImageViewer> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已保存到相册')),
+          SnackBar(content: Text(_exportSuccessLabel)),
         );
       }
     } catch (e) {
@@ -95,7 +108,7 @@ class _ImageViewerState extends State<ImageViewer> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          if (_canSaveToGallery)
+          if (_canExportImage)
             IconButton(
               icon: _saving
                   ? const SizedBox(
@@ -107,8 +120,8 @@ class _ImageViewerState extends State<ImageViewer> {
                       ),
                     )
                   : const Icon(Icons.download),
-              tooltip: '保存到相册',
-              onPressed: _saving ? null : _saveToGallery,
+              tooltip: _exportTooltip,
+              onPressed: _saving ? null : _exportImage,
             ),
         ],
       ),

@@ -176,10 +176,13 @@ class StdioTransport implements McpTransport {
 
   @override
   Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
+    final resolvedCommand = _resolveCommand(command);
+    final environment = _buildProcessEnvironment();
     _process = await Process.start(
-      command,
+      resolvedCommand,
       args,
       runInShell: Platform.isWindows,
+      environment: environment,
     );
     _stdoutSub = _process!.stdout
         .transform(utf8.decoder)
@@ -216,6 +219,86 @@ class StdioTransport implements McpTransport {
   @override
   Future<void> send(Map<String, dynamic> message) async {
     _process?.stdin.writeln(jsonEncode(message));
+  }
+
+  String _resolveCommand(String rawCommand) {
+    if (Platform.isWindows) return rawCommand;
+    if (rawCommand.contains(Platform.pathSeparator)) return rawCommand;
+
+    final searchDirs = _candidateSearchDirs();
+
+    for (final dir in searchDirs) {
+      final candidate = File('$dir/$rawCommand');
+      if (candidate.existsSync()) {
+        return candidate.path;
+      }
+    }
+
+    return rawCommand;
+  }
+
+  Map<String, String> _buildProcessEnvironment() {
+    final env = Map<String, String>.from(Platform.environment);
+    final pathKey = Platform.isWindows ? 'Path' : 'PATH';
+    final separator = Platform.isWindows ? ';' : ':';
+    final existing = env[pathKey] ?? '';
+
+    final merged = {
+      ..._candidateSearchDirs(),
+      ...existing
+          .split(separator)
+          .where((entry) => entry.trim().isNotEmpty),
+    }.join(separator);
+
+    env[pathKey] = merged;
+    return env;
+  }
+
+  List<String> _candidateSearchDirs() {
+    final separator = Platform.isWindows ? ';' : ':';
+    final pathEnv = Platform.environment[Platform.isWindows ? 'Path' : 'PATH'] ?? '';
+    final searchDirs = <String>{
+      ...pathEnv.split(separator).where((p) => p.trim().isNotEmpty),
+    };
+
+    final home = Platform.environment['HOME'];
+    if (home != null && home.isNotEmpty) {
+      searchDirs.add('$home/.local/bin');
+      searchDirs.add('$home/bin');
+
+      final nvmRoot = Directory('$home/.nvm/versions/node');
+      if (nvmRoot.existsSync()) {
+        for (final nodeVersionDir in nvmRoot.listSync()) {
+          if (nodeVersionDir is Directory) {
+            searchDirs.add('${nodeVersionDir.path}/bin');
+          }
+        }
+      }
+    }
+
+    if (Platform.isMacOS || Platform.isLinux) {
+      searchDirs.addAll({
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/usr/bin',
+        '/bin',
+        '/opt/local/bin',
+      });
+    }
+
+    if (Platform.isWindows) {
+      final appData = Platform.environment['APPDATA'];
+      final localAppData = Platform.environment['LOCALAPPDATA'];
+      if (appData != null && appData.isNotEmpty) {
+        searchDirs.add('$appData\\npm');
+      }
+      if (localAppData != null && localAppData.isNotEmpty) {
+        searchDirs.add('$localAppData\\Microsoft\\WindowsApps');
+        searchDirs.add('$localAppData\\Programs\\nodejs');
+      }
+    }
+
+    return searchDirs.toList();
   }
 }
 
