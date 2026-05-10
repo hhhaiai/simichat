@@ -367,13 +367,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             // 顶部模型选择器
             if (!isMobile) _buildModelSelector(),
 
-            // 消息列表（点击消息区域不收起键盘）
+            // 消息列表（点击消息区域收起键盘）
             Expanded(
-              child: Listener(
-                onPointerDown: (_) {
-                  // 保持输入框焦点，避免键盘下缩
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () {
+                  // 点击消息区域/背景空白处，收起键盘
                   if (_focusNode.hasFocus) {
-                    _focusNode.requestFocus();
+                    _focusNode.unfocus();
                   }
                 },
                 child: messagesAsync.when(
