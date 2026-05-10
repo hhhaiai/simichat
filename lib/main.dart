@@ -235,8 +235,8 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     );
   }
 
-  /// 移动端 AppBar 标题：会话名 + 当前模型（hamburger 旁边可见）
-  Widget _buildMobileTitle(
+  /// AppBar 标题：会话名 + 当前模型（桌面端与移动端统一可切换）
+  Widget _buildChatTitle(
     BuildContext context,
     WidgetRef ref,
     AsyncValue<Session?> activeSession,
@@ -265,7 +265,12 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
       crossAxisAlignment: CrossAxisAlignment.center,
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('AI Chat', style: TextStyle(fontSize: 16)),
+        Text(
+          activeSession.whenOrNull(data: (session) => session?.title) ?? 'AI Chat',
+          style: const TextStyle(fontSize: 16),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+        ),
         modelsAsync.when(
           loading: () => Text(
             '加载模型中…',
@@ -402,17 +407,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
               ),
             )
           : null,
-      title: showMenuButton
-          ? _buildMobileTitle(context, ref, activeSession)
-          : activeSession.when(
-              loading: () => const Text('AI Chat'),
-              error: (_, _) => const Text('AI Chat'),
-              data: (session) => Text(
-                session?.title ?? 'AI Chat',
-                style: const TextStyle(fontSize: 16),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+      title: _buildChatTitle(context, ref, activeSession),
       centerTitle: true,
       actions: [
         IconButton(

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/ai/protocol_icons.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/channel_provider.dart';
@@ -8,13 +7,10 @@ import '../../shared/providers/connectivity_provider.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
 import '../../shared/providers/session_provider.dart';
-import '../../shared/providers/settings_provider.dart';
 import '../../shared/widgets/message_bubble.dart';
 import '../../shared/widgets/streaming_bubble.dart';
 import '../../shared/widgets/chat_input_bar.dart'
     show ChatInputBar, PendingAttachment;
-import '../../shared/widgets/compact_model_selector.dart';
-import '../skills/skills_hub_page.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
@@ -24,7 +20,6 @@ class ChatPage extends ConsumerStatefulWidget {
 }
 
 class _ChatPageState extends ConsumerState<ChatPage> {
-  static const _kDesktopBreakpoint = 720.0;
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -333,7 +328,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final activeSessionId = ref.watch(activeSessionIdProvider);
-    final isMobile = MediaQuery.of(context).size.width <= _kDesktopBreakpoint;
 
     // 会话切换时恢复草稿（listener 在 build 外执行，不会干扰 IME）
     ref.listen(activeSessionIdProvider, (prev, next) {
@@ -364,9 +358,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       children: [
         Column(
           children: [
-            // 顶部模型选择器
-            if (!isMobile) _buildModelSelector(),
-
             // 消息列表（点击消息区域收起键盘）
             Expanded(
               child: GestureDetector(
@@ -491,14 +482,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               isStreaming: streamState.isStreaming,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
-              modelSelector: isMobile
-                  ? null
-                  : CompactModelSelector(
-                      selectedModelId: _pendingModelId,
-                      onModelSelected: (modelId) {
-                        setState(() => _pendingModelId = modelId);
-                      },
-                    ),
+              modelSelector: null,
             ),
           ],
         ),
@@ -544,252 +528,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     );
   }
 
-  Widget _buildLandingModelSelector() {
-    final modelsAsync = ref.watch(allModelsProvider);
-    final selectedId = _pendingModelId ?? ref.watch(selectedModelIdProvider);
-    final scheme = Theme.of(context).colorScheme;
-
-    return modelsAsync.when(
-      loading: () => const SizedBox.shrink(),
-      error: (_, _) => const SizedBox.shrink(),
-      data: (models) {
-        if (models.isEmpty) return const SizedBox.shrink();
-
-        ChannelModelWithChannel selected = models.first;
-        if (selectedId != null) {
-          try {
-            selected = models.firstWhere(
-              (m) => m.channelModel.id == selectedId,
-            );
-          } catch (_) {}
-        }
-
-        return Column(
-          children: [
-            Text(
-              '当前模型',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            CompactModelSelector(
-              selectedModelId: selected.channelModel.id,
-              onModelSelected: (modelId) {
-                ref.read(selectedModelIdProvider.notifier).state = modelId;
-                setState(() => _pendingModelId = modelId);
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildModelSelector() {
-    final modelsAsync = ref.watch(allModelsProvider);
-    final selectedId = ref.watch(selectedModelIdProvider);
-    final activeSessionId = ref.watch(activeSessionIdProvider);
-
-    return modelsAsync.when(
-      loading: () => const SizedBox(height: 8),
-      error: (_, _) => const SizedBox(height: 8),
-      data: (models) {
-        if (models.isEmpty) return const SizedBox(height: 8);
-
-        ChannelModelWithChannel? selected;
-        if (selectedId != null) {
-          try {
-            selected = models.firstWhere(
-              (m) => m.channelModel.id == selectedId,
-            );
-          } catch (_) {}
-        }
-        selected ??= models.first;
-
-        final hasPrompt =
-            ref.watch(systemPromptsProvider)[activeSessionId] != null;
-        final scheme = Theme.of(context).colorScheme;
-
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-          color: scheme.surface,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 860),
-              child: Row(
-                children: [
-                  PopupMenuButton<String>(
-                    onSelected: (modelId) async {
-                      ref.read(selectedModelIdProvider.notifier).state =
-                          modelId;
-                      final activeId = ref.read(activeSessionIdProvider);
-                      if (activeId != null) {
-                        await ref
-                            .read(sessionDaoProvider)
-                            .updateDefaultModel(activeId, modelId);
-                      }
-                    },
-                    offset: const Offset(0, 40),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    constraints: const BoxConstraints(
-                      maxWidth: 340,
-                      maxHeight: 420,
-                    ),
-                    itemBuilder: (_) =>
-                        _buildModelMenuItems(models, selected!.channelModel.id),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: scheme.outlineVariant.withValues(alpha: 0.7),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            getProtocolIcon(selected.channel.protocol),
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 8),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 360),
-                            child: Text(
-                              selected.displayLabel,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.onSurface,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.keyboard_arrow_down,
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: Icon(
-                      Icons.extension_outlined,
-                      size: 19,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    tooltip: 'Skills 市场',
-                    onPressed: () => showSkillsHubSheet(context),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.tune,
-                      size: 19,
-                      color: hasPrompt
-                          ? scheme.primary
-                          : scheme.onSurfaceVariant,
-                    ),
-                    tooltip: '系统提示词',
-                    onPressed: activeSessionId == null
-                        ? null
-                        : () => _showSystemPromptDialog(activeSessionId),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _showSystemPromptDialog(String sessionId) {
-    final current = ref.read(systemPromptsProvider)[sessionId] ?? '';
-
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => _SystemPromptPage(
-          initialPrompt: current,
-          onSave: (text) {
-            ref.read(systemPromptsProvider.notifier).setPrompt(sessionId, text);
-          },
-        ),
-      ),
-    );
-  }
-
-  List<PopupMenuEntry<String>> _buildModelMenuItems(
-    List<ChannelModelWithChannel> models,
-    String? selectedId,
-  ) {
-    final items = <PopupMenuEntry<String>>[];
-    String? lastChannel;
-
-    for (final m in models) {
-      if (m.channel.name != lastChannel) {
-        if (lastChannel != null) items.add(const PopupMenuDivider());
-        items.add(
-          PopupMenuItem<String>(
-            enabled: false,
-            child: Text(
-              m.channel.name,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[600],
-              ),
-            ),
-          ),
-        );
-        lastChannel = m.channel.name;
-      }
-
-      items.add(
-        PopupMenuItem<String>(
-          value: m.channelModel.id,
-          child: Row(
-            children: [
-              if (m.channelModel.id == selectedId)
-                Icon(Icons.check, size: 16, color: Colors.green[600])
-              else
-                const SizedBox(width: 16),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  m.channelModel.modelName,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: m.channelModel.id == selectedId
-                        ? FontWeight.w600
-                        : FontWeight.normal,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-    return items;
-  }
-
   Widget _buildEmptyState() {
     final scheme = Theme.of(context).colorScheme;
-    final isMobile = MediaQuery.of(context).size.width <= _kDesktopBreakpoint;
 
     return Column(
       children: [
@@ -821,7 +561,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
-                    if (!isMobile) _buildLandingModelSelector(),
                     const SizedBox(height: 28),
                     _buildEmptyChat(),
                   ],
@@ -836,14 +575,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           isStreaming: false,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
-          modelSelector: isMobile
-              ? null
-              : CompactModelSelector(
-                  selectedModelId: _pendingModelId,
-                  onModelSelected: (modelId) {
-                    setState(() => _pendingModelId = modelId);
-                  },
-                ),
+          modelSelector: null,
         ),
       ],
     );
