@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -11,6 +12,10 @@ class MermaidWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final supportsWebViewPreview = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.macOS);
 
     return Container(
       width: double.infinity,
@@ -53,7 +58,9 @@ class MermaidWidget extends StatelessWidget {
           // 图表预览
           SizedBox(
             height: 200,
-            child: _MermaidWebView(code: code, isDark: isDark),
+            child: supportsWebViewPreview
+                ? _MermaidWebView(code: code, isDark: isDark)
+                : _MermaidFallback(code: code, isDark: isDark),
           ),
         ],
       ),
@@ -76,10 +83,79 @@ class _MermaidFullScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final supportsWebViewPreview = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.macOS);
     return Scaffold(
       appBar: AppBar(title: const Text('Mermaid 图表')),
       body: Center(
-        child: _MermaidWebView(code: code, isDark: isDark),
+        child: supportsWebViewPreview
+            ? _MermaidWebView(code: code, isDark: isDark)
+            : _MermaidFallback(code: code, isDark: isDark, fullScreen: true),
+      ),
+    );
+  }
+}
+
+class _MermaidFallback extends StatelessWidget {
+  final String code;
+  final bool isDark;
+  final bool fullScreen;
+
+  const _MermaidFallback({
+    required this.code,
+    required this.isDark,
+    this.fullScreen = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(fullScreen ? 20 : 12),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF161616) : const Color(0xFFF7F7F7),
+        borderRadius: BorderRadius.circular(fullScreen ? 0 : 8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 16,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '当前平台暂不支持 Mermaid 图表预览，先显示源码。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: SingleChildScrollView(
+              child: SelectableText(
+                code,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  height: 1.45,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

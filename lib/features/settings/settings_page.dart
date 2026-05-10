@@ -6,6 +6,7 @@ import '../../core/ai/model_capability.dart';
 import '../../core/ai/model_fetcher.dart';
 import '../../core/ai/model_tester.dart';
 import '../../core/ai/protocol_icons.dart';
+import '../../core/ai/sse_helper.dart';
 import '../../core/database/app_database.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/channel_provider.dart';
@@ -523,7 +524,7 @@ class SettingsPage extends ConsumerWidget {
                           onPressed: () async {
                             final channelDao = ref.read(channelDaoProvider);
                             final name = nameCtrl.text.trim();
-                            final baseUrl = urlCtrl.text.trim();
+                            final baseUrl = normalizeUrl(urlCtrl.text);
                             final apiKey = keyCtrl.text.trim();
                             final encryptedKey = KeyEncryptor.encrypt(apiKey);
                             final isNew = channel == null;

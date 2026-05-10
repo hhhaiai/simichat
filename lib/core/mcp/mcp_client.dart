@@ -176,7 +176,11 @@ class StdioTransport implements McpTransport {
 
   @override
   Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
-    _process = await Process.start(command, args);
+    _process = await Process.start(
+      command,
+      args,
+      runInShell: Platform.isWindows,
+    );
     _stdoutSub = _process!.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())

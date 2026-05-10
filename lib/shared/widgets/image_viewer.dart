@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:gal/gal.dart';
@@ -23,6 +23,12 @@ class ImageViewer extends StatefulWidget {
 
 class _ImageViewerState extends State<ImageViewer> {
   bool _saving = false;
+  bool get _canSaveToGallery =>
+      !kIsWeb &&
+      (Platform.isAndroid ||
+          Platform.isIOS ||
+          Platform.isMacOS ||
+          Platform.isWindows);
 
   Future<void> _saveToGallery() async {
     if (_saving) return;
@@ -89,20 +95,21 @@ class _ImageViewerState extends State<ImageViewer> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          IconButton(
-            icon: _saving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.download),
-            tooltip: '保存到相册',
-            onPressed: _saving ? null : _saveToGallery,
-          ),
+          if (_canSaveToGallery)
+            IconButton(
+              icon: _saving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.download),
+              tooltip: '保存到相册',
+              onPressed: _saving ? null : _saveToGallery,
+            ),
         ],
       ),
       body: PhotoView(

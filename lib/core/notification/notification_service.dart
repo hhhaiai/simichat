@@ -14,18 +14,27 @@ class NotificationService {
     if (_initialized) return;
 
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosSettings = DarwinInitializationSettings(
+    const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
     );
-
-    await _plugin.initialize(
-      const InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
-      ),
+    const linuxSettings = LinuxInitializationSettings(
+      defaultActionName: 'Open notification',
     );
+    const windowsSettings = WindowsInitializationSettings(
+      appName: 'AI Chat',
+      appUserModelId: 'com.aichat.ai_chat_app',
+      guid: '6a5f3b6d-cd14-4aa0-9a1e-7f6c6f61f0d2',
+    );
+
+    await _plugin.initialize(const InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
+      macOS: darwinSettings,
+      linux: linuxSettings,
+      windows: windowsSettings,
+    ));
 
     _initialized = true;
   }
@@ -49,21 +58,30 @@ class NotificationService {
       priority: Priority.high,
     );
 
-    // iOS 前台也展示横幅
-    const iosDetails = DarwinNotificationDetails(
+    // Apple 平台前台也展示横幅
+    const darwinDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
     );
+    const linuxDetails = LinuxNotificationDetails();
+    const windowsDetails = WindowsNotificationDetails();
 
-    await _plugin.show(
-      sessionTitle.hashCode & 0x7FFFFFFF, // 每个会话独立 id，避免互相覆盖
-      '回复完成 — $sessionTitle',
-      body,
-      const NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
-      ),
-    );
+    try {
+      await _plugin.show(
+        sessionTitle.hashCode & 0x7FFFFFFF, // 每个会话独立 id，避免互相覆盖
+        '回复完成 — $sessionTitle',
+        body,
+        const NotificationDetails(
+          android: androidDetails,
+          iOS: darwinDetails,
+          macOS: darwinDetails,
+          linux: linuxDetails,
+          windows: windowsDetails,
+        ),
+      );
+    } catch (_) {
+      // 通知失败不能影响主聊天流程
+    }
   }
 }

@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 
+import 'http_client_adapter_factory.dart';
+
 /// 按 baseUrl 缓存 Dio 实例，复用连接池
 final Map<String, Dio> _dioCache = {};
 
@@ -20,11 +22,17 @@ Dio getDio(String baseUrl) {
   _cleanupCache();
   
   _dioLastUsed[normalized] = DateTime.now();
-  return _dioCache.putIfAbsent(normalized, () => Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(minutes: 5),
-    sendTimeout: const Duration(seconds: 30),
-  )));
+  return _dioCache.putIfAbsent(normalized, () {
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(minutes: 5),
+        sendTimeout: const Duration(seconds: 30),
+      ),
+    );
+    configureDioTransport(dio);
+    return dio;
+  });
 }
 
 /// 清理过期和超量的 Dio 缓存
@@ -66,11 +74,15 @@ void disposeAllDio() {
 
 /// 创建带超时的 Dio 实例（不缓存，用于模型获取等一次性请求）
 Dio createDio() {
-  return Dio(BaseOptions(
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
-    sendTimeout: const Duration(seconds: 30),
-  ));
+  final dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 30),
+    ),
+  );
+  configureDioTransport(dio);
+  return dio;
 }
 
 /// 将 DioException 转换为用户友好的错误消息

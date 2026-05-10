@@ -32,6 +32,11 @@
 	<string>用于从相册选择图片并在应用内查看图片。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>用于将聊天中的图片保存到系统相册。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

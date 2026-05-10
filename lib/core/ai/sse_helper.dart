@@ -144,7 +144,37 @@ Future<Stream<List<int>>> openSseStream(SseRequestConfig config) async {
 
 /// 标准化 URL（去除尾部斜杠）
 String normalizeUrl(String baseUrl) {
-  return baseUrl.replaceAll(RegExp(r'/+$'), '');
+  final trimmed = baseUrl.trim();
+  if (trimmed.isEmpty) return trimmed;
+
+  final normalized = trimmed.replaceAll(RegExp(r'/+$'), '');
+  final hasScheme = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(normalized);
+  if (hasScheme) return normalized;
+
+  final lower = normalized.toLowerCase();
+  final isIpv4 = RegExp(
+    r'^(\d{1,3}\.){3}\d{1,3}(:\d+)?(/.*)?$',
+  ).hasMatch(lower);
+  final isPrivateIpv4 = RegExp(
+    r'^(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?(/.*)?$',
+  ).hasMatch(lower);
+  final isIpv6 = RegExp(r'^\[[0-9a-f:]+\](:\d+)?(/.*)?$').hasMatch(lower) ||
+      RegExp(r'^[0-9a-f:]+$').hasMatch(lower);
+  final isLocalHost =
+      lower == 'localhost' ||
+      lower.startsWith('localhost:') ||
+      lower.startsWith('localhost/') ||
+      lower == '0.0.0.0' ||
+      lower.startsWith('0.0.0.0:') ||
+      lower.startsWith('0.0.0.0/') ||
+      lower == '[::1]' ||
+      lower.startsWith('[::1]:') ||
+      lower.startsWith('[::1]/') ||
+      lower == '::1';
+
+  final scheme =
+      (isLocalHost || isPrivateIpv4 || isIpv4 || isIpv6) ? 'http' : 'https';
+  return '$scheme://$normalized';
 }
 
 String normalizeOpenAiBaseUrl(String baseUrl) {

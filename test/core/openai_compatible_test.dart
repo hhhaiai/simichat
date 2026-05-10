@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ai_chat_app/core/ai/model_capability.dart';
 import 'package:ai_chat_app/core/ai/model_fetcher.dart';
 import 'package:ai_chat_app/core/ai/openai_embedding_client.dart';
+import 'package:ai_chat_app/core/ai/sse_helper.dart';
 
 void main() {
   group('OpenAI-compatible model parsing', () {
@@ -53,6 +54,17 @@ void main() {
   });
 
   group('OpenAI-compatible embeddings', () {
+    test('normalizes host-only and localhost base urls', () {
+      expect(normalizeUrl('api.openai.com'), 'https://api.openai.com');
+      expect(normalizeUrl('api.openai.com/v1/'), 'https://api.openai.com/v1');
+      expect(normalizeUrl('localhost:11434'), 'http://localhost:11434');
+      expect(normalizeUrl('47.85.40.209:5001'), 'http://47.85.40.209:5001');
+      expect(
+        normalizeOpenAiBaseUrl('api.openai.com/v1'),
+        'https://api.openai.com',
+      );
+    });
+
     test('builds stable embeddings endpoint', () {
       expect(
         OpenAiEmbeddingClient.buildEmbeddingsUrl('https://router.tumuer.me/'),

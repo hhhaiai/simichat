@@ -13,12 +13,12 @@ class FetchedModel {
 
 /// 从 API 获取可用模型列表。
 class ModelFetcher {
-  static Dio _createDio() => Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-    ),
-  );
+  static Dio _createDio() {
+    final dio = createDio();
+    dio.options.connectTimeout = const Duration(seconds: 15);
+    dio.options.receiveTimeout = const Duration(seconds: 30);
+    return dio;
+  }
 
   static String _errorMessage(DioException e) {
     // HTTP status code errors provide more specific context
@@ -117,7 +117,7 @@ class ModelFetcher {
     required String apiKey,
   }) async {
     final dio = _createDio();
-    final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/v1beta/models';
+    final url = '${normalizeUrl(baseUrl)}/v1beta/models';
 
     try {
       final response = await dio.get(
@@ -151,7 +151,7 @@ class ModelFetcher {
     required String baseUrl,
   }) async {
     final dio = _createDio();
-    final url = '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/api/tags';
+    final url = '${normalizeUrl(baseUrl)}/api/tags';
     try {
       final response = await dio.get(url);
       final data = response.data as Map<String, dynamic>;
