@@ -99,6 +99,7 @@ lib/
 
 ### P2：待实现
 
+- [ ] **MCP Runtime 容器层**：把 MCP 从 UI 直接拉起外部进程，升级为独立 Runtime/Sidecar 层（安装、启动、权限、日志、状态统一管理），详见 `docs/MCP_RUNTIME_CONTAINERIZATION.md`
 - [ ] **Web 搜索 / RAG**：接 SearXNG 或搜索 API，工具调用模式让模型决定搜索时机
 - [ ] **图片生成**：DALL-E 或 Stable Diffusion API，新消息类型 `image`
 - [ ] **DeepLink**：注册 `ai-chat://` scheme，`onGenerateRoute` 解析跳转

@@ -4,9 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/database/app_database.dart';
+import '../../features/skills/skills_hub_page.dart';
 import '../providers/session_provider.dart';
 import '../providers/folder_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/mcp_provider.dart';
+import '../providers/skill_provider.dart';
 
 /// 侧边栏：模型选择器 + 搜索 + 历史会话列表
 class Sidebar extends ConsumerStatefulWidget {
@@ -64,7 +67,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
           ),
 
-          // 第二行：文件夹图标 + 新建文件夹按钮
+          // 第二行：文件夹 / MCP / Skills / 设置 / 新建文件夹
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Row(
@@ -81,6 +84,39 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 ),
                 const SizedBox(width: 4),
                 IconButton(
+                  icon: const Icon(Icons.hub_outlined, size: 20),
+                  tooltip: 'MCP 市场',
+                  onPressed: () => Navigator.pushNamed(context, '/marketplace'),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.extension_outlined, size: 20),
+                  tooltip: 'Skills Hub',
+                  onPressed: () => showSkillsHubSheet(context),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined, size: 20),
+                  tooltip: '设置',
+                  onPressed: () => Navigator.pushNamed(context, '/settings'),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
                   icon: const Icon(Icons.create_new_folder_outlined, size: 20),
                   tooltip: '新建文件夹',
                   onPressed: () => _showCreateFolderDialog(context),
@@ -94,6 +130,8 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
           ),
 
+          _buildWorkspaceStatusSection(),
+
           // 文件夹列表（可展开）
           _buildFoldersSection(),
 
@@ -102,6 +140,41 @@ class _SidebarState extends ConsumerState<Sidebar> {
             child: _searchQuery.isNotEmpty
                 ? _buildSearchResults()
                 : _buildHistoryList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkspaceStatusSection() {
+    final mcpServers = ref.watch(mcpManagerProvider);
+    final mcpManager = ref.read(mcpManagerProvider.notifier);
+    final skillsAsync = ref.watch(skillsProvider);
+    final connectedCount = mcpServers
+        .where((server) => mcpManager.isConnected(server.id))
+        .length;
+    final enabledSkillCount =
+        skillsAsync.valueOrNull?.where((skill) => skill.isEnabled).length ?? 0;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: _WorkspaceStatusCard(
+              icon: Icons.hub_outlined,
+              label: 'MCP',
+              value: '$connectedCount/${mcpServers.length}',
+              color: connectedCount > 0 ? Colors.green : null,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _WorkspaceStatusCard(
+              icon: Icons.extension_outlined,
+              label: 'Skills',
+              value: enabledSkillCount.toString(),
+            ),
           ),
         ],
       ),
@@ -596,6 +669,63 @@ class _SimpleExpansionTileState extends State<_SimpleExpansionTile> {
         ),
         if (_isExpanded) ...widget.children,
       ],
+    );
+  }
+}
+
+class _WorkspaceStatusCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _WorkspaceStatusCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: tint),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

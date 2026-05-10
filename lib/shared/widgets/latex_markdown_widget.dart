@@ -93,6 +93,13 @@ class LatexMarkdownWidget extends StatelessWidget {
               content: block.content,
               styleSheet: styleSheet,
             );
+          case _MarkdownBlockType.footnotes:
+            return _buildFootnotesBlock(
+              context,
+              content: block.content,
+              styleSheet: styleSheet,
+              imageBuilder: imageBuilder,
+            );
         }
       }).toList(),
     );
@@ -112,6 +119,19 @@ class LatexMarkdownWidget extends StatelessWidget {
         selectable: selectable,
         builders: {'code': _CodeBlockBuilder()},
         checkboxBuilder: _buildCheckbox,
+        paddingBuilders: {
+          'p': _FixedPaddingBuilder(const EdgeInsets.only(bottom: 10)),
+          'blockquote': _FixedPaddingBuilder(
+            const EdgeInsets.symmetric(vertical: 8),
+          ),
+          'table': _FixedPaddingBuilder(
+            const EdgeInsets.symmetric(vertical: 10),
+          ),
+          'h1': _FixedPaddingBuilder(const EdgeInsets.only(top: 8, bottom: 8)),
+          'h2': _FixedPaddingBuilder(const EdgeInsets.only(top: 6, bottom: 6)),
+          'h3': _FixedPaddingBuilder(const EdgeInsets.only(top: 4, bottom: 4)),
+          'section': _FootnoteSectionPaddingBuilder(),
+        },
         styleSheet: styleSheet,
         extensionSet: md.ExtensionSet.gitHubFlavored,
         softLineBreak: true,
@@ -175,6 +195,50 @@ class LatexMarkdownWidget extends StatelessWidget {
     );
   }
 
+  Widget _buildFootnotesBlock(
+    BuildContext context, {
+    required String content,
+    required MarkdownStyleSheet styleSheet,
+    required Widget Function(MarkdownImageConfig) imageBuilder,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? Colors.white12 : const Color(0xFFEAECEF);
+    final titleColor = Theme.of(context).colorScheme.onSurfaceVariant;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: borderColor),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              '脚注',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+                color: titleColor,
+              ),
+            ),
+          ),
+          _buildMarkdownBody(
+            context,
+            data: content,
+            styleSheet: styleSheet,
+            imageBuilder: imageBuilder,
+          ),
+        ],
+      ),
+    );
+  }
+
   MarkdownStyleSheet _buildMarkdownStyle(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -198,6 +262,7 @@ class LatexMarkdownWidget extends StatelessWidget {
         decoration: TextDecoration.underline,
         decorationColor: scheme.primary.withValues(alpha: 0.55),
       ),
+      blockSpacing: 14,
       p: TextStyle(
         fontSize: 15,
         height: 1.8,
@@ -271,6 +336,11 @@ class LatexMarkdownWidget extends StatelessWidget {
         color: scheme.onSurface,
       ),
       listIndent: 22,
+      listBulletPadding: const EdgeInsets.only(right: 8),
+      checkbox: TextStyle(
+        fontSize: 15,
+        color: scheme.primary,
+      ),
       tableHead: TextStyle(
         fontSize: 14,
         height: 1.6,
@@ -284,6 +354,7 @@ class LatexMarkdownWidget extends StatelessWidget {
       ),
       tableBorder: TableBorder.all(color: tableBorder, width: 1),
       tableColumnWidth: const FlexColumnWidth(),
+      tableScrollbarThumbVisibility: true,
       tableCellsPadding: const EdgeInsets.symmetric(
         horizontal: 13,
         vertical: 8,
@@ -300,6 +371,30 @@ class LatexMarkdownWidget extends StatelessWidget {
 
   /// 构建图片渲染器：支持网络图片缓存 + 点击放大 + data URI
   Widget Function(MarkdownImageConfig) _buildImageBuilder(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final borderColor = isDark ? Colors.white12 : const Color(0xFFD0D7DE);
+    final background = isDark
+        ? Colors.white.withValues(alpha: 0.04)
+        : const Color(0xFFF8F9FA);
+
+    Widget wrapImage(Widget child) {
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: child,
+        ),
+      );
+    }
+
     return (MarkdownImageConfig config) {
       final uri = config.uri;
       final uriStr = uri.toString();
@@ -314,10 +409,7 @@ class LatexMarkdownWidget extends StatelessWidget {
               context,
               imageProvider: MemoryImage(bytes),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.memory(bytes, fit: BoxFit.contain),
-            ),
+            child: wrapImage(Image.memory(bytes, fit: BoxFit.contain)),
           );
         } catch (_) {
           return const SizedBox.shrink();
@@ -331,9 +423,8 @@ class LatexMarkdownWidget extends StatelessWidget {
           imageProvider: CachedNetworkImageProvider(uriStr),
           imageUrl: uriStr,
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: CachedNetworkImage(
+        child: wrapImage(
+          CachedNetworkImage(
             imageUrl: uriStr,
             placeholder: (_, _) => const SizedBox(
               height: 100,
@@ -481,6 +572,27 @@ class LatexMarkdownWidget extends StatelessWidget {
 
     while (index < lines.length) {
       final trimmed = lines[index].trim();
+      if (trimmed == '<section class="footnotes">') {
+        flushMarkdown();
+        index++;
+        final footnoteBuffer = <String>[];
+        while (index < lines.length &&
+            lines[index].trim() != '</section>') {
+          footnoteBuffer.add(lines[index]);
+          index++;
+        }
+        if (index < lines.length && lines[index].trim() == '</section>') {
+          index++;
+        }
+        blocks.add(
+          _MarkdownBlock(
+            type: _MarkdownBlockType.footnotes,
+            content: footnoteBuffer.join('\n').trim(),
+          ),
+        );
+        continue;
+      }
+
       final isDetailsStart =
           trimmed.startsWith(':::details') || trimmed.startsWith(':::collapse');
       if (!isDetailsStart) {
@@ -520,7 +632,7 @@ class LatexMarkdownWidget extends StatelessWidget {
 
 enum _SegmentType { markdown, blockLatex }
 
-enum _MarkdownBlockType { markdown, details }
+enum _MarkdownBlockType { markdown, details, footnotes }
 
 class _Segment {
   final _SegmentType type;
@@ -538,6 +650,29 @@ class _MarkdownBlock {
     required this.content,
     this.title,
   });
+}
+
+class _FixedPaddingBuilder extends MarkdownPaddingBuilder {
+  final EdgeInsets padding;
+
+  _FixedPaddingBuilder(this.padding);
+
+  @override
+  EdgeInsets getPadding() => padding;
+}
+
+class _FootnoteSectionPaddingBuilder extends MarkdownPaddingBuilder {
+  bool _isFootnotes = false;
+
+  @override
+  void visitElementBefore(md.Element element) {
+    _isFootnotes = element.attributes['class'] == 'footnotes';
+  }
+
+  @override
+  EdgeInsets getPadding() => _isFootnotes
+      ? const EdgeInsets.fromLTRB(0, 16, 0, 0)
+      : EdgeInsets.zero;
 }
 
 class _CodeBlockBuilder extends MarkdownElementBuilder {
