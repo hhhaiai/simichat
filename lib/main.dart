@@ -74,16 +74,8 @@ class AiChatApp extends ConsumerWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: const [Locale('en'), Locale('zh')],
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF10A37F),
-        brightness: Brightness.light,
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: const Color(0xFF10A37F),
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
+      theme: _buildAppTheme(Brightness.light),
+      darkTheme: _buildAppTheme(Brightness.dark),
       themeMode: themeMode,
       builder: (context, child) {
         final mediaQuery = MediaQuery.of(context);
@@ -101,6 +93,21 @@ class AiChatApp extends ConsumerWidget {
       },
     );
   }
+}
+
+ThemeData _buildAppTheme(Brightness brightness) {
+  return ThemeData(
+    colorSchemeSeed: const Color(0xFF10A37F),
+    brightness: brightness,
+    useMaterial3: true,
+    snackBarTheme: const SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      insetPadding: EdgeInsets.fromLTRB(16, 8, 16, 120),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(14)),
+      ),
+    ),
+  );
 }
 
 /// 键盘快捷键定义
