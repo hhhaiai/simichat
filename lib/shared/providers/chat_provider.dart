@@ -4,14 +4,22 @@ import 'dart:io';
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+import '../../core/attachments/attachment_policy.dart';
+import '../../core/archive/markdown_conversation_archive.dart';
 import '../../core/ai/ai_protocol.dart' as ai;
+import '../../core/ai/model_switch_record.dart';
 import '../../core/ai/openai_chat_protocol.dart' as ai_openai_chat;
 import '../../core/ai/ai_service.dart';
 import '../../core/context/context_builder.dart';
 import '../../core/context/context_compressor.dart';
 import '../../core/context/token_estimator.dart';
 import '../../core/crypto/key_encryptor.dart';
+import '../../core/media/audio_file_archive.dart';
+import '../../core/media/audio_transcription_service.dart';
+import '../../core/media/audio_transcript_archive.dart';
+import '../../core/memory/key_point_memory.dart';
 import '../../core/skills/skill.dart' as skill_model;
 import 'mcp_provider.dart';
 import '../../core/database/app_database.dart';
@@ -20,11 +28,62 @@ import '../../core/database/dao/message_dao.dart';
 import '../../core/database/dao/session_dao.dart';
 import '../../core/notification/notification_service.dart';
 import '../widgets/chat_input_bar.dart' show PendingAttachment;
+import 'audio_transcription_provider.dart';
+import 'channel_provider.dart';
 import 'database_provider.dart';
+import 'conversation_archive_provider.dart';
+import 'key_point_memory_provider.dart';
 import 'session_provider.dart';
 import 'settings_provider.dart';
 
 const _uuid = Uuid();
+
+class AudioTranscriptStatusRequest {
+  final String messageId;
+  final String attachmentId;
+
+  const AudioTranscriptStatusRequest({
+    required this.messageId,
+    required this.attachmentId,
+  });
+
+  @override
+  bool operator ==(Object other) {
+    return other is AudioTranscriptStatusRequest &&
+        other.messageId == messageId &&
+        other.attachmentId == attachmentId;
+  }
+
+  @override
+  int get hashCode => Object.hash(messageId, attachmentId);
+}
+
+final audioTranscriptStatusProvider =
+    FutureProvider.family<AudioTranscriptStatus?, AudioTranscriptStatusRequest>(
+      (ref, request) async {
+        if (kIsWeb) return null;
+        final root = await getApplicationDocumentsDirectory();
+        return AudioTranscriptArchive(rootDirectory: root).readStatus(
+          messageId: request.messageId,
+          attachmentId: request.attachmentId,
+        );
+      },
+    );
+
+void _invalidateAudioTranscriptStatus(
+  WidgetRef ref, {
+  required String messageId,
+  required String attachmentId,
+}) {
+  ref.invalidate(
+    audioTranscriptStatusProvider(
+      AudioTranscriptStatusRequest(
+        messageId: messageId,
+        attachmentId: attachmentId,
+      ),
+    ),
+  );
+}
 
 /// 每个会话的流式订阅，用于取消
 final _streamSubscriptions = <String, StreamSubscription<ai.AiChunk>>{};
@@ -44,6 +103,209 @@ void cancelStreaming(WidgetRef ref, String sessionId) {
   ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
     isStreaming: false,
   );
+}
+
+Future<void> _appendConversationArchiveMessage({
+  required WidgetRef ref,
+  required String sessionId,
+  required String messageId,
+  required String role,
+  required String content,
+  String? sessionTitle,
+  String? thinkingContent,
+  String? channelModelId,
+  List<String> attachmentNames = const [],
+}) async {
+  if (kIsWeb) return;
+  try {
+    final root = await getApplicationDocumentsDirectory();
+    final archive = MarkdownConversationArchive(rootDirectory: root);
+    await archive.appendMessage(
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      message: ArchivedMessage(
+        id: messageId,
+        sessionId: sessionId,
+        role: role,
+        content: content,
+        thinkingContent: thinkingContent,
+        channelModelId: channelModelId,
+        attachmentNames: attachmentNames,
+        createdAt: DateTime.now(),
+      ),
+    );
+  } catch (e) {
+    await ref
+        .read(archiveRepairQueueProvider.notifier)
+        .recordFailure(
+          sessionId: sessionId,
+          operation: 'append-$role',
+          error: e,
+        );
+  }
+}
+
+Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
+  required WidgetRef ref,
+  required String sessionId,
+  required String messageId,
+  required String attachmentId,
+  required String audioPath,
+  required String fileName,
+  required int fileSize,
+  String? transcript,
+}) async {
+  if (kIsWeb) return;
+  final AudioTranscriptArchive archive;
+  try {
+    final root = await getApplicationDocumentsDirectory();
+    archive = AudioTranscriptArchive(rootDirectory: root);
+    await archive.writeDraft(
+      messageId: messageId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+      fileSize: fileSize,
+      transcript: transcript,
+    );
+    _invalidateAudioTranscriptStatus(
+      ref,
+      messageId: messageId,
+      attachmentId: attachmentId,
+    );
+  } catch (e) {
+    await ref
+        .read(archiveRepairQueueProvider.notifier)
+        .recordFailure(
+          sessionId: sessionId,
+          operation: 'audio-transcript-draft',
+          error: e,
+        );
+    return;
+  }
+
+  final engine = ref.read(speechToTextEngineProvider);
+  if (engine == null) return;
+
+  try {
+    final service = AudioTranscriptionService(archive: archive, engine: engine);
+    await service.transcribeAndArchive(
+      AudioTranscriptionJob(
+        messageId: messageId,
+        attachmentId: attachmentId,
+        audioPath: audioPath,
+        fileName: fileName,
+        fileSize: fileSize,
+      ),
+    );
+  } catch (e) {
+    await ref
+        .read(archiveRepairQueueProvider.notifier)
+        .recordFailure(
+          sessionId: sessionId,
+          operation: 'audio-transcription',
+          error: e,
+        );
+  } finally {
+    _invalidateAudioTranscriptStatus(
+      ref,
+      messageId: messageId,
+      attachmentId: attachmentId,
+    );
+  }
+}
+
+class _PreparedAttachment {
+  final PendingAttachment attachment;
+  final int fileSize;
+
+  const _PreparedAttachment({required this.attachment, required this.fileSize});
+}
+
+Future<List<_PreparedAttachment>> _prepareAttachments(
+  List<PendingAttachment> attachments,
+) async {
+  if (attachments.isEmpty) return const [];
+  final prepared = <_PreparedAttachment>[];
+  for (final attachment in attachments) {
+    final file = File(attachment.path);
+    if (!await file.exists()) {
+      throw Exception('附件不存在或已移动：${attachment.name}');
+    }
+    final fileSize = await file.length();
+    final error = validateAttachmentMetadata(
+      fileName: attachment.name,
+      fileType: attachment.type,
+      fileSize: fileSize,
+      currentCount: prepared.length,
+      maxCount: kMaxAttachmentsPerMessage,
+    );
+    if (error != null) throw Exception(error);
+    prepared.add(
+      _PreparedAttachment(attachment: attachment, fileSize: fileSize),
+    );
+  }
+  return prepared;
+}
+
+class _StoredAttachment {
+  final String id;
+  final String fileName;
+  final String fileType;
+  final String localPath;
+  final int fileSize;
+
+  const _StoredAttachment({
+    required this.id,
+    required this.fileName,
+    required this.fileType,
+    required this.localPath,
+    required this.fileSize,
+  });
+}
+
+Future<List<_StoredAttachment>> _storeAttachments({
+  required String messageId,
+  required List<_PreparedAttachment> attachments,
+}) async {
+  if (attachments.isEmpty) return const [];
+
+  final stored = <_StoredAttachment>[];
+  AudioFileArchive? audioArchive;
+  for (final prepared in attachments) {
+    final attachment = prepared.attachment;
+    final attachmentId = _uuid.v4();
+    var localPath = attachment.path;
+    var fileSize = prepared.fileSize;
+
+    if (!kIsWeb && attachment.type == 'audio') {
+      try {
+        audioArchive ??= AudioFileArchive(
+          rootDirectory: await getApplicationDocumentsDirectory(),
+        );
+        final archived = await audioArchive.archive(
+          sourcePath: attachment.path,
+          messageId: messageId,
+          attachmentId: attachmentId,
+          fileName: attachment.name,
+        );
+        localPath = archived.localPath;
+        fileSize = archived.fileSize;
+      } catch (_) {
+        throw Exception('语音文件归档失败：${attachment.name}');
+      }
+    }
+
+    stored.add(
+      _StoredAttachment(
+        id: attachmentId,
+        fileName: attachment.name,
+        fileType: attachment.type,
+        localPath: localPath,
+        fileSize: fileSize,
+      ),
+    );
+  }
+  return stored;
 }
 
 /// 重试当前会话最后一条 user 消息
@@ -76,6 +338,112 @@ final messagesProvider = FutureProvider.family<List<Message>, String>((
 ) {
   return ref.watch(messageDaoProvider).getMessagesBySession(sessionId);
 });
+
+final messageAttachmentsProvider =
+    FutureProvider.family<List<Attachment>, String>((ref, messageId) {
+      return ref
+          .watch(attachmentDaoProvider)
+          .getAttachmentsByMessage(messageId);
+    });
+
+class ModelSwitchResult {
+  final bool changed;
+  final bool recorded;
+  final String message;
+
+  const ModelSwitchResult({
+    required this.changed,
+    required this.recorded,
+    required this.message,
+  });
+}
+
+Future<ModelSwitchResult> switchConversationModel({
+  required WidgetRef ref,
+  required String modelId,
+  required String modelLabel,
+  String? previousModelId,
+  String? previousModelLabel,
+}) async {
+  final selectedNotifier = ref.read(selectedModelIdProvider.notifier);
+  final previousSelectedId = ref.read(selectedModelIdProvider);
+  final activeSessionId = ref.read(activeSessionIdProvider);
+  final resolvedPreviousModelId = previousModelId ?? previousSelectedId;
+
+  if (resolvedPreviousModelId == modelId) {
+    return ModelSwitchResult(
+      changed: false,
+      recorded: false,
+      message: '已在使用 ${resolveModelSwitchLabel(modelLabel)}',
+    );
+  }
+
+  var defaultModelUpdated = false;
+  try {
+    if (activeSessionId != null) {
+      final sessionDao = ref.read(sessionDaoProvider);
+      await sessionDao.updateDefaultModel(activeSessionId, modelId);
+      defaultModelUpdated = true;
+
+      final session = await sessionDao.getSession(activeSessionId);
+      final content = buildModelSwitchRecordContent(
+        fromLabel: previousModelLabel,
+        toLabel: modelLabel,
+      );
+      final messageId = _uuid.v4();
+      await ref
+          .read(messageDaoProvider)
+          .insertMessage(
+            id: messageId,
+            sessionId: activeSessionId,
+            role: 'system',
+            content: content,
+            messageType: kModelSwitchMessageType,
+            channelModelId: modelId,
+          );
+      await sessionDao.updateLastMessageAt(activeSessionId);
+
+      unawaited(
+        _appendConversationArchiveMessage(
+          ref: ref,
+          sessionId: activeSessionId,
+          sessionTitle: session?.title,
+          messageId: messageId,
+          role: 'system',
+          content: content,
+          channelModelId: modelId,
+        ),
+      );
+
+      ref.invalidate(messagesProvider(activeSessionId));
+      ref.invalidate(activeSessionProvider);
+      ref.invalidate(sessionsProvider);
+      selectedNotifier.state = modelId;
+      return ModelSwitchResult(changed: true, recorded: true, message: content);
+    }
+
+    selectedNotifier.state = modelId;
+    return ModelSwitchResult(
+      changed: true,
+      recorded: false,
+      message: '默认模型已切换为 ${resolveModelSwitchLabel(modelLabel)}',
+    );
+  } catch (_) {
+    selectedNotifier.state = previousSelectedId;
+    if (activeSessionId != null && defaultModelUpdated) {
+      try {
+        await ref
+            .read(sessionDaoProvider)
+            .updateDefaultModel(activeSessionId, resolvedPreviousModelId);
+      } catch (_) {
+        // 回滚失败时保持原始异常向外抛出，调用方提示用户重试。
+      }
+      ref.invalidate(activeSessionProvider);
+      ref.invalidate(sessionsProvider);
+    }
+    rethrow;
+  }
+}
 
 /// 流式输出状态
 class StreamState {
@@ -154,8 +522,14 @@ Future<bool> sendMessage({
     return false;
   }
 
+  final preparedAttachments = await _prepareAttachments(attachments);
+
   // 插入用户消息
   final userMsgId = _uuid.v4();
+  final storedAttachments = await _storeAttachments(
+    messageId: userMsgId,
+    attachments: preparedAttachments,
+  );
   final userTokens = TokenEstimator.estimate(content);
   await messageDao.insertMessage(
     id: userMsgId,
@@ -166,19 +540,64 @@ Future<bool> sendMessage({
   );
 
   // 保存附件到数据库
-  for (final att in attachments) {
-    final fileSize = await File(att.path).length();
+  for (final attachment in storedAttachments) {
     await attachmentDao.insertAttachment(
-      id: _uuid.v4(),
+      id: attachment.id,
       messageId: userMsgId,
-      fileType: att.type,
-      localPath: att.path,
-      fileName: att.name,
-      fileSize: fileSize,
+      fileType: attachment.fileType,
+      localPath: attachment.localPath,
+      fileName: attachment.fileName,
+      fileSize: attachment.fileSize,
     );
+    if (attachment.fileType == 'audio') {
+      unawaited(
+        _writeAudioTranscriptDraftAndMaybeTranscribe(
+          ref: ref,
+          sessionId: sessionId,
+          messageId: userMsgId,
+          attachmentId: attachment.id,
+          audioPath: attachment.localPath,
+          fileName: attachment.fileName,
+          fileSize: attachment.fileSize,
+          transcript: content,
+        ),
+      );
+    }
   }
 
+  unawaited(
+    _appendConversationArchiveMessage(
+      ref: ref,
+      sessionId: sessionId,
+      sessionTitle: session.title,
+      messageId: userMsgId,
+      role: 'user',
+      content: content,
+      attachmentNames: storedAttachments
+          .map((attachment) => attachment.fileName)
+          .toList(),
+    ),
+  );
+
   await sessionDao.updateLastMessageAt(sessionId);
+
+  // 本地核心记忆点提取：只处理用户明示偏好 / 画像 / 目标等文本，
+  // 结果持久化在本机，后续构建上下文时按相关性注入系统提示词。
+  final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
+  try {
+    final extractedMemory = ref
+        .read(keyPointExtractorProvider)
+        .extractFromUserMessage(
+          sessionId: sessionId,
+          sourceMessageId: userMsgId,
+          content: content,
+        );
+    if (extractedMemory.isNotEmpty) {
+      await memoryNotifier.rememberAll(extractedMemory);
+    }
+  } catch (_) {
+    // 记忆提取失败不能阻断聊天主路径；不要记录用户消息内容。
+  }
 
   // 刷新消息列表
   ref.invalidate(messagesProvider(sessionId));
@@ -219,19 +638,31 @@ Future<bool> sendMessage({
       .toList();
   final skillsPrompt = skill_model.buildSkillsSystemPrompt(skills);
   final mcpToolsPrompt = _buildMcpToolsPrompt(ref);
+  String? memoryPrompt;
+  try {
+    memoryPrompt = buildKeyPointMemorySystemPrompt(
+      await memoryNotifier.searchRelevant(content, sessionId: sessionId),
+    );
+  } catch (_) {
+    // 记忆检索失败时降级为无记忆上下文，避免影响正常模型请求。
+    memoryPrompt = null;
+  }
   final contextBuilder = ContextBuilder(messageDao);
   var (systemPrompt, contextMessages) = await contextBuilder.buildContext(
     sessionId,
     customSystemPrompt: customPrompt,
+    memoryPrompt: memoryPrompt,
     skillsPrompt: skillsPrompt,
     mcpToolsPrompt: mcpToolsPrompt,
   );
 
   // 如果有附件，给最后一条 user 消息附加文件
-  if (attachments.isNotEmpty) {
+  if (storedAttachments.isNotEmpty) {
     final aiAttachments = <ai.Attachment>[];
-    for (final att in attachments) {
-      aiAttachments.add(ai.Attachment(type: att.type, path: att.path));
+    for (final attachment in storedAttachments) {
+      aiAttachments.add(
+        ai.Attachment(type: attachment.fileType, path: attachment.localPath),
+      );
     }
     if (contextMessages.isNotEmpty && contextMessages.last.role == 'user') {
       final last = contextMessages.last;
@@ -361,14 +792,15 @@ Future<void> _runAssistantResponse({
           responseThinking.isNotEmpty &&
           modelInfo.channel.protocol == 'openai_chat') {
         try {
-          final fallback = await ai_openai_chat.OpenAiChatProtocol.fetchMessageOnce(
-            baseUrl: modelInfo.channel.baseUrl,
-            apiKey: apiKey,
-            model: modelInfo.channelModel.modelName,
-            messages: contextMessages,
-            systemPrompt: systemPrompt,
-            cancelToken: cancelToken,
-          );
+          final fallback =
+              await ai_openai_chat.OpenAiChatProtocol.fetchMessageOnce(
+                baseUrl: modelInfo.channel.baseUrl,
+                apiKey: apiKey,
+                model: modelInfo.channelModel.modelName,
+                messages: contextMessages,
+                systemPrompt: systemPrompt,
+                cancelToken: cancelToken,
+              );
           if (fallback.content.isNotEmpty) {
             responseContent = fallback.content;
           }
@@ -377,8 +809,8 @@ Future<void> _runAssistantResponse({
               fallback.thinking!.isNotEmpty) {
             responseThinking = fallback.thinking!;
           }
-        } catch (e) {
-          debugPrint('[Chat] openai_chat fallback fetch failed: $e');
+        } catch (_) {
+          // 保持静默：这里是兜底补取，失败不应把上游异常或请求上下文写入日志。
         }
       }
 
@@ -406,6 +838,20 @@ Future<void> _runAssistantResponse({
             tokens: responseTokens,
             responseMs: stopwatch.elapsedMilliseconds,
           );
+          unawaited(
+            _appendConversationArchiveMessage(
+              ref: ref,
+              sessionId: sessionId,
+              sessionTitle: session.title,
+              messageId: assistantMsgId,
+              role: 'assistant',
+              content: responseContent,
+              thinkingContent: responseThinking.isNotEmpty
+                  ? responseThinking
+                  : null,
+              channelModelId: modelId,
+            ),
+          );
         }
 
         final toolMessages = <ai.AiMessage>[];
@@ -426,23 +872,44 @@ Future<void> _runAssistantResponse({
                 .join('\n');
             final toolResultContent =
                 '[工具结果: ${tc.toolName}]\n${resultText.isNotEmpty ? resultText : "(空结果)"}';
+            final toolResultMsgId = _uuid.v4();
             await messageDao.insertMessage(
-              id: _uuid.v4(),
+              id: toolResultMsgId,
               sessionId: sessionId,
               role: 'user',
               content: toolResultContent,
+            );
+            unawaited(
+              _appendConversationArchiveMessage(
+                ref: ref,
+                sessionId: sessionId,
+                sessionTitle: session.title,
+                messageId: toolResultMsgId,
+                role: 'user',
+                content: toolResultContent,
+              ),
             );
             toolMessages.add(
               ai.AiMessage(role: 'user', content: toolResultContent),
             );
           } catch (e) {
-            debugPrint('[Chat] MCP tool call failed: ${tc.toolName}: $e');
             final toolErrorContent = '[工具调用失败: ${tc.toolName}] $e';
+            final toolErrorMsgId = _uuid.v4();
             await messageDao.insertMessage(
-              id: _uuid.v4(),
+              id: toolErrorMsgId,
               sessionId: sessionId,
               role: 'user',
               content: toolErrorContent,
+            );
+            unawaited(
+              _appendConversationArchiveMessage(
+                ref: ref,
+                sessionId: sessionId,
+                sessionTitle: session.title,
+                messageId: toolErrorMsgId,
+                role: 'user',
+                content: toolErrorContent,
+              ),
             );
             toolMessages.add(
               ai.AiMessage(role: 'user', content: toolErrorContent),
@@ -468,6 +935,20 @@ Future<void> _runAssistantResponse({
         channelModelId: modelId,
         tokens: responseTokens,
         responseMs: stopwatch.elapsedMilliseconds,
+      );
+      unawaited(
+        _appendConversationArchiveMessage(
+          ref: ref,
+          sessionId: sessionId,
+          sessionTitle: session.title,
+          messageId: assistantMsgId,
+          role: 'assistant',
+          content: responseContent,
+          thinkingContent: responseThinking.isNotEmpty
+              ? responseThinking
+              : null,
+          channelModelId: modelId,
+        ),
       );
 
       totalTokens += responseTokens;
@@ -505,9 +986,7 @@ Future<void> _runAssistantResponse({
               ref.invalidate(messagesProvider(sessionId));
               ref.invalidate(sessionsProvider);
             })
-            .catchError((e) {
-              debugPrint('[Chat] Context compression failed: $e');
-            }),
+            .catchError((_) {}),
       );
 
       return;
@@ -547,7 +1026,9 @@ String? _buildMcpToolsPrompt(WidgetRef ref) {
   buf.writeln('```');
   buf.writeln('');
   buf.writeln('XML-style tool calls are also accepted:');
-  buf.writeln('<tool_call><function=tool_name><parameter=name>value</parameter></function></tool_call>');
+  buf.writeln(
+    '<tool_call><function=tool_name><parameter=name>value</parameter></function></tool_call>',
+  );
   buf.writeln('');
   buf.writeln('Available tools:');
   buf.writeln('');
@@ -575,10 +1056,7 @@ List<_ToolCall> _parseToolCalls(String response, WidgetRef ref) {
 
 @visibleForTesting
 List<({String serverId, String toolName, Map<String, dynamic> arguments})>
-    parseToolCallsForTesting(
-  String response,
-  List<McpToolWithServer> allTools,
-) {
+parseToolCallsForTesting(String response, List<McpToolWithServer> allTools) {
   return _parseToolCallsFromResponse(response, allTools)
       .map(
         (call) => (
@@ -630,9 +1108,7 @@ List<_ToolCall> _parseToolCallsFromResponse(
           arguments: arguments,
         ),
       );
-    } catch (e) {
-      debugPrint('[Chat] Failed to parse tool_call: $e');
-    }
+    } catch (_) {}
   }
 
   // 2) 兼容 XML/标签式 tool_call
@@ -687,9 +1163,6 @@ List<_ToolCall> _parseToolCallsFromResponse(
       final candidates = toolNameMap[normalizedFunctionName];
       if (candidates == null || candidates.isEmpty) continue;
       if (candidates.length > 1) {
-        debugPrint(
-          '[Chat] Ambiguous MCP function name: $normalizedFunctionName',
-        );
         continue;
       }
       final match = candidates.single;
@@ -713,7 +1186,11 @@ String _stripToolCallMarkup(String response) {
     '',
   );
   cleaned = cleaned.replaceAll(
-    RegExp(r'<tool_call>\s*.*?\s*</tool_call>', dotAll: true, caseSensitive: false),
+    RegExp(
+      r'<tool_call>\s*.*?\s*</tool_call>',
+      dotAll: true,
+      caseSensitive: false,
+    ),
     '',
   );
   cleaned = cleaned.replaceAll(RegExp(r'\n{3,}'), '\n\n');
@@ -759,6 +1236,7 @@ Future<void> _generateTitle(
     final title = buffer.toString().trim();
     if (title.isNotEmpty) {
       await ref.read(sessionDaoProvider).updateTitle(sessionId, title);
+      unawaited(syncConversationArchiveTitle(ref, sessionId));
       ref.invalidate(sessionsProvider);
       ref.invalidate(activeSessionProvider);
     }

@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/database/app_database.dart';
+import '../../core/search/local_full_text_search.dart';
 import '../../shared/providers/database_provider.dart';
+import '../../shared/providers/key_point_memory_provider.dart';
+import '../../shared/providers/settings_provider.dart';
 import '../../shared/providers/session_provider.dart';
 
 /// 全局搜索：搜索会话标题 + 消息内容
@@ -33,7 +35,9 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _focusNode.requestFocus());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _focusNode.requestFocus(),
+    );
   }
 
   @override
@@ -60,57 +64,23 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
     });
 
     try {
-      final sessionDao = ref.read(sessionDaoProvider);
-      final messageDao = ref.read(messageDaoProvider);
-
-      final sessions = await sessionDao.searchSessions(trimmed);
-      final messages = await messageDao.searchAll(trimmed);
-
-      final sessionMap = <String, Session>{};
-      for (final s in sessions) {
-        sessionMap[s.id] = s;
-      }
-
-      // 收集消息关联的会话（去重）
-      final messageSessionIds = messages.map((m) => m.sessionId).toSet();
-      for (final sid in messageSessionIds) {
-        if (!sessionMap.containsKey(sid)) {
-          final s = await sessionDao.getSession(sid);
-          if (s != null) sessionMap[sid] = s;
-        }
-      }
-
-      final results = <_SearchResult>[];
-
-      // 会话标题匹配
-      for (final s in sessions) {
-        results.add(_SearchResult(
-          sessionId: s.id,
-          title: s.title ?? '新会话',
-          subtitle: '会话标题匹配',
-          matchType: _MatchType.title,
-        ));
-      }
-
-      // 消息内容匹配（按会话分组）
-      final messagesBySession = <String, List<Message>>{};
-      for (final m in messages) {
-        messagesBySession.putIfAbsent(m.sessionId, () => []).add(m);
-      }
-      for (final entry in messagesBySession.entries) {
-        final s = sessionMap[entry.key];
-        if (s == null) continue;
-        // 跳过已在标题匹配中出现的会话
-        if (sessions.any((ts) => ts.id == entry.key)) continue;
-        final snippet = _extractSnippet(entry.value.first.content, trimmed);
-        results.add(_SearchResult(
-          sessionId: entry.key,
-          title: s.title ?? '新会话',
-          subtitle: snippet,
-          matchType: _MatchType.message,
-          matchCount: entry.value.length,
-        ));
-      }
+      final searchService = LocalFullTextSearchService(
+        sessionDao: ref.read(sessionDaoProvider),
+        messageDao: ref.read(messageDaoProvider),
+        memoryItems: ref.read(keyPointMemoryProvider),
+        enableSemanticMessageSearch: ref.read(semanticSearchEnabledProvider),
+      );
+      final results = (await searchService.search(trimmed))
+          .map(
+            (result) => _SearchResult(
+              sessionId: result.sessionId,
+              title: result.title,
+              subtitle: result.subtitle,
+              matchType: _mapMatchType(result.matchType),
+              matchCount: result.matchCount,
+            ),
+          )
+          .toList();
 
       if (!mounted) return;
       setState(() {
@@ -121,17 +91,6 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
       if (!mounted) return;
       setState(() => _isSearching = false);
     }
-  }
-
-  String _extractSnippet(String content, String query) {
-    final lower = content.toLowerCase();
-    final idx = lower.indexOf(query.toLowerCase());
-    if (idx == -1) return content.length > 80 ? '${content.substring(0, 80)}...' : content;
-    final start = (idx - 30).clamp(0, content.length);
-    final end = (idx + query.length + 50).clamp(0, content.length);
-    final prefix = start > 0 ? '...' : '';
-    final suffix = end < content.length ? '...' : '';
-    return '$prefix${content.substring(start, end)}$suffix';
   }
 
   @override
@@ -184,39 +143,54 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
             child: _isSearching
                 ? const Center(child: CircularProgressIndicator())
                 : _query.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.search, size: 48, color: scheme.onSurfaceVariant.withValues(alpha: 0.4)),
-                            const SizedBox(height: 12),
-                            Text(
-                              '输入关键词搜索会话标题和消息内容',
-                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
-                            ),
-                          ],
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.search,
+                          size: 48,
+                          color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
                         ),
-                      )
-                    : _results.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.search_off, size: 48, color: scheme.onSurfaceVariant),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '未找到匹配结果',
-                                  style: TextStyle(color: scheme.onSurfaceVariant),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            controller: scrollController,
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            itemCount: _results.length,
-                            itemBuilder: (_, i) => _buildResultTile(_results[i], scheme),
+                        const SizedBox(height: 12),
+                        Text(
+                          '输入关键词搜索会话标题和消息内容',
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 13,
                           ),
+                        ),
+                      ],
+                    ),
+                  )
+                : _results.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.search_off,
+                          size: 48,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '未找到匹配结果',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    controller: scrollController,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 4,
+                    ),
+                    itemCount: _results.length,
+                    itemBuilder: (_, i) =>
+                        _buildResultTile(_results[i], scheme),
+                  ),
           ),
         ],
       ),
@@ -227,7 +201,7 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       leading: Icon(
-        result.matchType == _MatchType.title ? Icons.chat_bubble_outline : Icons.message_outlined,
+        _iconForMatchType(result.matchType),
         size: 20,
         color: scheme.primary,
       ),
@@ -252,7 +226,10 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
               ),
               child: Text(
                 '${result.matchCount}',
-                style: TextStyle(fontSize: 11, color: scheme.onSecondaryContainer),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.onSecondaryContainer,
+                ),
               ),
             )
           : null,
@@ -262,9 +239,31 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
       },
     );
   }
+
+  IconData _iconForMatchType(_MatchType type) {
+    switch (type) {
+      case _MatchType.title:
+        return Icons.chat_bubble_outline;
+      case _MatchType.memory:
+        return Icons.psychology_outlined;
+      case _MatchType.message:
+        return Icons.message_outlined;
+    }
+  }
 }
 
-enum _MatchType { title, message }
+_MatchType _mapMatchType(LocalSearchMatchType type) {
+  switch (type) {
+    case LocalSearchMatchType.title:
+      return _MatchType.title;
+    case LocalSearchMatchType.memory:
+      return _MatchType.memory;
+    case LocalSearchMatchType.message:
+      return _MatchType.message;
+  }
+}
+
+enum _MatchType { title, message, memory }
 
 class _SearchResult {
   final String sessionId;

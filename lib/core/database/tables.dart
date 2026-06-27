@@ -47,8 +47,11 @@ class Sessions extends Table {
   TextColumn get title => text().nullable()();
   TextColumn get folderId =>
       text().nullable().references(Folders, #id, onDelete: KeyAction.setNull)();
-  TextColumn get defaultChannelModelId =>
-      text().nullable().references(ChannelModels, #id, onDelete: KeyAction.setNull)();
+  TextColumn get defaultChannelModelId => text().nullable().references(
+    ChannelModels,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
   IntColumn get totalTokens => integer().withDefault(const Constant(0))();
   IntColumn get createdAt => integer()();
   IntColumn get lastMessageAt => integer()();
@@ -64,13 +67,17 @@ class Messages extends Table {
   TextColumn get role => text()(); // user | assistant | system
   TextColumn get content => text()();
   TextColumn get thinkingContent => text().nullable()();
-  TextColumn get messageType =>
-      text().withDefault(const Constant('original'))(); // original | summary
+  TextColumn get messageType => text().withDefault(
+    const Constant('original'),
+  )(); // original | summary | model_switch
   TextColumn get summaryStartId => text().nullable()();
   TextColumn get summaryEndId => text().nullable()();
   BoolColumn get isSummarized => boolean().withDefault(const Constant(false))();
-  TextColumn get channelModelId =>
-      text().nullable().references(ChannelModels, #id, onDelete: KeyAction.setNull)();
+  TextColumn get channelModelId => text().nullable().references(
+    ChannelModels,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
   IntColumn get tokens => integer().withDefault(const Constant(0))();
   IntColumn get responseMs => integer().nullable()();
   IntColumn get createdAt => integer()();
@@ -86,7 +93,7 @@ class Attachments extends Table {
   TextColumn get id => text()();
   TextColumn get messageId =>
       text().references(Messages, #id, onDelete: KeyAction.cascade)();
-  TextColumn get fileType => text()(); // image | pdf | document
+  TextColumn get fileType => text()(); // image | pdf | audio | document
   TextColumn get localPath => text()();
   TextColumn get fileName => text()();
   IntColumn get fileSize => integer()();
@@ -116,7 +123,8 @@ class Skills extends Table {
   TextColumn get instructions => text()();
   TextColumn get sourceUrl => text().nullable()();
   TextColumn get sourceSha256 => text().nullable()();
-  BoolColumn get sha256Verified => boolean().withDefault(const Constant(false))();
+  BoolColumn get sha256Verified =>
+      boolean().withDefault(const Constant(false))();
   BoolColumn get online => boolean().withDefault(const Constant(false))();
   BoolColumn get isEnabled => boolean().withDefault(const Constant(true))();
   IntColumn get createdAt => integer()();
@@ -130,11 +138,13 @@ class McpServers extends Table {
   TextColumn get name => text()();
   TextColumn get transport => text()(); // 'stdio' | 'sse'
   TextColumn get command => text().nullable()();
-  TextColumn get args => text().nullable()();       // JSON array string
+  TextColumn get args => text().nullable()(); // JSON array string
   TextColumn get url => text().nullable()();
-  TextColumn get headers => text().nullable()();     // JSON map string
+  TextColumn get headers => text().nullable()(); // JSON map string
   BoolColumn get isEnabled => boolean().withDefault(const Constant(true))();
-  TextColumn get source => text().withDefault(const Constant('manual'))(); // 'manual' | 'marketplace'
+  TextColumn get source => text().withDefault(
+    const Constant('manual'),
+  )(); // 'manual' | 'marketplace'
   TextColumn get marketplaceId => text().nullable()();
   IntColumn get createdAt => integer()();
 

@@ -8,6 +8,7 @@ import '../../features/skills/skills_hub_page.dart';
 import '../providers/session_provider.dart';
 import '../providers/folder_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/conversation_archive_provider.dart';
 import '../providers/mcp_provider.dart';
 import '../providers/skill_provider.dart';
 
@@ -57,12 +58,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
               style: const TextStyle(fontSize: 13),
               onChanged: (v) {
                 _searchDebounce?.cancel();
-                _searchDebounce = Timer(
-                  const Duration(milliseconds: 300),
-                  () {
-                    setState(() => _searchQuery = v);
-                  },
-                );
+                _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+                  setState(() => _searchQuery = v);
+                });
               },
             ),
           ),
@@ -221,7 +219,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  const Text('我的文件夹', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text(
+                    '我的文件夹',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
                   const Spacer(),
                   TextButton.icon(
                     onPressed: () {
@@ -238,7 +239,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
             if (folders.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(32),
-                child: Center(child: Text('暂无文件夹', style: TextStyle(color: Colors.grey))),
+                child: Center(
+                  child: Text('暂无文件夹', style: TextStyle(color: Colors.grey)),
+                ),
               )
             else
               ListView.builder(
@@ -246,7 +249,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 itemCount: folders.length,
                 itemBuilder: (_, i) {
                   final folderId = folders[i].id;
-                  final folderSessions = ref.watch(sessionsProvider).valueOrNull
+                  final folderSessions =
+                      ref
+                          .watch(sessionsProvider)
+                          .valueOrNull
                           ?.where((s) => s.folderId == folderId)
                           .toList() ??
                       [];
@@ -297,7 +303,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
           data: (folders) {
             // 文件夹 ID 集合（这些会话不显示在日期分组里）
             final folderIds = folders.map((f) => f.id).toSet();
-            final unfolderedSessions = sessions.where((s) => s.folderId == null || !folderIds.contains(s.folderId)).toList();
+            final unfolderedSessions = sessions
+                .where(
+                  (s) => s.folderId == null || !folderIds.contains(s.folderId),
+                )
+                .toList();
 
             // 按日期分组（仅限无文件夹的会话）
             final now = DateTime.now();
@@ -373,8 +383,14 @@ class _SidebarState extends ConsumerState<Sidebar> {
       children: folderSessions.isEmpty
           ? [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Text('暂无会话', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: Text(
+                  '暂无会话',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
               ),
             ]
           : folderSessions.map((s) => _buildSessionTile(s)).toList(),
@@ -407,10 +423,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         padding: EdgeInsets.zero,
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('重命名')),
-          PopupMenuItem(
-            value: 'moveToFolder',
-            child: const Text('移动到文件夹'),
-          ),
+          PopupMenuItem(value: 'moveToFolder', child: const Text('移动到文件夹')),
           const PopupMenuItem(
             value: 'delete',
             child: Text('删除', style: TextStyle(color: Colors.red)),
@@ -431,6 +444,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
         final name = await _showRenameDialog(session.title ?? '新会话');
         if (name != null && name.isNotEmpty) {
           await sessionDao.updateTitle(session.id, name);
+          unawaited(syncConversationArchiveTitle(ref, session.id));
           refreshSessions(ref);
         }
         break;
@@ -662,7 +676,10 @@ class _SimpleExpansionTileState extends State<_SimpleExpansionTile> {
                 if (widget.leading != null) widget.leading!,
                 const SizedBox(width: 8),
                 Expanded(child: widget.title),
-                Icon(_isExpanded ? Icons.expand_less : Icons.expand_more, size: 18),
+                Icon(
+                  _isExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                ),
               ],
             ),
           ),

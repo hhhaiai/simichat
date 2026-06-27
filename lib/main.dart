@@ -15,9 +15,10 @@ import 'core/database/dao/channel_dao.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
 import 'shared/providers/channel_provider.dart';
-import 'shared/providers/database_provider.dart';
+import 'shared/providers/dreaming_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
+import 'shared/providers/user_profile_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,6 +62,7 @@ class AiChatApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final fontScale = ref.watch(fontScaleProvider);
 
     return MaterialApp(
       title: 'AI Chat',
@@ -71,10 +73,7 @@ class AiChatApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('en'),
-        Locale('zh'),
-      ],
+      supportedLocales: const [Locale('en'), Locale('zh')],
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF10A37F),
         brightness: Brightness.light,
@@ -86,6 +85,15 @@ class AiChatApp extends ConsumerWidget {
         useMaterial3: true,
       ),
       themeMode: themeMode,
+      builder: (context, child) {
+        final mediaQuery = MediaQuery.of(context);
+        return MediaQuery(
+          data: mediaQuery.copyWith(
+            textScaler: TextScaler.linear(normalizeFontScale(fontScale)),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       routes: {
         '/': (_) => const ResponsiveShell(),
         '/settings': (_) => const SettingsPage(),
@@ -118,6 +126,7 @@ class ResponsiveShell extends ConsumerStatefulWidget {
 
 class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   static const _kDesktopBreakpoint = 720.0;
+  bool _autoSelectingSession = false;
 
   @override
   void initState() {
@@ -125,21 +134,52 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     // 首次启动时，如果没有会话则自动创建
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoSelectOrCreateSession();
+      _runDueDreamingIfNeeded();
     });
   }
 
-  void _autoSelectOrCreateSession() {
-    final sessionsAsync = ref.read(sessionsProvider);
-    final activeId = ref.read(activeSessionIdProvider);
-    if (activeId != null) return;
-
-    sessionsAsync.whenData((sessions) {
+  Future<void> _autoSelectOrCreateSession() async {
+    if (_autoSelectingSession || ref.read(activeSessionIdProvider) != null) {
+      return;
+    }
+    _autoSelectingSession = true;
+    try {
+      final sessions = await ref.read(sessionsProvider.future);
+      if (!mounted || ref.read(activeSessionIdProvider) != null) return;
       if (sessions.isEmpty) {
-        createNewSession(ref);
+        await createNewSession(ref);
       } else {
         ref.read(activeSessionIdProvider.notifier).state = sessions.first.id;
       }
-    });
+    } finally {
+      _autoSelectingSession = false;
+    }
+  }
+
+  Future<void> _runDueDreamingIfNeeded() async {
+    try {
+      final digest = await maybeRunDueDreaming(ref);
+      if (digest != null && digest.hasContent) {
+        var profileProposalCount = 0;
+        try {
+          final proposal = await proposeUserProfileChanges(
+            ref,
+            reason: 'profile_proposal',
+          );
+          profileProposalCount = proposal?.diff.items.length ?? 0;
+        } catch (_) {
+          // 画像候选生成失败也不影响 Dreaming 完成通知。
+        }
+        await NotificationService().showDreamingDigestComplete(
+          dayKey: digest.dayKey,
+          originalMessageCount: digest.originalMessageCount,
+          memoryCandidateCount: digest.memoryCandidates.length,
+          profileProposalCount: profileProposalCount,
+        );
+      }
+    } catch (_) {
+      // 前台到期整理失败不能影响聊天主链路；用户仍可在设置页手动运行。
+    }
   }
 
   @override
@@ -154,10 +194,16 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
             const _NewSessionIntent(),
         LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyN):
             const _NewSessionIntent(),
-        LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.shift,
-            LogicalKeyboardKey.keyK): const _SearchIntent(),
-        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift,
-            LogicalKeyboardKey.keyK): const _SearchIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.meta,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyK,
+        ): const _SearchIntent(),
+        LogicalKeySet(
+          LogicalKeyboardKey.control,
+          LogicalKeyboardKey.shift,
+          LogicalKeyboardKey.keyK,
+        ): const _SearchIntent(),
         LogicalKeySet(LogicalKeyboardKey.escape):
             const _CancelStreamingIntent(),
       },
@@ -207,10 +253,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
       body: Row(
         children: [
           // 侧边栏（固定 280px）
-          const SizedBox(
-            width: 280,
-            child: Sidebar(),
-          ),
+          const SizedBox(width: 280, child: Sidebar()),
           // 分隔线
           VerticalDivider(width: 1, color: Theme.of(context).dividerColor),
           // 对话区
@@ -228,9 +271,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   Widget _buildMobileLayout(BuildContext context, WidgetRef ref) {
     return Scaffold(
       appBar: _buildChatAppBar(context, ref, showMenuButton: true),
-      drawer: const Drawer(
-        child: SafeArea(child: Sidebar()),
-      ),
+      drawer: const Drawer(child: SafeArea(child: Sidebar())),
       body: const ChatPage(),
     );
   }
@@ -243,7 +284,6 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   ) {
     final modelsAsync = ref.watch(allModelsProvider);
     final selectedId = ref.watch(selectedModelIdProvider);
-    final activeSessionId = ref.watch(activeSessionIdProvider);
     final sessionDefaultModelId = activeSession.whenOrNull(
       data: (session) => session?.defaultChannelModelId,
     );
@@ -266,7 +306,8 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          activeSession.whenOrNull(data: (session) => session?.title) ?? 'AI Chat',
+          activeSession.whenOrNull(data: (session) => session?.title) ??
+              'AI Chat',
           style: const TextStyle(fontSize: 16),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
@@ -292,18 +333,45 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
               padding: EdgeInsets.zero,
               tooltip: '切换模型',
               onSelected: (modelId) async {
-                ref.read(selectedModelIdProvider.notifier).state = modelId;
-                if (activeSessionId != null) {
-                  await ref
-                      .read(sessionDaoProvider)
-                      .updateDefaultModel(activeSessionId, modelId);
+                final target = models
+                    .where((m) => m.channelModel.id == modelId)
+                    .firstOrNull;
+                final targetLabel =
+                    target?.displayLabel ??
+                    target?.channelModel.modelName ??
+                    modelId;
+                try {
+                  final result = await switchConversationModel(
+                    ref: ref,
+                    modelId: modelId,
+                    modelLabel: targetLabel,
+                    previousModelId: currentModelId,
+                    previousModelLabel: modelLabel,
+                  );
+                  if (context.mounted && result.changed) {
+                    ScaffoldMessenger.of(context)
+                      ..clearSnackBars()
+                      ..showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            result.recorded
+                                ? '已切换模型，记录已写入当前对话'
+                                : result.message,
+                          ),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context)
+                      ..clearSnackBars()
+                      ..showSnackBar(SnackBar(content: Text('模型切换失败，已回滚: $e')));
+                  }
                 }
               },
-              itemBuilder: (_) => _buildMobileModelMenuItems(
-                context,
-                models,
-                currentModelId,
-              ),
+              itemBuilder: (_) =>
+                  _buildMobileModelMenuItems(context, models, currentModelId),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [

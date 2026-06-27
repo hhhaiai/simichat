@@ -15,7 +15,7 @@ class AiMessage {
 }
 
 class Attachment {
-  final String type; // image | pdf | document
+  final String type; // image | pdf | audio | document
   final String path;
   final String? mimeType;
 

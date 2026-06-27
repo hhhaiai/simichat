@@ -21,6 +21,7 @@ class ContextBuilder {
     String sessionId, {
     int recentK = 20,
     String? customSystemPrompt,
+    String? memoryPrompt,
     String? skillsPrompt,
     String? mcpToolsPrompt,
   }) async {
@@ -31,7 +32,9 @@ class ContextBuilder {
 
     // 1. 所有 summary（用 assistant 角色，表示这是 AI 之前的总结）
     for (final s in summaries) {
-      messages.add(AiMessage(role: 'assistant', content: '[历史摘要] ${s.content}'));
+      messages.add(
+        AiMessage(role: 'assistant', content: '[历史摘要] ${s.content}'),
+      );
     }
 
     // 2. 最近 K 条 original
@@ -50,6 +53,9 @@ class ContextBuilder {
     }
 
     var systemPrompt = customSystemPrompt ?? defaultSystemPrompt;
+    if (memoryPrompt != null && memoryPrompt.isNotEmpty) {
+      systemPrompt = '$systemPrompt\n\n$memoryPrompt';
+    }
     if (skillsPrompt != null && skillsPrompt.isNotEmpty) {
       systemPrompt = '$systemPrompt\n\n$skillsPrompt';
     }

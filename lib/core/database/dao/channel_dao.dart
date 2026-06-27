@@ -5,7 +5,7 @@ import '../tables.dart';
 
 part 'channel_dao.g.dart';
 
-@DriftAccessor(tables: [ModelChannels, ChannelModels])
+@DriftAccessor(tables: [ModelChannels, ChannelModels, Sessions, Messages])
 class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   ChannelDao(super.db);
 
@@ -55,7 +55,10 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
           ])
           ..where(
             modelChannels.isEnabled.equals(true) &
-                channelModels.capability.equals(ModelCapability.chat),
+                channelModels.capability.isIn([
+                  ModelCapability.chat,
+                  ModelCapability.vision,
+                ]),
           )
           ..orderBy([OrderingTerm.asc(modelChannels.name)]);
 
@@ -109,7 +112,24 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   }
 
   Future<void> deleteChannel(String id) {
-    return (delete(modelChannels)..where((t) => t.id.equals(id))).go();
+    return transaction(() async {
+      final channelModelIds = selectOnly(channelModels)
+        ..addColumns([channelModels.id])
+        ..where(channelModels.channelId.equals(id));
+
+      await (update(sessions)
+            ..where(
+              (t) => t.defaultChannelModelId.isInQuery(channelModelIds),
+            ))
+          .write(
+            const SessionsCompanion(defaultChannelModelId: Value(null)),
+          );
+      await (update(messages)
+            ..where((t) => t.channelModelId.isInQuery(channelModelIds)))
+          .write(const MessagesCompanion(channelModelId: Value(null)));
+      await (delete(channelModels)..where((t) => t.channelId.equals(id))).go();
+      await (delete(modelChannels)..where((t) => t.id.equals(id))).go();
+    });
   }
 
   Future<int> addModel({
@@ -129,7 +149,16 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
   }
 
   Future<void> deleteModel(String id) {
-    return (delete(channelModels)..where((t) => t.id.equals(id))).go();
+    return transaction(() async {
+      await (update(sessions)
+            ..where((t) => t.defaultChannelModelId.equals(id)))
+          .write(
+            const SessionsCompanion(defaultChannelModelId: Value(null)),
+          );
+      await (update(messages)..where((t) => t.channelModelId.equals(id)))
+          .write(const MessagesCompanion(channelModelId: Value(null)));
+      await (delete(channelModels)..where((t) => t.id.equals(id))).go();
+    });
   }
 
   Future<void> setDefaultModel(String channelId, String modelId) async {

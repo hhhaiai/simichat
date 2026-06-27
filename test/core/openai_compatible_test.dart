@@ -23,12 +23,35 @@ void main() {
         ModelCapability.inferFromModel('mimo-v2.5-pro'),
         ModelCapability.chat,
       );
+      expect(ModelCapability.inferFromModel('gpt-4o'), ModelCapability.vision);
+      expect(
+        ModelCapability.inferFromModel('gemini-embedding-001'),
+        ModelCapability.embedding,
+      );
+      expect(
+        ModelCapability.inferFromModel('qwen2.5-vl-72b'),
+        ModelCapability.vision,
+      );
+      expect(
+        ModelCapability.inferFromModel(
+          'custom-chat',
+          metadata: {
+            'capabilities': ['chat', 'vision'],
+          },
+        ),
+        ModelCapability.vision,
+      );
+      expect(ModelCapability.isChat(ModelCapability.vision), isTrue);
+      expect(ModelCapability.label(ModelCapability.chat), 'Chat 对话');
+      expect(ModelCapability.label(ModelCapability.vision), 'Vision 视觉');
+      expect(ModelCapability.label(ModelCapability.embedding), 'Embedding 向量');
     });
 
     test('parses /v1/models with capability metadata', () {
       final models = ModelFetcher.parseOpenAIModels({
         'data': [
           {'id': 'grok-4.20-0309'},
+          {'id': 'gpt-4o'},
           {'id': 'BAAI/bge-m3'},
           {'id': 'custom-vector', 'type': 'embedding'},
         ],
@@ -36,7 +59,12 @@ void main() {
 
       expect(
         models.map((m) => m.id),
-        containsAll(['grok-4.20-0309', 'BAAI/bge-m3', 'custom-vector']),
+        containsAll([
+          'grok-4.20-0309',
+          'gpt-4o',
+          'BAAI/bge-m3',
+          'custom-vector',
+        ]),
       );
       expect(
         models.firstWhere((m) => m.id == 'grok-4.20-0309').capability,
@@ -49,6 +77,10 @@ void main() {
       expect(
         models.firstWhere((m) => m.id == 'custom-vector').capability,
         ModelCapability.embedding,
+      );
+      expect(
+        models.firstWhere((m) => m.id == 'gpt-4o').capability,
+        ModelCapability.vision,
       );
     });
   });

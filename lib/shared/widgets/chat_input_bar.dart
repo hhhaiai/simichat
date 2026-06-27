@@ -3,12 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../core/attachments/attachment_policy.dart';
 import '../../core/context/token_estimator.dart';
+import '../../core/media/voice_recorder.dart';
 
 class PendingAttachment {
   final String path;
   final String name;
-  final String type; // image | pdf | document
+  final String type; // image | pdf | audio | document
 
   const PendingAttachment({
     required this.path,
@@ -26,6 +28,8 @@ class ChatInputBar extends StatefulWidget {
   final Future<bool> Function(String text, List<PendingAttachment> attachments)
   onSend;
   final Widget? modelSelector;
+  final VoiceRecorderPlatform? voiceRecorder;
+  final bool? showVoiceInput;
 
   const ChatInputBar({
     super.key,
@@ -35,6 +39,8 @@ class ChatInputBar extends StatefulWidget {
     required this.hasTextNotifier,
     required this.onSend,
     this.modelSelector,
+    this.voiceRecorder,
+    this.showVoiceInput,
   });
 
   @override
@@ -44,10 +50,16 @@ class ChatInputBar extends StatefulWidget {
 class _ChatInputBarState extends State<ChatInputBar> {
   final _imagePicker = ImagePicker();
   final List<PendingAttachment> _pendingAttachments = [];
+  bool _isRecordingVoice = false;
+  bool _isVoiceBusy = false;
 
   Future<void> _handleSend() async {
     if (widget.isStreaming) {
       await widget.onSend('', const []);
+      return;
+    }
+    if (_isRecordingVoice) {
+      _showAttachmentError('请先结束当前录音');
       return;
     }
     final content = widget.controller.text.trim();
@@ -105,11 +117,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
     try {
       final xFile = await _imagePicker.pickImage(source: source);
       if (xFile == null || !mounted) return;
-      setState(() {
-        _pendingAttachments.add(
-          PendingAttachment(path: xFile.path, name: xFile.name, type: 'image'),
-        );
-      });
+      final fileSize = await xFile.length();
+      _addAttachmentWithValidation(
+        PendingAttachment(path: xFile.path, name: xFile.name, type: 'image'),
+        fileSize: fileSize,
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -126,15 +138,15 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final file = result.files.first;
       final path = file.path;
       if (path == null) return;
-      setState(() {
-        _pendingAttachments.add(
-          PendingAttachment(
-            path: path,
-            name: file.name,
-            type: _getFileType(file.extension),
-          ),
-        );
-      });
+      final fileSize = await _resolveFileSize(path, file.size);
+      _addAttachmentWithValidation(
+        PendingAttachment(
+          path: path,
+          name: file.name,
+          type: inferAttachmentType(file.extension ?? file.name),
+        ),
+        fileSize: fileSize,
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -144,14 +156,93 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
   }
 
-  String _getFileType(String? extension) {
-    if (extension == null) return 'document';
-    final ext = extension.toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].contains(ext)) {
-      return 'image';
+  bool get _shouldShowVoiceInput {
+    if (widget.showVoiceInput != null) return widget.showVoiceInput!;
+    if (kIsWeb) return false;
+    return Platform.isAndroid || Platform.isIOS;
+  }
+
+  VoiceRecorderPlatform get _voiceRecorder =>
+      widget.voiceRecorder ?? const MethodChannelVoiceRecorder();
+
+  Future<void> _toggleVoiceRecording() async {
+    if (_isVoiceBusy) return;
+    if (_isRecordingVoice) {
+      await _stopVoiceRecording();
+    } else {
+      await _startVoiceRecording();
     }
-    if (ext == 'pdf') return 'pdf';
-    return 'document';
+  }
+
+  Future<void> _startVoiceRecording() async {
+    setState(() => _isVoiceBusy = true);
+    try {
+      await _voiceRecorder.startRecording();
+      if (!mounted) return;
+      setState(() => _isRecordingVoice = true);
+      _showAttachmentError('开始录音，再次点击麦克风结束并添加语音附件');
+    } catch (e) {
+      if (mounted) _showAttachmentError(e.toString());
+    } finally {
+      if (mounted) setState(() => _isVoiceBusy = false);
+    }
+  }
+
+  Future<void> _stopVoiceRecording() async {
+    setState(() => _isVoiceBusy = true);
+    try {
+      final recording = await _voiceRecorder.stopRecording();
+      if (!mounted) return;
+      final fileSize =
+          recording.fileSize ?? await _resolveFileSize(recording.path, 0);
+      setState(() => _isRecordingVoice = false);
+      _addAttachmentWithValidation(
+        PendingAttachment(
+          path: recording.path,
+          name: recording.fileName,
+          type: 'audio',
+        ),
+        fileSize: fileSize,
+      );
+      if (mounted) _showAttachmentError('语音已添加为附件');
+    } catch (e) {
+      if (mounted) _showAttachmentError(e.toString());
+    } finally {
+      if (mounted) setState(() => _isVoiceBusy = false);
+    }
+  }
+
+  Future<int> _resolveFileSize(String path, int pickerSize) async {
+    if (pickerSize > 0) return pickerSize;
+    try {
+      return File(path).length();
+    } catch (_) {
+      return pickerSize;
+    }
+  }
+
+  void _addAttachmentWithValidation(
+    PendingAttachment attachment, {
+    required int fileSize,
+  }) {
+    if (!mounted) return;
+    final error = validateAttachmentMetadata(
+      fileName: attachment.name,
+      fileType: attachment.type,
+      fileSize: fileSize,
+      currentCount: _pendingAttachments.length,
+    );
+    if (error != null) {
+      _showAttachmentError(error);
+      return;
+    }
+    setState(() => _pendingAttachments.add(attachment));
+  }
+
+  void _showAttachmentError(String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -226,6 +317,21 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           ),
                         ),
                       ),
+                      if (_shouldShowVoiceInput && !widget.isStreaming)
+                        IconButton(
+                          key: const ValueKey('voice-record-button'),
+                          onPressed: _isVoiceBusy
+                              ? null
+                              : _toggleVoiceRecording,
+                          icon: Icon(
+                            _isRecordingVoice
+                                ? Icons.stop_circle_outlined
+                                : Icons.mic_none_outlined,
+                            size: 20,
+                          ),
+                          tooltip: _isRecordingVoice ? '结束录音' : '语音输入',
+                          color: _isRecordingVoice ? scheme.error : null,
+                        ),
                       widget.isStreaming
                           ? IconButton.filledTonal(
                               onPressed: _handleSend,
@@ -236,7 +342,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                               valueListenable: widget.hasTextNotifier,
                               builder: (_, hasText, child) {
                                 final canSend =
-                                    hasText || _pendingAttachments.isNotEmpty;
+                                    !_isRecordingVoice &&
+                                    (hasText || _pendingAttachments.isNotEmpty);
                                 return IconButton.filled(
                                   onPressed: canSend ? _handleSend : null,
                                   icon: const Icon(
@@ -282,6 +389,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                     ? Icons.image_outlined
                     : att.type == 'pdf'
                     ? Icons.picture_as_pdf_outlined
+                    : att.type == 'audio'
+                    ? Icons.graphic_eq_outlined
                     : Icons.insert_drive_file_outlined,
                 size: 18,
               ),

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/database/app_database.dart';
 import 'database_provider.dart';
 import 'channel_provider.dart';
+import 'conversation_archive_provider.dart';
 
 const _uuid = Uuid();
 
@@ -12,14 +15,18 @@ final sessionsProvider = FutureProvider<List<Session>>((ref) {
 });
 
 /// 按文件夹筛选的会话
-final sessionsByFolderProvider =
-    FutureProvider.family<List<Session>, String>((ref, folderId) {
+final sessionsByFolderProvider = FutureProvider.family<List<Session>, String>((
+  ref,
+  folderId,
+) {
   return ref.watch(sessionDaoProvider).getSessionsByFolder(folderId);
 });
 
 /// 搜索会话
-final sessionSearchProvider =
-    FutureProvider.family<List<Session>, String>((ref, query) {
+final sessionSearchProvider = FutureProvider.family<List<Session>, String>((
+  ref,
+  query,
+) {
   if (query.isEmpty) return Future.value([]);
   return ref.watch(sessionDaoProvider).searchSessions(query);
 });
@@ -41,10 +48,7 @@ void refreshSessions(WidgetRef ref) {
 }
 
 /// 创建新会话并设为活跃
-Future<String> createNewSession(
-  WidgetRef ref, {
-  String? defaultModelId,
-}) async {
+Future<String> createNewSession(WidgetRef ref, {String? defaultModelId}) async {
   final sessionDao = ref.read(sessionDaoProvider);
   final id = _uuid.v4();
   await sessionDao.createSession(
@@ -103,6 +107,7 @@ Future<String> forkSession({
       ? '${sourceSession.title} (副本)'
       : '副本';
   await sessionDao.updateTitle(newSessionId, forkTitle);
+  unawaited(rebuildConversationArchive(ref, newSessionId));
 
   // 切换到新会话
   ref.read(activeSessionIdProvider.notifier).state = newSessionId;

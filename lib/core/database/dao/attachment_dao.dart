@@ -10,8 +10,16 @@ class AttachmentDao extends DatabaseAccessor<AppDatabase>
   AttachmentDao(super.db);
 
   Future<List<Attachment>> getAttachmentsByMessage(String messageId) {
-    return (select(attachments)
-          ..where((t) => t.messageId.equals(messageId)))
+    return (select(
+      attachments,
+    )..where((t) => t.messageId.equals(messageId))).get();
+  }
+
+  Future<List<Attachment>> getAllAttachments() {
+    return (select(attachments)..orderBy([
+          (t) => OrderingTerm(expression: t.createdAt),
+          (t) => OrderingTerm(expression: t.id),
+        ]))
         .get();
   }
 
@@ -23,15 +31,17 @@ class AttachmentDao extends DatabaseAccessor<AppDatabase>
     required String fileName,
     required int fileSize,
   }) {
-    return into(attachments).insert(AttachmentsCompanion.insert(
-      id: id,
-      messageId: messageId,
-      fileType: fileType,
-      localPath: localPath,
-      fileName: fileName,
-      fileSize: fileSize,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    ));
+    return into(attachments).insert(
+      AttachmentsCompanion.insert(
+        id: id,
+        messageId: messageId,
+        fileType: fileType,
+        localPath: localPath,
+        fileName: fileName,
+        fileSize: fileSize,
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
   }
 
   Future<void> deleteAttachment(String id) {
@@ -39,7 +49,8 @@ class AttachmentDao extends DatabaseAccessor<AppDatabase>
   }
 
   Future<void> deleteByMessage(String messageId) {
-    return (delete(attachments)..where((t) => t.messageId.equals(messageId)))
-        .go();
+    return (delete(
+      attachments,
+    )..where((t) => t.messageId.equals(messageId))).go();
   }
 }

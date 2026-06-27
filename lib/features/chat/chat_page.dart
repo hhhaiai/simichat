@@ -1,5 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/ai/model_switch_record.dart';
+import '../../core/media/audio_player.dart';
+import '../../core/media/audio_transcript_archive.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/channel_provider.dart';
@@ -7,6 +14,7 @@ import '../../shared/providers/connectivity_provider.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
 import '../../shared/providers/session_provider.dart';
+import '../../shared/providers/text_to_speech_provider.dart';
 import '../../shared/widgets/message_bubble.dart';
 import '../../shared/widgets/streaming_bubble.dart';
 import '../../shared/widgets/chat_input_bar.dart'
@@ -36,12 +44,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // 会话内临时模型覆盖
   String? _pendingModelId;
   bool _isSubmitting = false;
+  String? _speakingMessageId;
+  String? _speakingAudioPath;
+  String? _lastTerminalSpeechAudioPath;
+  bool _isPreparingSpeech = false;
+  int _speechRequestId = 0;
+  StreamSubscription<AudioPlaybackEvent>? _audioPlaybackSubscription;
 
   @override
   void initState() {
     super.initState();
     _inputController.addListener(_onTextChanged);
     _scrollController.addListener(_onScrollChanged);
+    _audioPlaybackSubscription = ref
+        .read(audioPlayerProvider)
+        .events
+        .listen(_handleAudioPlaybackEvent);
   }
 
   @override
@@ -49,10 +67,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _inputController.removeListener(_onTextChanged);
     _scrollController.removeListener(_onScrollChanged);
     _hasTextNotifier.dispose();
+    _audioPlaybackSubscription?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _handleAudioPlaybackEvent(AudioPlaybackEvent event) {
+    if (!mounted) return;
+    final path = event.path;
+    if (path == null) return;
+    switch (event.type) {
+      case AudioPlaybackEventType.completed:
+      case AudioPlaybackEventType.stopped:
+      case AudioPlaybackEventType.error:
+        _lastTerminalSpeechAudioPath = path;
+        if (_speakingAudioPath != path) return;
+        setState(() {
+          _speakingMessageId = null;
+          _speakingAudioPath = null;
+          _isPreparingSpeech = false;
+        });
+    }
   }
 
   void _onTextChanged() {
@@ -66,7 +103,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _draftCache[currentId] = _inputController.text;
       // 限制缓存大小，移除最旧的条目
       if (_draftCache.length > _maxDraftCacheSize) {
-        final keysToRemove = _draftCache.keys.take(_draftCache.length - _maxDraftCacheSize).toList();
+        final keysToRemove = _draftCache.keys
+            .take(_draftCache.length - _maxDraftCacheSize)
+            .toList();
         for (final key in keysToRemove) {
           _draftCache.remove(key);
         }
@@ -192,7 +231,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       contentPadding: EdgeInsets.zero,
                       title: Text(model.channelModel.modelName),
                       subtitle: Text(model.displayLabel),
-                      onTap: () => Navigator.of(context).pop(model.channelModel.id),
+                      onTap: () =>
+                          Navigator.of(context).pop(model.channelModel.id),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -325,6 +365,103 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _handleSpeak(String messageId, String content) async {
+    final text = content.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('没有可播报的文本')));
+      return;
+    }
+
+    final service = ref.read(textToSpeechServiceProvider);
+    final config = ref.read(textToSpeechConfigProvider);
+    if (service == null || !config.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('请先在设置中启用并配置语音播报 TTS'),
+          action: SnackBarAction(
+            label: '去设置',
+            onPressed: () {
+              if (mounted) Navigator.pushNamed(context, '/settings');
+            },
+          ),
+        ),
+      );
+      return;
+    }
+
+    final requestId = ++_speechRequestId;
+    setState(() {
+      _speakingMessageId = messageId;
+      _speakingAudioPath = null;
+      _isPreparingSpeech = true;
+    });
+
+    try {
+      await service.stop();
+      final result = await service.speak(text: text, voice: config.voice);
+      if (!mounted || requestId != _speechRequestId) return;
+      final sizeKb = (result.fileSize / 1024).clamp(0, double.infinity);
+      final audioPath = result.audioFile.path;
+      if (_lastTerminalSpeechAudioPath == audioPath) {
+        setState(() {
+          _speakingMessageId = null;
+          _speakingAudioPath = null;
+          _isPreparingSpeech = false;
+        });
+        return;
+      }
+      setState(() {
+        _speakingMessageId = messageId;
+        _speakingAudioPath = audioPath;
+        _isPreparingSpeech = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已开始语音播报（${sizeKb.toStringAsFixed(1)} KB）'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      if (requestId == _speechRequestId) {
+        setState(() {
+          _speakingMessageId = null;
+          _speakingAudioPath = null;
+          _isPreparingSpeech = false;
+        });
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('语音播报失败：$error')));
+    }
+  }
+
+  Future<void> _handleStopSpeaking() async {
+    _speechRequestId++;
+    setState(() {
+      _speakingMessageId = null;
+      _speakingAudioPath = null;
+      _isPreparingSpeech = false;
+    });
+    try {
+      await ref.read(audioPlayerProvider).stop();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已停止语音播报'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('停止播报失败：$error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final activeSessionId = ref.watch(activeSessionIdProvider);
@@ -393,16 +530,58 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       itemBuilder: (_, index) {
                         if (index < messages.length) {
                           final msg = messages[index];
+                          if (msg.messageType == kModelSwitchMessageType) {
+                            return ModelSwitchNotice(content: msg.content);
+                          }
                           final isUser = msg.role == 'user';
+                          final attachments = ref
+                              .watch(messageAttachmentsProvider(msg.id))
+                              .valueOrNull
+                              ?.map((attachment) {
+                                final transcriptStatus =
+                                    attachment.fileType == 'audio'
+                                    ? ref
+                                          .watch(
+                                            audioTranscriptStatusProvider(
+                                              AudioTranscriptStatusRequest(
+                                                messageId: msg.id,
+                                                attachmentId: attachment.id,
+                                              ),
+                                            ),
+                                          )
+                                          .valueOrNull
+                                    : null;
+                                return MessageAttachmentView(
+                                  fileName: attachment.fileName,
+                                  fileType: attachment.fileType,
+                                  fileSize: attachment.fileSize,
+                                  localPath: attachment.localPath,
+                                  audioTranscriptStatus: transcriptStatus,
+                                  onOpenAudioTranscript:
+                                      attachment.fileType == 'audio'
+                                      ? () => _showAudioTranscriptDetails(
+                                          context: context,
+                                          messageId: msg.id,
+                                          attachmentId: attachment.id,
+                                          fileName: attachment.fileName,
+                                        )
+                                      : null,
+                                );
+                              })
+                              .toList();
                           // 解析模型名
                           final modelsAsync = ref.watch(allModelsProvider);
                           final modelName = modelsAsync.whenOrNull(
                             data: (models) {
                               if (msg.channelModelId != null) {
-                                  return models
-                                      .where((m) => m.channelModel.id == msg.channelModelId)
-                                      .firstOrNull
-                                      ?.displayLabel;
+                                return models
+                                    .where(
+                                      (m) =>
+                                          m.channelModel.id ==
+                                          msg.channelModelId,
+                                    )
+                                    .firstOrNull
+                                    ?.displayLabel;
                               }
                               return null;
                             },
@@ -416,7 +595,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             isUser: isUser,
                             modelName: modelName,
                             onRetry: isUser ? null : _handleRetry,
+                            onSpeak: isUser
+                                ? null
+                                : () => _handleSpeak(msg.id, msg.content),
+                            onStopSpeaking: isUser ? null : _handleStopSpeaking,
+                            isSpeaking: !isUser && _speakingMessageId == msg.id,
+                            isPreparingSpeech:
+                                !isUser &&
+                                _speakingMessageId == msg.id &&
+                                _isPreparingSpeech,
                             onFork: () => _handleFork(msg.id),
+                            attachments: attachments ?? const [],
                           );
                         }
                         // 流式输出中的气泡
@@ -427,10 +616,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 _pendingModelId ??
                                 ref.read(selectedModelIdProvider);
                             if (id != null) {
-                                final match = models
-                                    .where((m) => m.channelModel.id == id)
-                                    .firstOrNull;
-                                if (match != null) return match.displayLabel;
+                              final match = models
+                                  .where((m) => m.channelModel.id == id)
+                                  .firstOrNull;
+                              if (match != null) return match.displayLabel;
                             }
                             return models.isNotEmpty
                                 ? models.first.displayLabel
@@ -498,6 +687,72 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
           ),
       ],
+    );
+  }
+
+  Future<void> _showAudioTranscriptDetails({
+    required BuildContext context,
+    required String messageId,
+    required String attachmentId,
+    required String fileName,
+  }) async {
+    AudioTranscriptDetails? details;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      details = await AudioTranscriptArchive(
+        rootDirectory: root,
+      ).readDetails(messageId: messageId, attachmentId: attachmentId);
+    } catch (_) {
+      details = null;
+    }
+    if (!context.mounted) return;
+
+    final status = details?.status ?? AudioTranscriptStatus.pending;
+    final displayText = details?.displayText ?? '等待语音转文字完成。';
+    final copyableText = details?.hasCopyableTranscript == true
+        ? details!.transcriptText!.trim()
+        : null;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('语音转写详情'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('文件：$fileName'),
+                const SizedBox(height: 6),
+                Text('状态：${status.displayLabel}'),
+                const SizedBox(height: 12),
+                SelectableText(displayText),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          if (copyableText != null)
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: copyableText));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('已复制转写正文'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+              child: const Text('复制正文'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
     );
   }
 
