@@ -1,6 +1,6 @@
 # Dreaming 夜间整理机制
 
-> 对应模块：M3。状态：本地手动整理 v1、前台到期调度 v1、本地用户画像 v1、画像版本历史与冲突检测 v1、Dreaming 待确认画像变更 v1、待确认画像变更逐项采纳 / 拒绝 v1、待确认画像变更详情审阅 v1、前台到期系统通知 v1 已落地；系统后台调度和模型驱动画像仍待实现。最后更新：2026-06-27。
+> 对应模块：M3。状态：本地手动整理 v1、前台到期调度 v1、本地用户画像 v1、画像版本历史与冲突检测 v1、Dreaming 待确认画像变更 v1、待确认画像变更逐项采纳 / 拒绝 v1、待确认画像变更详情审阅 v1、前台到期系统通知 v1、本地反思机制 v1、反思短期提示注入 v1、反思历史 v1 已落地；系统后台调度和模型驱动画像仍待实现。最后更新：2026-07-06。
 
 ## 1. 目标
 
@@ -21,6 +21,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - 自动整理产生内容后会推送本地系统通知，通知正文只包含整理消息数、记忆候选数和待确认画像变更数，不包含对话原文、摘要、文件路径或密钥。
 - 手动运行只读取本机 SQLite 原始消息，不上传云端，不调用远端模型；手动运行完成后使用设置页 SnackBar 反馈，避免和系统通知重复。
 - 报告保存在 SharedPreferences 的 `dreaming_digest_v1`，用于设置页展示最近整理状态。
+- 手动 / 前台到期 Dreaming 有内容时会触发本地反思 v1，生成 `assistant_reflection_v1`，用于设置页“本地反思 / 自我优化”展示回应质量、上下文、记忆画像、历史次数、下一步行动项和下一轮短期提示预览，并记录到 `assistant_reflection_history_v1`；若 `assistant_reflection_prompt_enabled_v1` 开启，下一轮聊天会把少量高优先级结论 / 行动项并入本机 system prompt。
 - 调度配置保存在 SharedPreferences 的 `dreaming_schedule_v1`，包含 `enabled`、`hour`、`minute` 和 `lastAutoRunDayKey`。
 - 系统后台唤醒、系统日历 / 闹钟联动、仅充电 / Wi-Fi 等调度条件仍待实现；当前 v1 不保证应用关闭后自动运行。
 
@@ -41,6 +42,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - 本地用户画像 v1：设置页可基于 Key Points 与最近 Dreaming 报告重建 `user_profile_v1`；用户编辑 / 删除控制保存在 `user_profile_controls_v1`，重建时继续生效；画像历史保存在 `user_profile_history_v1`；Dreaming 后候选画像变更先保存在 `user_profile_change_proposals_v1`，支持整包采纳 / 忽略、逐项采纳 / 忽略和全部差异详情审阅。
 - 待办 / 提醒候选。
 - 可审阅 Dreaming 报告。
+- 本地反思报告：基于 Dreaming 与用户画像生成可解释结论和行动项，保存为 `assistant_reflection_v1`。
 
 当前 v1 输出：
 
@@ -62,6 +64,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
   -> 冲突检测与版本历史记录
   -> 写入本地数据库
   -> 生成可查看报告
+  -> 本地反思生成行动项
 ```
 
 当前 v1 实际流程：
@@ -80,6 +83,9 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
   -> 用户整包采纳后才写入正式 UserProfile，并以 `reason: accept_proposal` 写入最近 20 个版本历史
   -> 用户也可逐项采纳 / 忽略单条 UserProfileChangeItem；单项采纳以 `reason: accept_proposal_item` 写入画像历史，剩余提案自动收敛
   -> 提案超过 4 条差异时可打开详情弹窗查看全部待确认项，并处理卡片未展示的后续差异
+  -> 运行本地 ReflectionService，按回应质量 / 上下文 / 长期记忆 / 用户画像 / 任务推进生成 `assistant_reflection_v1`
+  -> 写入 `assistant_reflection_history_v1`，最多保留最近 20 次反思
+  -> 若反思短期提示开关开启，下一轮聊天将少量高优先级结论 / 行动项并入本机 system prompt
   -> 自动触发且整理有内容时调用 NotificationService.showDreamingDigestComplete 推送本地完成通知
   -> 自动触发时写入 lastAutoRunDayKey，避免同一天重复自动整理
 ```
@@ -89,6 +95,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - `model_switch`、`summary` 等非原始消息不进入整理。
 - 命中 API Key、Authorization、password、secret、token、密钥、密码、常见密钥字面量的内容不生成 highlight / 记忆候选。
 - 报告只保存在本机，不写日志、不外发。
+- 反思报告和短期提示复用画像安全过滤，命中 API Key、Authorization、Bearer、password、secret、token、密钥、密码、常见密钥字面量时不写入报告或提示。
 
 
 ## 6. 前台到期系统通知 v1
@@ -125,6 +132,10 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - 待确认画像变更详情弹窗展示全部差异并处理卡片未展示项测试。
 - 偏好冲突提示测试。
 - Dreaming 前台到期完成通知正文测试。
+- Dreaming 后本地反思报告和反思历史落盘测试。
+- 反思短期提示合并 / 关闭开关测试。
+- 反思历史持久化、同日去重和上限测试。
+- 反思报告敏感内容过滤测试。
 - 通知 ID 稳定性、命名空间隔离和合法范围测试。
 - 后台任务耗时与电量影响评估。
 - 1000 条消息本地整理性能基线。
@@ -146,3 +157,4 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - [x] 接入待确认画像变更逐项采纳 / 拒绝 v1：设置页可对单条新增 / 移除画像信号单独采纳或忽略，剩余提案自动收敛。
 - [x] 接入待确认画像变更详情审阅 v1：提案超过 4 条差异时可查看全部待确认项，并对详情中的后续差异逐项处理。
 - [ ] 接入模型驱动的画像增量分析。
+- [x] 接入本地反思机制 v1：Dreaming 后生成回应质量、上下文、记忆画像和任务推进行动项，设置页可查看 / 手动运行，可查看历史保留次数和下一轮短期提示预览，并可控制是否作为下一轮短期提示。

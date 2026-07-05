@@ -26,6 +26,7 @@ import '../../core/ai/sse_helper.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/message_dao.dart';
 import '../../core/memory/dreaming_schedule.dart';
+import '../../core/memory/reflection_service.dart';
 import '../../core/memory/user_profile.dart';
 import '../../core/media/speech_provider_preset.dart';
 import '../../core/relay/openai_compatible_relay_server.dart';
@@ -39,6 +40,7 @@ import '../../shared/providers/mcp_provider.dart';
 import '../../shared/providers/model_test_history_provider.dart';
 import '../../shared/providers/openai_relay_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
+import '../../shared/providers/reflection_provider.dart';
 import '../../shared/providers/settings_provider.dart';
 import '../../shared/providers/skill_provider.dart';
 import '../../shared/providers/session_provider.dart';
@@ -203,6 +205,7 @@ class SettingsPage extends ConsumerWidget {
           // 记忆与画像
           _buildSectionHeader(context, '记忆与画像'),
           _buildUserProfileTile(context, ref),
+          _buildReflectionTile(context, ref),
 
           const Divider(),
 
@@ -3703,12 +3706,186 @@ class SettingsPage extends ConsumerWidget {
     final proposal = digest.hasContent
         ? await proposeUserProfileChanges(ref, reason: 'profile_proposal')
         : null;
+    var reflectionActionCount = 0;
+    if (digest.hasContent) {
+      try {
+        final reflection = await runAssistantReflection(
+          ref,
+          digest: digest,
+          pendingProfileProposalCount: proposal?.diff.items.length ?? 0,
+        );
+        reflectionActionCount = reflection?.actionItems.length ?? 0;
+      } catch (_) {
+        // 反思失败不能影响 Dreaming 和画像候选主链路。
+      }
+    }
     if (!context.mounted) return;
+    final reflectionSuffix = reflectionActionCount > 0
+        ? '，反思 $reflectionActionCount 个行动项'
+        : '';
     final message = digest.hasContent
         ? proposal == null
-              ? 'Dreaming 已完成：${digest.originalMessageCount} 条消息，画像暂无新增变更'
-              : 'Dreaming 已完成：${digest.originalMessageCount} 条消息，已生成待确认画像变更（${proposal.diff.summary}）'
+              ? 'Dreaming 已完成：${digest.originalMessageCount} 条消息，画像暂无新增变更$reflectionSuffix'
+              : 'Dreaming 已完成：${digest.originalMessageCount} 条消息，已生成待确认画像变更（${proposal.diff.summary}）$reflectionSuffix'
         : 'Dreaming 已完成：今天暂无可整理对话';
+    _showArchiveSnack(context, message);
+  }
+
+  // ====== 本地反思 / 自我优化 ======
+
+  Widget _buildReflectionTile(BuildContext context, WidgetRef ref) {
+    final report = ref.watch(assistantReflectionProvider);
+    final history = ref.watch(assistantReflectionHistoryProvider);
+    final digest = ref.watch(dreamingDigestProvider);
+    final promptEnabled = ref.watch(assistantReflectionPromptEnabledProvider);
+    final subtitle = report == null
+        ? digest == null
+              ? '暂无反思 · 先运行 Dreaming 后再生成'
+              : '可基于 ${digest.dayKey} 的 Dreaming 报告生成本地反思'
+        : '最近 ${report.dayKey} · ${report.insights.length} 条结论 · ${report.actionItems.length} 个行动项 · 历史 ${history.length} 次 · 短期提示${promptEnabled ? '开启' : '关闭'}';
+
+    return ListTile(
+      leading: const Icon(Icons.psychology_alt_outlined),
+      title: const Text('本地反思 / 自我优化'),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showReflectionDialog(context, ref),
+    );
+  }
+
+  void _showReflectionDialog(BuildContext context, WidgetRef ref) {
+    final parentRef = ref;
+    showDialog(
+      context: context,
+      builder: (ctx) => Consumer(
+        builder: (ctx, dialogRef, _) {
+          final report = dialogRef.watch(assistantReflectionProvider);
+          final history = dialogRef.watch(assistantReflectionHistoryProvider);
+          final digest = dialogRef.watch(dreamingDigestProvider);
+          final promptEnabled = dialogRef.watch(
+            assistantReflectionPromptEnabledProvider,
+          );
+          final preview = report?.toMarkdown();
+          final promptPreview = promptEnabled
+              ? buildAssistantReflectionSystemPrompt(report)
+              : null;
+          return AlertDialog(
+            title: const Text('本地反思 / 自我优化'),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '本地 v1 基于最近 Dreaming 报告和用户画像，生成对回应质量、长期记忆、画像确认和下一步任务的可解释反思；不上传云端，不调用远端模型。',
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('用于下一轮短期提示'),
+                      subtitle: const Text(
+                        '开启后只把少量高优先级结论和行动项加入本机 system prompt；不会上传反思全文，且会被上下文预算裁剪。',
+                      ),
+                      value: promptEnabled,
+                      onChanged: (enabled) {
+                        unawaited(
+                          dialogRef
+                              .read(
+                                assistantReflectionPromptEnabledProvider
+                                    .notifier,
+                              )
+                              .setEnabled(enabled),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    if (digest == null)
+                      const Text('暂无 Dreaming 报告。请先运行 Dreaming 夜间整理。')
+                    else
+                      Text(
+                        '可用 Dreaming：${digest.dayKey} · ${digest.originalMessageCount} 条消息',
+                      ),
+                    const SizedBox(height: 12),
+                    if (report == null)
+                      const Text('暂无本地反思报告。')
+                    else ...[
+                      Text(
+                        '最近反思：${report.dayKey} · 来源 ${report.sourceDigestDayKey}',
+                      ),
+                      Text(
+                        '结论 ${report.insights.length} 条 · 行动项 ${report.actionItems.length} 个',
+                      ),
+                      if (history.isNotEmpty)
+                        Text(
+                          '历史已保留 ${history.length} 次：${history.take(3).map((item) => item.dayKey).join('、')}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        preview == null || preview.isEmpty ? '暂无反思内容' : preview,
+                        maxLines: 16,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      if (promptEnabled &&
+                          promptPreview != null &&
+                          promptPreview.isNotEmpty) ...[
+                        const Text('下一轮短期提示预览'),
+                        const SizedBox(height: 4),
+                        Text(
+                          promptPreview,
+                          maxLines: 8,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ] else
+                        Text(
+                          promptEnabled
+                              ? '暂无可注入的短期提示。'
+                              : '短期提示已关闭，反思不会影响下一轮 system prompt。',
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _runReflection(context, parentRef);
+                },
+                child: const Text('运行反思'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _runReflection(BuildContext context, WidgetRef ref) async {
+    final pendingProfileProposalCount = ref
+        .read(userProfileChangeProposalsProvider)
+        .fold<int>(0, (total, proposal) => total + proposal.diff.items.length);
+    final report = await runAssistantReflection(
+      ref,
+      pendingProfileProposalCount: pendingProfileProposalCount,
+    );
+    if (!context.mounted) return;
+    final message = report == null
+        ? '请先运行 Dreaming 并积累可整理对话，再生成本地反思'
+        : '反思已完成：${report.insights.length} 条结论，${report.actionItems.length} 个行动项';
     _showArchiveSnack(context, message);
   }
 

@@ -25,6 +25,7 @@ import '../../core/media/audio_transcript_archive.dart';
 import '../../core/media/native_speech_to_text_engine.dart';
 import '../../core/media/openai_speech_to_text_engine.dart';
 import '../../core/memory/key_point_memory.dart';
+import '../../core/memory/reflection_service.dart';
 import '../../core/skills/skill.dart' as skill_model;
 import 'mcp_provider.dart';
 import '../../core/database/app_database.dart';
@@ -38,6 +39,7 @@ import 'channel_provider.dart';
 import 'database_provider.dart';
 import 'conversation_archive_provider.dart';
 import 'key_point_memory_provider.dart';
+import 'reflection_provider.dart';
 import 'session_provider.dart';
 import 'settings_provider.dart';
 
@@ -93,6 +95,19 @@ bool isContextLimitErrorForTesting(String error) => _isContextLimitError(error);
 @visibleForTesting
 String contextLimitUserMessageForTesting() => _contextLimitUserMessage;
 
+@visibleForTesting
+String? buildLocalContextPromptForTesting({
+  String? memoryPrompt,
+  ReflectionReport? reflectionReport,
+  bool reflectionPromptEnabled = true,
+}) {
+  return _buildLocalContextPrompt(
+    memoryPrompt: memoryPrompt,
+    reflectionReport: reflectionReport,
+    reflectionPromptEnabled: reflectionPromptEnabled,
+  );
+}
+
 bool _isContextLimitError(Object error) {
   final text = error.toString().toLowerCase();
   return text.contains('context_length_exceeded') ||
@@ -103,6 +118,24 @@ bool _isContextLimitError(Object error) {
       text.contains('input tokens exceed') ||
       text.contains('exceeds the model') ||
       text.contains('超过') && text.contains('上下文');
+}
+
+String? _buildLocalContextPrompt({
+  String? memoryPrompt,
+  ReflectionReport? reflectionReport,
+  bool reflectionPromptEnabled = true,
+}) {
+  final reflectionPrompt = reflectionPromptEnabled
+      ? buildAssistantReflectionSystemPrompt(reflectionReport)
+      : null;
+  final sections = <String>[
+    if (memoryPrompt != null && memoryPrompt.trim().isNotEmpty)
+      memoryPrompt.trim(),
+    if (reflectionPrompt != null && reflectionPrompt.trim().isNotEmpty)
+      reflectionPrompt.trim(),
+  ];
+  if (sections.isEmpty) return null;
+  return sections.join('\n\n');
 }
 
 int _strictRetryInputBudget(int maxInputTokens) {
@@ -870,6 +903,24 @@ Future<bool> sendMessage({
   } catch (_) {
     // 记忆检索失败时降级为无记忆上下文，避免影响正常模型请求。
     memoryPrompt = null;
+  }
+  try {
+    final reflectionEnabledNotifier = ref.read(
+      assistantReflectionPromptEnabledProvider.notifier,
+    );
+    await reflectionEnabledNotifier.ready;
+    final reflectionEnabled = ref.read(
+      assistantReflectionPromptEnabledProvider,
+    );
+    final reflectionNotifier = ref.read(assistantReflectionProvider.notifier);
+    await reflectionNotifier.ready;
+    memoryPrompt = _buildLocalContextPrompt(
+      memoryPrompt: memoryPrompt,
+      reflectionReport: ref.read(assistantReflectionProvider),
+      reflectionPromptEnabled: reflectionEnabled,
+    );
+  } catch (_) {
+    // 反思提示失败不能影响主聊天链路；保留已有记忆提示。
   }
   final contextBudget = resolveModelContextBudget(
     protocol: modelInfo.channel.protocol,

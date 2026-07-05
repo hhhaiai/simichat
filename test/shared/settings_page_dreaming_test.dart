@@ -1,8 +1,10 @@
 import 'package:ai_chat_app/core/database/app_database.dart';
+import 'package:ai_chat_app/core/memory/reflection_service.dart';
 import 'package:ai_chat_app/core/memory/user_profile.dart';
 import 'package:ai_chat_app/features/settings/settings_page.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
 import 'package:ai_chat_app/shared/providers/dreaming_provider.dart';
+import 'package:ai_chat_app/shared/providers/reflection_provider.dart';
 import 'package:ai_chat_app/shared/providers/user_profile_provider.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -59,11 +61,63 @@ void main() {
 
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    expect(prefs.getString(kAssistantReflectionStorageKey), isNotNull);
+    expect(prefs.getString(kAssistantReflectionHistoryStorageKey), isNotNull);
     expect(prefs.getString(kUserProfileStorageKey), isNull);
     final proposals = decodeUserProfileChangeProposals(
       prefs.getString(kUserProfileChangeProposalsStorageKey),
     );
     expect(proposals, hasLength(1));
     expect(proposals.single.diff.hasChanges, isTrue);
+  });
+
+  testWidgets('reflection dialog previews short prompt injection', (
+    tester,
+  ) async {
+    final now = DateTime.utc(2026, 7, 6, 22);
+    final report = ReflectionReport(
+      dayKey: '2026-07-06',
+      generatedAt: now,
+      sourceDigestDayKey: '2026-07-06',
+      sessionCount: 1,
+      originalMessageCount: 12,
+      userMessageCount: 7,
+      assistantMessageCount: 5,
+      pendingProfileProposalCount: 0,
+      insights: const [
+        ReflectionInsight(
+          category: '任务推进',
+          text: '需要优先推进长会话质量基线。',
+          priority: 'high',
+        ),
+      ],
+      actionItems: const ['下次先推进长会话质量基线。'],
+    );
+    SharedPreferences.setMockInitialValues({
+      kAssistantReflectionStorageKey: encodeReflectionReport(report),
+    });
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('本地反思 / 自我优化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('本地反思 / 自我优化'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('下一轮短期提示预览'), findsOneWidget);
+    expect(find.textContaining('下次先推进长会话质量基线'), findsWidgets);
   });
 }

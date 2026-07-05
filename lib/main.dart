@@ -18,6 +18,7 @@ import 'shared/providers/channel_provider.dart';
 import 'shared/providers/dreaming_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
+import 'shared/providers/reflection_provider.dart';
 import 'shared/providers/user_profile_provider.dart';
 
 void main() async {
@@ -176,6 +177,15 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
           profileProposalCount = proposal?.diff.items.length ?? 0;
         } catch (_) {
           // 画像候选生成失败也不影响 Dreaming 完成通知。
+        }
+        try {
+          await runAssistantReflection(
+            ref,
+            digest: digest,
+            pendingProfileProposalCount: profileProposalCount,
+          );
+        } catch (_) {
+          // 本地反思失败不能影响 Dreaming 完成通知。
         }
         await NotificationService().showDreamingDigestComplete(
           dayKey: digest.dayKey,

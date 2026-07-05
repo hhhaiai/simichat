@@ -6,7 +6,7 @@
 >
 > **主事实来源**：本文件记录项目目标、阶段进度、待办、已完成事项、重要决策与执行约束。`CLAUDE.md` 的项目进度、路线图、已知问题和重要安排已迁移到本文件；后续维护以 `AGENTS.md` 为准。
 >
-> **最后更新**：2026-07-05。
+> **最后更新**：2026-07-06。
 
 ---
 
@@ -41,12 +41,12 @@
 | 移动端 MVP | 基础聊天、会话列表、模型切换、本地 SQLite、Markdown 原始档案、移动端应用名 `SimiAIChat`、包名 `top.simitalk.aichat`、主题与 90%–120% 全局字体、移动端自动化 smoke 已落地 | 真机主链路：发送、停止、重试、模型切换、历史搜索、设置页、长会话 |
 | 多模型接入 | 已支持 OpenAI Chat / OpenAI Responses / Claude / Gemini / Ollama 协议适配；模型厂商预设、批量 JSON 导入、连通性测试、测试历史、失败重试、一键测试并剔除不可用模型、渠道 / 模型删除引用清理已落地 | 继续扩展国产 / 免费模型来源引导和更完整的协议兼容性测试 |
 | 个人 OpenAI Relay | 已支持 Bearer 鉴权、`/health`、`/v1/health`、`/v1/models`、非流式 / 流式 `/v1/chat/completions`、非流式 buffered `/v1/responses`、CORS 预检、审计、用量统计、并发保护、局域网二次确认、路由策略、多模态安全降级、图片 data URL / 远端图片安全透传、Vision 路由 | 真机长时间运行、更多外部客户端兼容性、后台网络变化恢复 |
-| 记忆与 Dreaming / 上下文 | Key Points、本地语义召回、消息语义索引、本地语义搜索开关、Dreaming 前台到期整理 / 通知、用户画像管理 / 历史 / 待确认变更、模型窗口预算裁剪、动态压缩阈值、上下文超限一次严格裁剪重试已落地 | 模型 embedding / ANN、真正后台调度、反思机制、真机长会话基线 |
+| 记忆与 Dreaming / 上下文 | Key Points、本地语义召回、消息语义索引、本地语义搜索开关、Dreaming 前台到期整理 / 通知、用户画像管理 / 历史 / 待确认变更、本地反思机制 v1、反思短期提示注入 v1、反思历史 v1、模型窗口预算裁剪、动态压缩阈值、上下文超限一次严格裁剪重试已落地 | 模型 embedding / ANN、真正后台调度、模型驱动反思、真机长会话基线 |
 | 语音 / 图片 / 多模态 | 语音录音、私有归档、OpenAI 兼容 STT / TTS、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、语音厂商预设、播放停止 / 完成事件、图片 / 文件附件、图片缩略图已落地 | 更多 STT / TTS 厂商、真机长音频、来电 / 音频焦点中断、声音 / 图像 / 表情画像 |
 | 数据管理与同步 | `.tar.gz` 导出、系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步 / 附件 / 冲突 / stale 清理已落地 | Notion / 语雀 / 思源同步、云备份、Obsidian 双向同步 |
 | 数字孪生 | 本地用户画像 v1 已落地，可查看、编辑、删除、恢复历史、逐项采纳 / 拒绝 Dreaming 画像变更 | 声音 / 图像 / 表情处理、镜像数字人生成、代理行为授权与审计 |
 | 对话页 Markdown / 字体 | 扩展 Markdown 渲染 v2 已落地：用户输入和 AI 输出统一 Markdown 渲染；行内 code 不再误渲染为代码块；支持 GitHub Web 扩展、旧式 / Obsidian / HTML 图片、行内 / 块级公式、HTML audio/video 安全卡片、HTML details、旧式 details、多种 Mermaid 与 Draw.io / mxGraph 新老格式；移动端正文默认 15sp，缩放范围 90%–120% | 真机长文档滚动、复杂表格 / 长代码 / 离线 Mermaid 体验继续优化 |
-| 最新验证 | 2026-07-05 本轮 `flutter analyze` 通过；`flutter test` 全量 318 个测试通过；上下文局部回归覆盖模型上下文预算、旧 OpenAI 小窗口模型保守预算、超过旧 20 条上限的预算构建、小预算保留最新用户问题、上下文超限错误识别 / 提示和语音转写链路；base64 语音局部测试同日通过。2026-07-03 `flutter build ios --release` 成功；people iPhone 当时 `unavailable`，覆盖安装被设备离线状态阻塞 | 长会话 / 复杂 Markdown 真机滚动 / 语音网络等交互仍待补 |
+| 最新验证 | 2026-07-06 本轮 `flutter --no-version-check analyze` 通过；使用命令内临时 `sqlite3.source=system` 绕过本机 GitHub sqlite3 native asset 下载限制后，`flutter --no-version-check test --no-pub --no-test-assets` 全量 329 个测试通过；本地反思 / 短期提示 / 历史 / 长会话质量基线 / 短期提示预览局部 24 个测试通过。2026-07-05 上下文预算回归和 base64 语音局部测试通过；2026-07-03 `flutter build ios --release` 成功；people iPhone 当时 `unavailable`，覆盖安装被设备离线状态阻塞 | 长会话 / 复杂 Markdown 真机滚动 / 语音网络等交互仍待补 |
 
 
 ---
@@ -200,7 +200,7 @@
 - [x] 核心 Key Points 提取与注入 v1：明示记忆点本地提取、持久化、关键词 + 本地语义向量召回并注入系统提示词。
 - [x] Dreaming 前台到期整理与系统通知 v1：前台到期自动整理、待确认画像提案和完成通知已落地；真正系统后台调度仍待实现。
 - [x] 无限上下文压缩基础策略：滚动压缩、摘要生成、令牌估算、模型窗口预算、请求前裁剪、动态压缩阈值和超限错误兜底。
-- [ ] 人工智能反思机制。
+- [x] 本地反思机制 v1：Dreaming 后基于本地日报、用户画像和待确认画像变更生成回应质量、上下文、长期记忆、用户画像和任务推进的可解释反思报告；设置页可查看 / 手动运行，保存最近 20 次反思历史，并可控制是否把少量高优先级结论 / 行动项作为下一轮本机短期提示；模型驱动反思仍待实现。
 
 ### Phase 3 — 生态扩展
 
@@ -372,8 +372,8 @@
 - [x] Dreaming 待确认画像变更 v1：手动 Dreaming 与前台到期 Dreaming 生成本地待确认画像变更，用户采纳后才写入正式画像。
 - [x] 待确认画像变更逐项采纳 / 拒绝 v1：设置页可对单条新增 / 移除画像信号单独采纳或忽略，剩余提案自动收敛，采纳单项写入画像历史。
 - [x] 待确认画像变更详情审阅 v1：提案超过 4 条差异时可打开详情弹窗查看全部差异，并对详情中的任意单项采纳 / 忽略。
+- [x] 本地反思机制 v1：`ReflectionService` 基于最近 Dreaming、用户画像和待确认画像变更生成可解释结论与行动项，`assistant_reflection_v1` 本地持久化，`assistant_reflection_history_v1` 保留最近 20 次反思，`assistant_reflection_prompt_enabled_v1` 控制是否注入下一轮短期提示，设置页提供“本地反思 / 自我优化”入口。
 - [ ] Dreaming 模型驱动画像增量分析工作流。
-- [ ] 人工智能反思机制。
 
 ### P2 — 生态扩展
 
@@ -445,11 +445,13 @@
 | 2026-07-03 | 音频附件 STT 音频接口前置转写 | audio 附件发送时先调用 OpenAI 兼容 `/v1/audio/transcriptions`：优先使用设置页 STT 配置，未配置时复用当前 `openai_chat` / `openai_response` 渠道 Base URL 与 API Key；成功后把转写结果作为普通文本发给聊天模型，不再把 audio base64 交给聊天模型 | 已完成 |
 | 2026-07-03 | iOS 系统 Speech 原生识别兜底 | 在 STT 引擎链路增加 fallback：显式 STT 配置、当前 OpenAI 兼容聊天渠道音频接口均失败 / 返回空时，iOS 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内录音；新增 `NSSpeechRecognitionUsageDescription` 权限说明、Dart MethodChannel 引擎和 fallback 引擎测试 | 已完成 |
 | 2026-07-05 | 无限上下文预算控制 | 聊天发送前按 `protocol + modelName` 推断模型窗口，预留输出 token 后按 `maxInputTokens` 裁剪 system / memory / skills / MCP 工具说明和历史消息；预算模式不再固定最近 20 条，可在窗口内尽量保留更多历史，优先保留最新用户问题；上下文超限流式错误会严格裁剪重试一次，失败时保留可操作提示 | 已完成 |
+| 2026-07-06 | 本地反思机制 | Dreaming 后基于本地日报、用户画像和待确认画像变更生成回应质量、上下文、长期记忆、用户画像和任务推进的可解释反思报告；设置页可查看 / 手动运行，结构化备份包含 `assistant_reflection_v1`、`assistant_reflection_history_v1` 与 `assistant_reflection_prompt_enabled_v1`；复核时修正弹窗关闭后运行反思使用父级 `WidgetRef`，并新增可关闭的反思短期提示注入、最近 20 次反思历史、长会话质量基线和短期提示预览，短期提示优先保留可直接改善下一轮回复的任务推进项 | 已完成 |
 
 ### 8.3 最新验证基线
 
 | 日期 | 验证项 | 结果 |
 | --- | --- | --- |
+| 2026-07-06 | 本地反思机制 v1 回归：`flutter --no-version-check analyze`；命令内临时 `sqlite3.source=system` 后运行 `flutter --no-version-check test --no-pub --no-test-assets`；局部 `test/core/reflection_service_test.dart test/shared/reflection_provider_test.dart test/shared/chat_provider_context_limit_test.dart test/core/structured_data_backup_test.dart test/core/context_builder_test.dart test/shared/settings_page_dreaming_test.dart` | 静态检查无问题；局部 24 个测试通过；全量 329 个测试通过；正式 `pubspec.yaml` 未保留临时 sqlite3 hook；直接 `flutter test` 在当前本机仍会因 GitHub sqlite3 native asset 下载失败而阻塞 |
 | 2026-07-05 | 无限上下文预算控制回归：`flutter test test/core/model_context_budget_test.dart test/core/context_builder_test.dart test/shared/chat_provider_context_limit_test.dart test/shared/chat_provider_audio_test.dart`、`flutter analyze`、`flutter test` | 局部 18 个测试通过；覆盖模型预算推断、未知模型 8K 保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值、预算模式超过旧 20 条上限、小预算裁剪但保留最新用户问题、上下文超限错误识别 / 用户提示、语音转写链路未回退；静态检查无问题；全量 318 个测试通过 |
 | 2026-07-03 | Markdown v2 与 iOS 系统 Speech 兜底回归：`flutter test test/shared/markdown_rendering_test.dart`、`flutter analyze`、`flutter test`、`git diff --check`、`flutter build ios --release` | Markdown 局部 4 个测试通过，全量 305 个测试通过；行内 code 保持行内，fenced code 仍为代码块；用户输入 / AI 输出统一 Markdown 渲染；旧式 / HTML 图片、Mermaid / Draw.io 新老格式均有回归；fallback 引擎可在在线 STT 失败或空结果后继续尝试 iOS 原生 Speech；iOS release 构建成功；people iPhone 当前 `unavailable`，覆盖安装被设备离线状态阻塞 |
 | 2026-06-27 | OpenAI Relay Responses API 局部测试与 benchmark：`flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` | 23 个测试通过；覆盖 `/v1/responses` buffered 输出、多模态 input 解析、`stream=true` 安全拒绝、CORS 预检；局部 benchmark 中 `/v1/responses` 100 次平均约 3.14 ms |
@@ -482,7 +484,7 @@
 | --- | --- | --- |
 | P0 | 移动端真机主链路冒烟 | Android debug APK / iOS release 已按当前新包名完成真机覆盖安装与启动；仍需真实 Android / iOS 设备长会话、语音、网络切换、后台恢复等交互验证 |
 | P1 | Dreaming 系统后台调度 | 当前为前台到期整理 + 通知；需补系统后台限制下的稳定方案 |
-| P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩和本地记忆；仍需真机长会话基线、长期压缩质量评估、AI 反思机制、模型驱动画像增量分析 |
+| P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩、本地记忆、本地反思 v1、反思历史 v1 和可关闭的反思短期提示注入；仍需真机长会话基线、长期压缩质量评估、模型驱动反思、模型驱动画像增量分析 |
 | P1 | OpenAI Relay 真机 / 长时间运行 | 当前本地测试、构建和 benchmark 已过；仍需真实移动端网络、局域网、客户端兼容性验证 |
 | P2 | 社交平台接入 | 飞书 / Telegram / Discord 优先；微信 / QQ / WhatsApp / Slack 后续梳理授权边界 |
 | P2 | 多源 Skills 市场 | SkillHub 基础已落地；OpenClaw、腾讯等市场仍待接入 |
@@ -510,6 +512,7 @@
 | `docs/model-integration.md` | 多模型接入、渠道、模型能力、接口中转方案 |
 | `docs/memory-system.md` | 记忆、Markdown 原始档案、本地检索增强生成、Key Points |
 | `docs/dreaming.md` | Dreaming 夜间整理机制、画像提取、定时调度 |
+| `docs/reflection.md` | 本地反思机制、报告结构、触发流程、安全边界和测试记录 |
 | `docs/social-channels.md` | 社交平台接入方案、频道抽象、权限边界 |
 | `docs/skills-market.md` | 技能市场集成、多源市场、权限、安全、安装更新 |
 | `docs/data-sync.md` | 本地数据导出压缩包、附件原文件导出 / 导入、移动端系统分享、云备份、电脑端传输、笔记工具同步 |
