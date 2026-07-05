@@ -78,6 +78,11 @@ void main() {
             message.content == 'DEVICE integration reply 20260706',
       );
     });
+    await _pumpUntil(
+      tester,
+      () async =>
+          find.text('DEVICE integration reply 20260706').evaluate().isNotEmpty,
+    );
 
     final messages = await db.messageDao.getMessagesBySession(
       'integration-session',

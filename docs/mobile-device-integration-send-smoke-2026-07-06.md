@@ -10,6 +10,8 @@
 
 新增文件：`integration_test/mobile_real_send_smoke_test.dart`。
 
+新增脚本：`scripts/smoke_device_integration_send.sh`。脚本默认使用 Pixel 8 设备 ID `37101FDJH0077P`，也可传入设备 ID 或通过 `DEVICE_ID` 环境变量指定；脚本会精确备份 `pubspec.yaml` / `pubspec.lock`，临时追加 `sqlite3.source=system` hook，测试结束后无论成功失败都会恢复正式文件并执行 `pub get`，避免把临时 hook 留在仓库。
+
 新增 dev 依赖：
 
 ```yaml
@@ -55,7 +57,7 @@ iOS `Podfile.lock` 同步增加 `integration_test` 插件条目，便于后续�
 
 设备：Pixel 8，序列号 `37101FDJH0077P`，Android 16 API 36。
 
-由于本机环境无法稳定下载 sqlite3 native asset，本轮按既有项目约束在命令内临时追加：
+由于本机环境无法稳定下载 sqlite3 native asset，本轮按既有项目约束由 `scripts/smoke_device_integration_send.sh` 在命令内临时追加：
 
 ```yaml
 hooks:
@@ -67,6 +69,12 @@ hooks:
 测试后已还原正式 `pubspec.yaml`，确认正式文件不保留该 hook。
 
 命令：
+
+```bash
+./scripts/smoke_device_integration_send.sh 37101FDJH0077P
+```
+
+脚本内部执行：
 
 ```bash
 flutter --no-version-check test integration_test/mobile_real_send_smoke_test.dart \
@@ -82,6 +90,8 @@ Installing build/app/outputs/flutter-apk/app-debug.apk... 5.8s
 00:02 +1: (tearDownAll)
 00:03 +1: All tests passed!
 ```
+
+脚本复跑时曾暴露一次测试等待条件不完整：测试只等待 DB assistant 落库，随后立即断言 UI 文本，在真机负载下 UI provider 刷新可能晚于 DB。已按条件等待修正为继续等待 `DEVICE integration reply 20260706` 出现在 Widget 树中，再执行最终 UI 断言；修正后脚本复跑通过。
 
 结论：Pixel 8 真机上，新增集成 smoke 可稳定验证 UI 输入、真实发送、SSE 解析、assistant 落库和 UI 展示闭环。
 
@@ -120,6 +130,7 @@ The Dart VM Service was not discovered after 60 seconds. This is taking much lon
 本轮已验证：
 
 - 新增跨平台 `integration_test` 真机发送 smoke 文件。
+- 新增 `scripts/smoke_device_integration_send.sh`，封装临时 sqlite3 hook、真机测试和恢复流程。
 - Pixel 8 真机通过设备内本地 mock 完成 UI→发送→SSE→DB→UI 闭环。
 - 正式 `pubspec.yaml` 不保留临时 sqlite3 hook。
 - `flutter --no-version-check analyze` 通过。
