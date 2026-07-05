@@ -1,6 +1,6 @@
 # 语音、图片与附件系统设计
 
-> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 与 Android / iOS 原生播放通道已落地；Pixel 8 已补 base64 语音真机发送 smoke、OpenAI 兼容 STT 网络 fallback smoke、真实录音按钮 smoke 和 OpenAI 兼容 TTS 网络 smoke；更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS 和真机长时间场景待补。最后更新：2026-07-06。
+> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 与 Android / iOS 原生播放通道已落地；Pixel 8 已补 base64 语音真机发送 smoke、OpenAI 兼容 STT 网络 fallback smoke、真实录音按钮 smoke、OpenAI 兼容 TTS 网络 smoke 和原生音频播放通道 smoke；更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS 和真机长时间场景待补。最后更新：2026-07-06。
 
 ## 1. 目标
 
@@ -8,7 +8,7 @@
 - 支持文件附件输入：图片、PDF、语音文件、普通文档。
 - 支持多模态模型调用，把图片等附件传给协议层。
 - 附件元数据进入本地数据库，Markdown 原始档案记录附件名称；数据导出会把仍可读取的非语音附件原文件复制到压缩包 `attachments/`。
-- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、发送前 STT 音频接口转写并把转写文字注入普通聊天、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 和 Android / iOS 原生播放通道；Pixel 8 已补 base64 语音粘贴 → audio 附件 → fake STT ready sidecar → 净化后模型请求真机 smoke，当前 OpenAI 兼容聊天渠道复用 `/v1/audio/transcriptions` 的 multipart STT 网络 smoke，以及聊天页麦克风按钮 → Android 原生录音 `.m4a` → STT → 聊天回复真机 smoke，以及 assistant 播报按钮 → `/v1/audio/speech` → 临时音频 → 停止播报真机 smoke；后续仍需补更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS、真机长时间播报和播放中断场景。
+- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、发送前 STT 音频接口转写并把转写文字注入普通聊天、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 和 Android / iOS 原生播放通道；Pixel 8 已补 base64 语音粘贴 → audio 附件 → fake STT ready sidecar → 净化后模型请求真机 smoke，当前 OpenAI 兼容聊天渠道复用 `/v1/audio/transcriptions` 的 multipart STT 网络 smoke，以及聊天页麦克风按钮 → Android 原生录音 `.m4a` → STT → 聊天回复真机 smoke，以及 assistant 播报按钮 → `/v1/audio/speech` → 临时音频 → 停止播报真机 smoke，以及应用私有目录 WAV → Android `MediaPlayer` → stopped 事件回传 smoke；后续仍需补更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS、真机长时间播报和播放中断场景。
 
 ## 2. 当前实现
 
@@ -133,6 +133,7 @@
 - OpenAI 兼容 STT 网络真机 smoke：Pixel 8 上通过 `integration_test/mobile_stt_network_smoke_test.dart` 验证未配置独立 STT 时复用当前 `openai_chat` 渠道发起 multipart `/v1/audio/transcriptions`，sidecar ready 后再发送净化后的聊天请求。
 - 真机录音按钮 smoke：Pixel 8 上通过 `integration_test/mobile_voice_recording_smoke_test.dart` 验证聊天页麦克风按钮、Android 原生 `MediaRecorder`、`.m4a` audio 附件、STT fallback、ready sidecar 和净化后聊天请求闭环。
 - OpenAI 兼容 TTS 网络真机 smoke：Pixel 8 上通过 `integration_test/mobile_tts_network_smoke_test.dart` 验证 assistant 播报按钮、`/v1/audio/speech` JSON 请求、临时音频写入、播放接口调用、停止播报和 UI 状态回退。
+- 原生音频播放通道真机 smoke：Pixel 8 上通过 `integration_test/mobile_native_audio_player_smoke_test.dart` 验证正式 `MethodChannelAudioPlayer`、Android `MediaPlayer`、应用私有目录 WAV、停止事件回传和无错误事件。
 - 聊天音频前置转写测试：校验 audio-only 消息使用 STT 转写文本进入普通聊天，上下文不包含音频 base64；OpenAI 兼容 STT 引擎测试覆盖 multipart `/v1/audio/transcriptions` 请求；iOS 原生 Speech MethodChannel 测试覆盖 `transcribeFile` 调用和权限错误映射。
 - 导出包附件完整性测试：非语音附件复制到 `attachments/`，路径净化，不泄露源目录，跳过 audio / 缺失附件。
 - 导入 `attachments/` 文件恢复测试。
@@ -162,6 +163,7 @@
 - [x] OpenAI 兼容 STT 网络真机 smoke：Pixel 8 通过复用当前 `openai_chat` 渠道调用 multipart `/v1/audio/transcriptions`、ready sidecar、净化后聊天请求和 SSE 回复闭环；详见 `docs/mobile-stt-network-smoke-2026-07-06.md`。
 - [x] 真机录音按钮 smoke：Pixel 8 通过聊天页麦克风按钮、Android 原生录音、audio 附件归档、STT fallback、ready sidecar、净化后聊天请求和 SSE 回复闭环；详见 `docs/mobile-voice-recording-smoke-2026-07-06.md`。
 - [x] OpenAI 兼容 TTS 网络真机 smoke：Pixel 8 通过 assistant 播报按钮、TTS JSON 请求、临时音频写入、播放接口调用、停止播报和 UI 状态回退闭环；详见 `docs/mobile-tts-network-smoke-2026-07-06.md`。
+- [x] 原生音频播放通道真机 smoke：Pixel 8 通过应用私有目录 WAV、Android `MediaPlayer`、停止事件回传和无错误事件闭环；详见 `docs/mobile-native-audio-player-smoke-2026-07-06.md`。
 - [x] iOS 系统 Speech 原生识别兜底：在线 STT 失败或返回空结果后，通过 `simichat/native_speech_to_text` 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内录音；权限说明、路径边界和 MethodChannel 错误映射已测试。
 - [x] 附件导出复制非语音原文件到 `attachments/`，并支持安全导入恢复文件和 SQLite 附件元数据。
 - [x] OpenAI 兼容 TTS 语音播报：assistant 回复一键播报、临时 mp3、Android / iOS 原生播放通道、TTS API Key 本地加密配置。
