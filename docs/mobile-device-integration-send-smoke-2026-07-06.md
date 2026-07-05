@@ -173,7 +173,81 @@ devicectl 518.33
 iPhone13 iOS 26.5 23F77
 ```
 
-结论更新：iPhone13 当前问题不是 `integration_test` 测试体、不是设备内 mock 服务、也不是旧 Runner 进程本身；更接近本机 Flutter→Xcode debug session 启动链路问题。后续优先验证 Xcode 自动化权限 / Xcode GUI `Product > Run` / DerivedData 清理 / `xcodebuild test` 或 XCUITest 替代路径。
+结论更新：iPhone13 当前问题不是 `integration_test` 测试体、不是设备内 mock 服务、也不是旧 Runner 进程本身；当时现象更接近本机 Flutter→Xcode debug session 启动链路问题。后续优先验证 Xcode 自动化权限 / Xcode GUI `Product > Run` / DerivedData 清理 / `xcodebuild test` 或 XCUITest 替代路径。
+
+### 进一步定位：直接 `xcodebuild` 与设备锁屏边界（2026-07-06 04:01–04:04）
+
+为判断 `CONFIGURATION_BUILD_DIR` 超时是否来自项目构建配置，继续在同一 iPhone13 上绕过 Flutter CLI，直接执行 Xcode 构建。命令内仍临时追加 `sqlite3.source=system` hook，结束后恢复 `pubspec.yaml` / `pubspec.lock`，正式文件不保留 hook。
+
+关键命令：
+
+```bash
+xcodebuild \
+  -workspace ios/Runner.xcworkspace \
+  -scheme Runner \
+  -configuration Debug \
+  -destination 'id=00008110-0016349A3A20A01E' \
+  -showBuildSettings
+
+xcodebuild \
+  -workspace ios/Runner.xcworkspace \
+  -scheme Runner \
+  -configuration Debug \
+  -destination 'id=00008110-0016349A3A20A01E' \
+  build
+```
+
+`showBuildSettings` 可正常产出构建目录：
+
+```text
+BUILT_PRODUCTS_DIR = /Users/sanbo/Library/Developer/Xcode/DerivedData/Runner-edfmvbaktobcznbgqfxmjxwlhuce/Build/Products/Debug-iphoneos
+CONFIGURATION_BUILD_DIR = /Users/sanbo/Library/Developer/Xcode/DerivedData/Runner-edfmvbaktobcznbgqfxmjxwlhuce/Build/Products/Debug-iphoneos
+TARGET_BUILD_DIR = /Users/sanbo/Library/Developer/Xcode/DerivedData/Runner-edfmvbaktobcznbgqfxmjxwlhuce/Build/Products/Debug-iphoneos
+```
+
+直接构建结果：
+
+```text
+Project /Users/sanbo/code/simichat built and packaged successfully.
+** BUILD SUCCEEDED **
+```
+
+随后使用该 Debug 产物做不卸载、不清数据的覆盖安装：
+
+```bash
+xcrun devicectl device install app \
+  --device 00008110-0016349A3A20A01E \
+  /Users/sanbo/Library/Developer/Xcode/DerivedData/Runner-edfmvbaktobcznbgqfxmjxwlhuce/Build/Products/Debug-iphoneos/Runner.app
+```
+
+安装成功：
+
+```text
+App installed:
+• bundleID: top.simitalk.aichat
+• installationURL: file:///private/var/containers/Bundle/Application/489769C9-148D-4122-9A50-23A508DE4D38/Runner.app/
+• databaseSequenceNumber: 4208
+```
+
+但直接 launch 被设备当前锁屏状态拒绝：
+
+```text
+ERROR: The application failed to launch. (com.apple.dt.CoreDeviceError error 10002)
+BSErrorCodeDescription = RequestDenied
+NSLocalizedFailureReason = The request was denied by service delegate (SBMainWorkspace) for reason: Locked ("Unable to launch top.simitalk.aichat because the device was not, or could not be, unlocked").
+FBSOpenApplicationErrorDomain error 7
+BSErrorCodeDescription = Locked
+```
+
+同一时间 `xcrun devicectl device info lockState` 只显示 `passcodeRequired: true` 与 `unlockedSinceBoot: true`，不足以证明设备“当前已解锁”；`process launch` 的 JSON / stderr 明确给出当前 launch 阶段的 `Locked` 拒绝原因。
+
+结论更新：
+
+- 项目 iOS Debug 构建配置可正常解析 `CONFIGURATION_BUILD_DIR`。
+- 直接 `xcodebuild build` 成功，说明当前不是项目无法 Debug 构建或签名失败。
+- 同一 Debug 产物可通过 `devicectl install app` 覆盖安装到 `top.simitalk.aichat`，未执行卸载或清数据。
+- 当前无法继续 iPhone13 集成发送 smoke 的直接阻塞变为：设备当前锁屏 / 无法被自动化解锁，SpringBoard 拒绝 launch。
+- 需要在 iPhone13 物理解锁并保持前台可启动后，优先复跑 `devicectl process launch` 与 `./scripts/smoke_device_integration_send.sh 00008110-0016349A3A20A01E`，再判断 Flutter→Xcode debug session 是否仍有独立问题。
 
 ## 验证与边界
 
@@ -184,9 +258,12 @@ iPhone13 iOS 26.5 23F77
 - Pixel 8 真机通过设备内本地 mock 完成 UI→发送→SSE→DB→UI 闭环。
 - 正式 `pubspec.yaml` 不保留临时 sqlite3 hook。
 - `flutter --no-version-check analyze` 通过。
+- iPhone13 直接 `xcodebuild -showBuildSettings` 可正常产出 `CONFIGURATION_BUILD_DIR`，直接 `xcodebuild build` 成功。
+- iPhone13 同一 Debug `Runner.app` 可通过 `devicectl install app` 覆盖安装到 `top.simitalk.aichat`，未卸载、未清数据。
+- iPhone13 当前 `devicectl process launch` 被 SpringBoard 以 `RequestDenied` / `Locked` 拒绝，需设备物理解锁后继续复跑。
 
 本轮未完成：
 
-- iPhone13 真机发送链路仍因 Xcode debug session `CONFIGURATION_BUILD_DIR` 超时而未跑到测试体；普通 `flutter run --debug` 也复现同层错误。
+- iPhone13 真机发送链路仍未跑到测试体；直接 `xcodebuild build` 与 Debug 覆盖安装已成功，但 `devicectl process launch` 被当前设备锁屏状态拒绝，需要设备物理解锁后复跑。
 - 未覆盖停止、重试、模型切换；这些已有 Pixel 8 手工真机 smoke 记录。
 - 未覆盖真实外部模型 API。
