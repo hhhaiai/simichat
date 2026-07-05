@@ -15,8 +15,8 @@ if [[ ! -f "$TEST_TARGET" ]]; then
   exit 1
 fi
 
-PUBSPEC_BACKUP="$(mktemp /tmp/simichat-pubspec.XXXXXX.yaml)"
-PUBSPEC_LOCK_BACKUP="$(mktemp /tmp/simichat-pubspec-lock.XXXXXX.lock)"
+PUBSPEC_BACKUP="$(mktemp /tmp/simichat-pubspec.XXXXXX)"
+PUBSPEC_LOCK_BACKUP="$(mktemp /tmp/simichat-pubspec-lock.XXXXXX)"
 cp pubspec.yaml "$PUBSPEC_BACKUP"
 cp pubspec.lock "$PUBSPEC_LOCK_BACKUP"
 cleanup() {
