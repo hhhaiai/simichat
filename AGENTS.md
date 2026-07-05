@@ -34,11 +34,11 @@
 8. **敏感数据规则**：不提交接口密钥、本地数据库、用户聊天记录、用户语音、用户图片、Markdown 原始对话档案。
 9. **账本维护规则**：新需求先登记到“当前待办”或阶段规划；完成后同步更新“已完成能力”“进度记录”和对应 `docs/` 实现文档，并写清验证结果。
 
-### 0.2 当前进度总览（2026-07-02）
+### 0.2 当前进度总览（2026-07-06）
 
 | 方向 | 当前状态 | 下一步重点 |
 | --- | --- | --- |
-| 移动端 MVP | 基础聊天、会话列表、模型切换、本地 SQLite、Markdown 原始档案、移动端应用名 `SimiAIChat`、包名 `top.simitalk.aichat`、主题与 90%–120% 全局字体、移动端自动化 smoke 已落地 | 真机主链路：发送、停止、重试、模型切换、历史搜索、设置页、长会话 |
+| 移动端 MVP | 基础聊天、会话列表、模型切换、本地 SQLite、Markdown 原始档案、移动端应用名 `SimiAIChat`、包名 `top.simitalk.aichat`、主题与 90%–120% 全局字体、移动端自动化 smoke 已落地，Pixel 8 真实发送 / 重试 / 停止 / 历史搜索 / 模型切换已补证 | 真机主链路：iOS 发送链路、设置页、长会话、语音、网络切换、后台恢复 |
 | 多模型接入 | 已支持 OpenAI Chat / OpenAI Responses / Claude / Gemini / Ollama 协议适配；模型厂商预设、批量 JSON 导入、连通性测试、测试历史、失败重试、一键测试并剔除不可用模型、渠道 / 模型删除引用清理已落地 | 继续扩展国产 / 免费模型来源引导和更完整的协议兼容性测试 |
 | 个人 OpenAI Relay | 已支持 Bearer 鉴权、`/health`、`/v1/health`、`/v1/models`、非流式 / 流式 `/v1/chat/completions`、非流式 buffered `/v1/responses`、CORS 预检、审计、用量统计、并发保护、局域网二次确认、路由策略、多模态安全降级、图片 data URL / 远端图片安全透传、Vision 路由 | 真机长时间运行、更多外部客户端兼容性、后台网络变化恢复 |
 | 记忆与 Dreaming / 上下文 | Key Points、本地语义召回、消息语义索引、本地语义搜索开关、Dreaming 前台到期整理 / 通知、用户画像管理 / 历史 / 待确认变更、本地反思机制 v1、反思短期提示注入 v1、反思历史 v1、模型窗口预算裁剪、动态压缩阈值、上下文超限一次严格裁剪重试已落地 | 模型 embedding / ANN、真正后台调度、模型驱动反思、真机长会话基线 |
@@ -46,7 +46,7 @@
 | 数据管理与同步 | `.tar.gz` 导出、系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步 / 附件 / 冲突 / stale 清理已落地 | Notion / 语雀 / 思源同步、云备份、Obsidian 双向同步 |
 | 数字孪生 | 本地用户画像 v1 已落地，可查看、编辑、删除、恢复历史、逐项采纳 / 拒绝 Dreaming 画像变更 | 声音 / 图像 / 表情处理、镜像数字人生成、代理行为授权与审计 |
 | 对话页 Markdown / 字体 | 扩展 Markdown 渲染 v2 已落地：用户输入和 AI 输出统一 Markdown 渲染；行内 code 不再误渲染为代码块；支持 GitHub Web 扩展、旧式 / Obsidian / HTML 图片、行内 / 块级公式、HTML audio/video 安全卡片、HTML details、旧式 details、多种 Mermaid 与 Draw.io / mxGraph 新老格式；移动端正文默认 15sp，缩放范围 90%–120% | 真机长文档滚动、复杂表格 / 长代码 / 离线 Mermaid 体验继续优化 |
-| 最新验证 | 2026-07-06 本轮继续补 Pixel 8 真机主链路：通过本机 OpenAI 兼容 mock 服务 + `adb reverse` + debug 私有 DB seed，验证默认模型展示、真实发送、SSE 回复落库 / UI 展示、Reflection 短期提示进入 system prompt、assistant 重试、慢流停止断开上游并保留部分回复、历史搜索按 `smoke` 过滤；同日 `flutter --no-version-check analyze` 通过，命令内临时 `sqlite3.source=system` 后全量 `flutter --no-version-check test --no-pub --no-test-assets` 330 个测试通过；Pixel 8 Dreaming/Reflection 72 条长会话基线已完成，iPhone13 release 覆盖安装成功且进程可见。 | 模型切换、iPhone 真机发送链路、复杂 Markdown 真机滚动、语音网络等交互仍待补 |
+| 最新验证 | 2026-07-06 本轮继续补 Pixel 8 真机主链路：通过本机 OpenAI 兼容 mock 服务 + `adb reverse` + debug 私有 DB seed，验证默认模型展示、真实发送、SSE 回复落库 / UI 展示、Reflection 短期提示进入 system prompt、assistant 重试、慢流停止断开上游并保留部分回复、历史搜索按 `smoke` 过滤；同日继续验证顶部模型菜单 `simichat-mock-a → simichat-mock-b` 切换、`model_switch` 时间线落库、切换后真实发送使用 B 模型；`flutter --no-version-check analyze` 通过，命令内临时 `sqlite3.source=system` 后全量 `flutter --no-version-check test --no-pub --no-test-assets` 330 个测试通过；Pixel 8 Dreaming/Reflection 72 条长会话基线已完成，iPhone13 release 覆盖安装成功且进程可见。 | iPhone 真机发送链路、复杂 Markdown 真机滚动、语音网络等交互仍待补 |
 
 
 ---
@@ -449,6 +449,7 @@
 | 2026-07-06 | 当前基线真机覆盖安装 | 提交 `d67a6f4` 已在 Pixel 8 通过 `adb install -r` 覆盖安装并启动，iPhone13 通过 `devicectl` release 覆盖安装成功且 Runner 进程可见；本轮 Dreaming 修复后 debug 包再次在 Pixel 8 `adb install -r` 覆盖安装成功，`firstInstallTime=2026-07-02 23:29:09` 保持不变，`lastUpdateTime=2026-07-06 02:36:21`，`dataDir=/data/user/0/top.simitalk.aichat`，未卸载、未清数据 | 已完成 |
 | 2026-07-06 | Pixel 8 长会话 Dreaming / Reflection 真机验证 | 使用 debug `run-as` 安全种入专用 72 条长会话并保留 DB 备份；真机可显示第 69–72 轮；修复弹窗关闭后运行 Dreaming 使用已销毁 `WidgetRef` 的问题并新增延迟 Dreaming widget 回归；修复包覆盖安装后手动 Dreaming 生成 2026-07-06 日报（1 个会话、72 条消息、36/36 用户 / 助手消息、耗时 101 ms），生成待确认画像变更和 Reflection（5 条结论、4 个行动项、历史 1 次），设置页短期提示预览可见 | 已完成 |
 | 2026-07-06 | Pixel 8 真实发送 / 重试 / 停止 / 搜索真机验证 | 使用本机 OpenAI 兼容 mock 服务和 `adb reverse`，通过 debug `run-as` 安全种入专用 mock 渠道、模型和会话；真机默认模型可见，真实发送触发 `/v1/chat/completions` SSE 请求并落库 assistant 回复，Reflection 短期提示进入 system prompt；重试后 mock 请求数从 1 增至 2；慢流停止后上游记录 `broken_pipe=true` 且 assistant 只保留前 2 个 chunk；历史搜索 `smoke` 可过滤到专用会话并排除长会话 | 已完成 |
+| 2026-07-06 | Pixel 8 模型切换 / 切换后发送真机验证 | 复用本机 OpenAI 兼容 mock 服务和同一 smoke 会话，安全种入 `simichat-mock-a` / `simichat-mock-b` 两个模型；真机顶部菜单可从 A 切换到 B，`sessions.default_channel_model_id` 更新为 B，时间线新增 `model_switch` system 消息；切换后真实发送触发 `/v1/chat/completions` SSE 请求，mock 日志模型为 `simichat-mock-b`，assistant 回复 `MOCK-B reply 20260706` 以 B 模型落库并在 UI 显示 | 已完成 |
 
 ### 8.3 最新验证基线
 
@@ -456,6 +457,7 @@
 | --- | --- | --- |
 | 2026-07-06 | Dreaming/Reflection 真机回归与全量测试：`flutter --no-version-check analyze`、命令内临时 `sqlite3.source=system` 后运行 `flutter --no-version-check test --no-pub --no-test-assets`、`flutter --no-version-check test --no-pub --no-test-assets test/shared/settings_page_dreaming_test.dart -r expanded`、`flutter --no-version-check build apk --debug --no-pub`、`adb -s 37101FDJH0077P install -r ...`、Pixel 8 UI dump / screenshot / SharedPreferences / logcat 检查 | 静态检查无问题；局部 Dreaming 设置页 3 个 widget 测试通过，新增延迟 Dreaming 回归可复现并防止弹窗关闭后使用已销毁 `WidgetRef`；全量 330 个测试通过；正式 `pubspec.yaml` 未保留临时 sqlite3 hook；Pixel 8 修复包覆盖安装成功且不清数据，72 条长会话可见，Dreaming 生成 72 条消息日报，Reflection 生成 5 条结论 / 4 个行动项 / 1 次历史，短期提示预览可见；logcat 未再出现 disposed ref 异常 |
 | 2026-07-06 | Pixel 8 真实发送 smoke：本机 mock OpenAI 服务、`adb reverse tcp:18080 tcp:18080`、debug `run-as` DB seed、UI 截图、SQLite 消息查询、mock 服务请求日志、历史搜索 UI dump | 真机默认模型 `Pixel8 local Mock OpenAI / simichat-mock` 可见；真实发送后 DB 有 user + assistant，UI 显示 `Pixel8 mock reply 20260706` 和 `147 tokens · 772ms`；mock 服务收到 `/v1/chat/completions`、`stream=true`、模型 `simichat-mock`，且 system prompt 包含本地 Reflection 短期提示；点击重试后 assistant 回复增至 2 条、请求数增至 2；慢流停止后 partial assistant 保持 27 字符，mock 记录 `broken_pipe=true`；历史搜索 `smoke` 命中 smoke 会话并排除长会话 |
+| 2026-07-06 | Pixel 8 模型切换 smoke：本机 mock OpenAI 服务、`adb reverse tcp:18080 tcp:18080`、debug `run-as` DB seed、UI 菜单 / 截图、SQLite 会话与消息查询、mock 服务请求日志 | 顶部模型从 `Pixel8 local Mock OpenAI / simichat-mock-a` 切换为 `simichat-mock-b`；菜单列出 `simichat-mock`、`simichat-mock-a`、`simichat-mock-b`；DB 中 `sessions.default_channel_model_id=device-mock-model-b-20260706`，新增 1 条 `message_type='model_switch'` system 记录；切换后发送 `switch test20260706`，mock 收到 `model=simichat-mock-b`、`stream=true`、`system_has_reflection=true`，UI 显示 `MOCK-B reply 20260706` 和 `29 tokens · 461ms`，assistant 以 B 模型落库 |
 | 2026-07-05 | 无限上下文预算控制回归：`flutter test test/core/model_context_budget_test.dart test/core/context_builder_test.dart test/shared/chat_provider_context_limit_test.dart test/shared/chat_provider_audio_test.dart`、`flutter analyze`、`flutter test` | 局部 18 个测试通过；覆盖模型预算推断、未知模型 8K 保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值、预算模式超过旧 20 条上限、小预算裁剪但保留最新用户问题、上下文超限错误识别 / 用户提示、语音转写链路未回退；静态检查无问题；全量 318 个测试通过 |
 | 2026-07-03 | Markdown v2 与 iOS 系统 Speech 兜底回归：`flutter test test/shared/markdown_rendering_test.dart`、`flutter analyze`、`flutter test`、`git diff --check`、`flutter build ios --release` | Markdown 局部 4 个测试通过，全量 305 个测试通过；行内 code 保持行内，fenced code 仍为代码块；用户输入 / AI 输出统一 Markdown 渲染；旧式 / HTML 图片、Mermaid / Draw.io 新老格式均有回归；fallback 引擎可在在线 STT 失败或空结果后继续尝试 iOS 原生 Speech；iOS release 构建成功；people iPhone 当前 `unavailable`，覆盖安装被设备离线状态阻塞 |
 | 2026-06-27 | OpenAI Relay Responses API 局部测试与 benchmark：`flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` | 23 个测试通过；覆盖 `/v1/responses` buffered 输出、多模态 input 解析、`stream=true` 安全拒绝、CORS 预检；局部 benchmark 中 `/v1/responses` 100 次平均约 3.14 ms |
@@ -486,7 +488,7 @@
 
 | 优先级 | 待办 | 说明 |
 | --- | --- | --- |
-| P0 | 移动端真机主链路冒烟 | 已完成 Pixel 8 覆盖安装与启动、专用 72 条长会话显示、手动 Dreaming / Reflection 弹窗和短期提示预览、mock OpenAI 真实发送 / SSE 回复 / 重试 / 停止慢流 / 历史搜索验证，iPhone13 release 覆盖安装与进程可见性；仍需真机模型切换、iOS 发送链路、语音、网络切换、后台恢复等交互验证 |
+| P0 | 移动端真机主链路冒烟 | 已完成 Pixel 8 覆盖安装与启动、专用 72 条长会话显示、手动 Dreaming / Reflection 弹窗和短期提示预览、mock OpenAI 真实发送 / SSE 回复 / 重试 / 停止慢流 / 历史搜索 / 模型切换与切换后发送验证，iPhone13 release 覆盖安装与进程可见性；仍需 iOS 发送链路、语音、网络切换、后台恢复等交互验证 |
 | P1 | Dreaming 系统后台调度 | 当前为前台到期整理 + 通知；需补系统后台限制下的稳定方案 |
 | P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩、本地记忆、本地反思 v1、反思历史 v1、可关闭的反思短期提示注入和 Pixel 8 72 条 seed 长会话 Dreaming/Reflection 基线；仍需真实模型长会话压缩质量评估、模型驱动反思、模型驱动画像增量分析 |
 | P1 | OpenAI Relay 真机 / 长时间运行 | 当前本地测试、构建和 benchmark 已过；仍需真实移动端网络、局域网、客户端兼容性验证 |
@@ -528,6 +530,7 @@
 | `docs/mobile-device-install-smoke-2026-07-06.md` | 当前提交 Android / iOS 真机覆盖安装、启动 / 进程可见性证据和后续真机长会话待测清单 |
 | `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md` | Pixel 8 72 条长会话、Dreaming、Reflection、短期提示预览真机验证和 disposed ref 回归记录 |
 | `docs/mobile-real-send-smoke-2026-07-06.md` | Pixel 8 本地 mock OpenAI 真实发送、SSE、重试、停止慢流和历史搜索真机验证记录 |
+| `docs/mobile-model-switch-smoke-2026-07-06.md` | Pixel 8 顶部模型菜单切换、`model_switch` 落库和切换后真实发送真机验证记录 |
 | `docs/requirements.md` | 产品需求总纲、核心模块、阶段规划、页面需求、隐私安全原则 |
 | `docs/database.md` | SQLite / drift 表结构、DAO 职责 |
 | `docs/ai-protocols.md` | OpenAI / Claude / Gemini / Ollama 等协议适配 |
