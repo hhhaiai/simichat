@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:ai_chat_app/core/database/app_database.dart';
+import 'package:ai_chat_app/core/memory/dreaming_service.dart';
 import 'package:ai_chat_app/core/memory/reflection_service.dart';
 import 'package:ai_chat_app/core/memory/user_profile.dart';
 import 'package:ai_chat_app/features/settings/settings_page.dart';
@@ -71,6 +74,50 @@ void main() {
     expect(proposals.single.diff.hasChanges, isTrue);
   });
 
+  testWidgets(
+    'dreaming dialog run survives closing route before digest returns',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final digestGate = Completer<void>();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            dreamingServiceProvider.overrideWithValue(
+              _DelayedDreamingService(db: db, gate: digestGate),
+            ),
+          ],
+          child: const MaterialApp(home: SettingsPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('Dreaming 夜间整理'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Dreaming 夜间整理'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('运行今日整理'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('运行今日整理'), findsNothing);
+
+      digestGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    },
+  );
+
   testWidgets('reflection dialog previews short prompt injection', (
     tester,
   ) async {
@@ -120,4 +167,26 @@ void main() {
     expect(find.text('下一轮短期提示预览'), findsOneWidget);
     expect(find.textContaining('下次先推进长会话质量基线'), findsWidgets);
   });
+}
+
+class _DelayedDreamingService extends DreamingService {
+  _DelayedDreamingService({required AppDatabase db, required this.gate})
+    : super(sessionDao: db.sessionDao, messageDao: db.messageDao);
+
+  final Completer<void> gate;
+
+  @override
+  Future<DreamingDigest> runDailyDigest({
+    DateTime? day,
+    int maxMessages = 5000,
+    int maxMemoryCandidates = 40,
+  }) async {
+    await gate.future;
+    final now = DateTime(2026, 7, 6, 22);
+    return DreamingDigest.empty(
+      day: day ?? now,
+      generatedAt: now,
+      elapsedMs: 1,
+    );
+  }
 }

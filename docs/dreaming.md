@@ -96,6 +96,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - 命中 API Key、Authorization、password、secret、token、密钥、密码、常见密钥字面量的内容不生成 highlight / 记忆候选。
 - 报告只保存在本机，不写日志、不外发。
 - 反思报告和短期提示复用画像安全过滤，命中 API Key、Authorization、Bearer、password、secret、token、密钥、密码、常见密钥字面量时不写入报告或提示。
+- 设置页弹窗关闭后手动运行 Dreaming 必须使用页面级 `WidgetRef`，不能继续使用弹窗 `Consumer` 的 `WidgetRef`；2026-07-06 Pixel 8 真机曾复现该 disposed ref 异常，已补延迟 Dreaming widget 回归。
 
 
 ## 6. 前台到期系统通知 v1
@@ -136,6 +137,7 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - 反思短期提示合并 / 关闭开关测试。
 - 反思历史持久化、同日去重和上限测试。
 - 反思报告敏感内容过滤测试。
+- Dreaming 弹窗关闭后 digest 才返回的异步时序测试。
 - 通知 ID 稳定性、命名空间隔离和合法范围测试。
 - 后台任务耗时与电量影响评估。
 - 1000 条消息本地整理性能基线。
@@ -158,3 +160,4 @@ Dreaming 是 SimiChat 的长期智能核心：在用户闲时自动整理当天�
 - [x] 接入待确认画像变更详情审阅 v1：提案超过 4 条差异时可查看全部待确认项，并对详情中的后续差异逐项处理。
 - [ ] 接入模型驱动的画像增量分析。
 - [x] 接入本地反思机制 v1：Dreaming 后生成回应质量、上下文、记忆画像和任务推进行动项，设置页可查看 / 手动运行，可查看历史保留次数和下一轮短期提示预览，并可控制是否作为下一轮短期提示。
+- [x] Pixel 8 真机长会话 Dreaming / Reflection 验证：72 条 seed 长会话可见，手动 Dreaming 生成 2026-07-06 日报和待确认画像变更，Reflection 生成 5 条结论、4 个行动项、1 次历史，短期提示预览可见；详见 `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md`。

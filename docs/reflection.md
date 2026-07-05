@@ -90,6 +90,7 @@ v1 是本地启发式反思，不调用远端模型，不上传云端，不读�
   - 长会话质量基线：长会话 + 用户追问 + 待确认画像 + 画像任务同时出现时，报告覆盖回应质量 / 上下文 / 任务推进 / 用户画像；短期提示保留长会话风险和任务推进，完整报告保留画像采纳动作。
 - `test/shared/settings_page_dreaming_test.dart`
   - 设置页反思弹窗展示下一轮短期提示预览。
+  - Dreaming 弹窗关闭后 digest 才返回时仍能使用页面级 `WidgetRef` 保存报告，避免真机上使用已销毁弹窗 `WidgetRef`。
 - `test/shared/reflection_provider_test.dart`
   - 最近反思报告持久化 / 清空。
   - 短期提示注入开关持久化。
@@ -106,8 +107,9 @@ v1 是本地启发式反思，不调用远端模型，不上传云端，不读�
 2026-07-06 验证结果：
 
 - `flutter --no-version-check analyze`：通过。
-- 局部测试：当前反思 / 上下文相关 24 个通过。
-- 全量 `flutter --no-version-check test --no-pub --no-test-assets`：329 个测试通过。
+- 局部 Dreaming 设置页测试：`flutter --no-version-check test --no-pub --no-test-assets test/shared/settings_page_dreaming_test.dart -r expanded`，3 个通过。
+- 全量 `flutter --no-version-check test --no-pub --no-test-assets`：330 个测试通过。
+- Pixel 8 真机验证：修复后 debug 包 `adb install -r` 覆盖安装且不清数据；72 条 seed 长会话可见；手动 Dreaming 生成 2026-07-06 日报（72 条消息）；Reflection 生成 5 条结论、4 个行动项、1 次历史；设置页短期提示预览可展开查看。详见 `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md`。
 
 说明：当前本机无法解析 / 连接 GitHub 下载 `sqlite3` native asset，直接运行 `flutter test` 会被 sqlite3 hook 下载阻塞；上述测试用命令内临时 `sqlite3.source=system` 使用 macOS 系统 SQLite 完成，命令结束后已还原正式 `pubspec.yaml`。
 
@@ -117,4 +119,5 @@ v1 是本地启发式反思，不调用远端模型，不上传云端，不读�
 - [x] 反思结果参与系统提示词 v1：把少量高优先级结论和行动项转为下一轮对话的短期提示，默认开启，可在设置页关闭，可解释且可被预算裁剪。
 - [x] 反思历史 v1：保留最近 20 次反思版本，同一 Dreaming 日期重复运行会替换旧报告，设置页展示历史保留次数。
 - [x] 长会话启发式质量基线：单元测试覆盖长会话、用户追问、待确认画像和画像任务同时出现时的报告与短期提示优先级。
-- [ ] 真机长会话评估：结合长会话上下文压缩质量、用户追问率和停止 / 重试行为继续优化反思规则。
+- [x] Pixel 8 seed 长会话 Dreaming / Reflection 基线：72 条消息、5 条结论、4 个行动项和短期提示预览已真机验证。
+- [ ] 真实模型长会话质量评估：结合上下文压缩质量、用户追问率和停止 / 重试行为继续优化反思规则。

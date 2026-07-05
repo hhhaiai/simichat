@@ -46,7 +46,7 @@
 | 数据管理与同步 | `.tar.gz` 导出、系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步 / 附件 / 冲突 / stale 清理已落地 | Notion / 语雀 / 思源同步、云备份、Obsidian 双向同步 |
 | 数字孪生 | 本地用户画像 v1 已落地，可查看、编辑、删除、恢复历史、逐项采纳 / 拒绝 Dreaming 画像变更 | 声音 / 图像 / 表情处理、镜像数字人生成、代理行为授权与审计 |
 | 对话页 Markdown / 字体 | 扩展 Markdown 渲染 v2 已落地：用户输入和 AI 输出统一 Markdown 渲染；行内 code 不再误渲染为代码块；支持 GitHub Web 扩展、旧式 / Obsidian / HTML 图片、行内 / 块级公式、HTML audio/video 安全卡片、HTML details、旧式 details、多种 Mermaid 与 Draw.io / mxGraph 新老格式；移动端正文默认 15sp，缩放范围 90%–120% | 真机长文档滚动、复杂表格 / 长代码 / 离线 Mermaid 体验继续优化 |
-| 最新验证 | 2026-07-06 本轮 `flutter --no-version-check analyze` 通过；使用命令内临时 `sqlite3.source=system` 绕过本机 GitHub sqlite3 native asset 下载限制后，`flutter --no-version-check test --no-pub --no-test-assets` 全量 329 个测试通过；本地反思 / 短期提示 / 历史 / 长会话质量基线 / 短期提示预览局部 24 个测试通过；当前提交 `d67a6f4` 已在 Pixel 8 覆盖安装并启动，在 iPhone13 release 覆盖安装成功且进程可见。2026-07-05 上下文预算回归和 base64 语音局部测试通过 | 长会话 / 复杂 Markdown 真机滚动 / 语音网络等交互仍待补 |
+| 最新验证 | 2026-07-06 本轮修复 Dreaming 弹窗关闭后异步运行继续使用已销毁 `WidgetRef` 的真机问题；`flutter --no-version-check analyze` 通过；使用命令内临时 `sqlite3.source=system` 绕过本机 GitHub sqlite3 native asset 下载限制后，`flutter --no-version-check test --no-pub --no-test-assets` 全量 330 个测试通过；Pixel 8 修复后 debug 包再次 `adb install -r` 覆盖安装成功且未清数据，72 条 seed 长会话可见，手动 Dreaming 生成 2026-07-06 日报（72 条消息），Reflection 生成 5 条结论 / 4 个行动项 / 1 次历史，短期提示预览真机可见；iPhone13 release 覆盖安装成功且进程可见。 | 真实发送 / 停止 / 重试 / 模型切换 / 历史搜索、复杂 Markdown 真机滚动、语音网络等交互仍待补 |
 
 
 ---
@@ -446,13 +446,14 @@
 | 2026-07-03 | iOS 系统 Speech 原生识别兜底 | 在 STT 引擎链路增加 fallback：显式 STT 配置、当前 OpenAI 兼容聊天渠道音频接口均失败 / 返回空时，iOS 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内录音；新增 `NSSpeechRecognitionUsageDescription` 权限说明、Dart MethodChannel 引擎和 fallback 引擎测试 | 已完成 |
 | 2026-07-05 | 无限上下文预算控制 | 聊天发送前按 `protocol + modelName` 推断模型窗口，预留输出 token 后按 `maxInputTokens` 裁剪 system / memory / skills / MCP 工具说明和历史消息；预算模式不再固定最近 20 条，可在窗口内尽量保留更多历史，优先保留最新用户问题；上下文超限流式错误会严格裁剪重试一次，失败时保留可操作提示 | 已完成 |
 | 2026-07-06 | 本地反思机制 | Dreaming 后基于本地日报、用户画像和待确认画像变更生成回应质量、上下文、长期记忆、用户画像和任务推进的可解释反思报告；设置页可查看 / 手动运行，结构化备份包含 `assistant_reflection_v1`、`assistant_reflection_history_v1` 与 `assistant_reflection_prompt_enabled_v1`；复核时修正弹窗关闭后运行反思使用父级 `WidgetRef`，并新增可关闭的反思短期提示注入、最近 20 次反思历史、长会话质量基线和短期提示预览，短期提示优先保留可直接改善下一轮回复的任务推进项 | 已完成 |
-| 2026-07-06 | 当前提交真机覆盖安装 | 当前提交 `d67a6f4` 已在 Pixel 8 通过 `adb install -r` 覆盖安装并启动，包名 `top.simitalk.aichat`、pid `15642`、`dataDir=/data/user/0/top.simitalk.aichat`；iPhone13 通过 `devicectl` release 覆盖安装成功，`SimiAIChat top.simitalk.aichat 1.0.0` 可见，Runner 进程 `78854` 可见；iOS launch 命令未正常返回，因此只记为安装成功 + 进程可见 | 已完成 |
+| 2026-07-06 | 当前基线真机覆盖安装 | 提交 `d67a6f4` 已在 Pixel 8 通过 `adb install -r` 覆盖安装并启动，iPhone13 通过 `devicectl` release 覆盖安装成功且 Runner 进程可见；本轮 Dreaming 修复后 debug 包再次在 Pixel 8 `adb install -r` 覆盖安装成功，`firstInstallTime=2026-07-02 23:29:09` 保持不变，`lastUpdateTime=2026-07-06 02:36:21`，`dataDir=/data/user/0/top.simitalk.aichat`，未卸载、未清数据 | 已完成 |
+| 2026-07-06 | Pixel 8 长会话 Dreaming / Reflection 真机验证 | 使用 debug `run-as` 安全种入专用 72 条长会话并保留 DB 备份；真机可显示第 69–72 轮；修复弹窗关闭后运行 Dreaming 使用已销毁 `WidgetRef` 的问题并新增延迟 Dreaming widget 回归；修复包覆盖安装后手动 Dreaming 生成 2026-07-06 日报（1 个会话、72 条消息、36/36 用户 / 助手消息、耗时 101 ms），生成待确认画像变更和 Reflection（5 条结论、4 个行动项、历史 1 次），设置页短期提示预览可见 | 已完成 |
 
 ### 8.3 最新验证基线
 
 | 日期 | 验证项 | 结果 |
 | --- | --- | --- |
-| 2026-07-06 | 当前提交回归与真机覆盖安装：`git diff --check`、`flutter --no-version-check analyze`、命令内临时 `sqlite3.source=system` 后运行 `flutter --no-version-check test --no-pub --no-test-assets`、`flutter --no-version-check build apk --debug`、`adb -s 37101FDJH0077P install -r ...`、`flutter --no-version-check build ios --release`、`xcrun devicectl device install app --device 00008110-0016349A3A20A01E ...` | 静态检查无问题；局部 24 个测试通过；全量 329 个测试通过；正式 `pubspec.yaml` 未保留临时 sqlite3 hook；Pixel 8 覆盖安装并启动成功，firstInstallTime 保持 `2026-07-02 23:29:09`、lastUpdateTime 更新为 `2026-07-06 02:17:48`；iPhone13 release 覆盖安装成功且 Runner 进程可见，`devicectl process launch` 未正常返回，未声明完整 iOS 交互通过 |
+| 2026-07-06 | Dreaming/Reflection 真机回归与全量测试：`flutter --no-version-check analyze`、命令内临时 `sqlite3.source=system` 后运行 `flutter --no-version-check test --no-pub --no-test-assets`、`flutter --no-version-check test --no-pub --no-test-assets test/shared/settings_page_dreaming_test.dart -r expanded`、`flutter --no-version-check build apk --debug --no-pub`、`adb -s 37101FDJH0077P install -r ...`、Pixel 8 UI dump / screenshot / SharedPreferences / logcat 检查 | 静态检查无问题；局部 Dreaming 设置页 3 个 widget 测试通过，新增延迟 Dreaming 回归可复现并防止弹窗关闭后使用已销毁 `WidgetRef`；全量 330 个测试通过；正式 `pubspec.yaml` 未保留临时 sqlite3 hook；Pixel 8 修复包覆盖安装成功且不清数据，72 条长会话可见，Dreaming 生成 72 条消息日报，Reflection 生成 5 条结论 / 4 个行动项 / 1 次历史，短期提示预览可见；logcat 未再出现 disposed ref 异常 |
 | 2026-07-05 | 无限上下文预算控制回归：`flutter test test/core/model_context_budget_test.dart test/core/context_builder_test.dart test/shared/chat_provider_context_limit_test.dart test/shared/chat_provider_audio_test.dart`、`flutter analyze`、`flutter test` | 局部 18 个测试通过；覆盖模型预算推断、未知模型 8K 保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值、预算模式超过旧 20 条上限、小预算裁剪但保留最新用户问题、上下文超限错误识别 / 用户提示、语音转写链路未回退；静态检查无问题；全量 318 个测试通过 |
 | 2026-07-03 | Markdown v2 与 iOS 系统 Speech 兜底回归：`flutter test test/shared/markdown_rendering_test.dart`、`flutter analyze`、`flutter test`、`git diff --check`、`flutter build ios --release` | Markdown 局部 4 个测试通过，全量 305 个测试通过；行内 code 保持行内，fenced code 仍为代码块；用户输入 / AI 输出统一 Markdown 渲染；旧式 / HTML 图片、Mermaid / Draw.io 新老格式均有回归；fallback 引擎可在在线 STT 失败或空结果后继续尝试 iOS 原生 Speech；iOS release 构建成功；people iPhone 当前 `unavailable`，覆盖安装被设备离线状态阻塞 |
 | 2026-06-27 | OpenAI Relay Responses API 局部测试与 benchmark：`flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` | 23 个测试通过；覆盖 `/v1/responses` buffered 输出、多模态 input 解析、`stream=true` 安全拒绝、CORS 预检；局部 benchmark 中 `/v1/responses` 100 次平均约 3.14 ms |
@@ -483,9 +484,9 @@
 
 | 优先级 | 待办 | 说明 |
 | --- | --- | --- |
-| P0 | 移动端真机主链路冒烟 | 当前提交已完成 Pixel 8 覆盖安装与启动、iPhone13 release 覆盖安装与进程可见性；仍需真实 Android / iOS 设备长会话、发送 / 停止 / 重试、Dreaming / Reflection 弹窗、语音、网络切换、后台恢复等交互验证 |
+| P0 | 移动端真机主链路冒烟 | 已完成 Pixel 8 覆盖安装与启动、专用 72 条长会话显示、手动 Dreaming / Reflection 弹窗和短期提示预览验证，iPhone13 release 覆盖安装与进程可见性；仍需真实 Android / iOS 设备发送 / 停止 / 重试、模型切换、历史搜索、语音、网络切换、后台恢复等交互验证 |
 | P1 | Dreaming 系统后台调度 | 当前为前台到期整理 + 通知；需补系统后台限制下的稳定方案 |
-| P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩、本地记忆、本地反思 v1、反思历史 v1 和可关闭的反思短期提示注入；仍需真机长会话基线、长期压缩质量评估、模型驱动反思、模型驱动画像增量分析 |
+| P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩、本地记忆、本地反思 v1、反思历史 v1、可关闭的反思短期提示注入和 Pixel 8 72 条 seed 长会话 Dreaming/Reflection 基线；仍需真实模型长会话压缩质量评估、模型驱动反思、模型驱动画像增量分析 |
 | P1 | OpenAI Relay 真机 / 长时间运行 | 当前本地测试、构建和 benchmark 已过；仍需真实移动端网络、局域网、客户端兼容性验证 |
 | P2 | 社交平台接入 | 飞书 / Telegram / Discord 优先；微信 / QQ / WhatsApp / Slack 后续梳理授权边界 |
 | P2 | 多源 Skills 市场 | SkillHub 基础已落地；OpenClaw、腾讯等市场仍待接入 |
@@ -523,6 +524,7 @@
 | `docs/media-attachments.md` | 语音、图片、文件附件、归档和多模态输入策略 |
 | `docs/mobile-main-flow-smoke-2026-06-27.md` | 移动端主链路冒烟脚本、自动化结果、真机待测清单 |
 | `docs/mobile-device-install-smoke-2026-07-06.md` | 当前提交 Android / iOS 真机覆盖安装、启动 / 进程可见性证据和后续真机长会话待测清单 |
+| `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md` | Pixel 8 72 条长会话、Dreaming、Reflection、短期提示预览真机验证和 disposed ref 回归记录 |
 | `docs/requirements.md` | 产品需求总纲、核心模块、阶段规划、页面需求、隐私安全原则 |
 | `docs/database.md` | SQLite / drift 表结构、DAO 职责 |
 | `docs/ai-protocols.md` | OpenAI / Claude / Gemini / Ollama 等协议适配 |

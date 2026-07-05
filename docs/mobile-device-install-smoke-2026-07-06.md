@@ -80,4 +80,4 @@ xcrun devicectl device info processes --device 00008110-0016349A3A20A01E
 
 1. 在 Pixel 8 上做真实长会话输入 / 滚动 / 历史搜索 / 设置页反思弹窗检查。
 2. 在 iPhone13 上复核 `devicectl process launch` 卡住原因，必要时用设备侧手动启动或 Xcode Instruments 辅助确认前台状态。
-3. 形成 Dreaming + Reflection 真机质量评估记录：长会话消息数、是否生成 digest、是否生成反思、短期提示是否可预览。
+3. Dreaming + Reflection 真机质量评估已在 Pixel 8 上补充完成：72 条 seed 长会话可见，手动 Dreaming 生成 digest，Reflection 生成报告并展示短期提示预览；详见 `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md`。

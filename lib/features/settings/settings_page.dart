@@ -3611,6 +3611,7 @@ class SettingsPage extends ConsumerWidget {
   }
 
   void _showDreamingDialog(BuildContext context, WidgetRef ref) {
+    final pageRef = ref;
     showDialog(
       context: context,
       builder: (ctx) => Consumer(
@@ -3686,7 +3687,7 @@ class SettingsPage extends ConsumerWidget {
               TextButton(
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _runDreaming(context, ref);
+                  _runDreaming(context, pageRef);
                 },
                 child: const Text('运行今日整理'),
               ),
