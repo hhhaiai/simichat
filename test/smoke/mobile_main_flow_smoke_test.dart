@@ -50,7 +50,7 @@ void main() {
   ) async {
     final db = await pumpMobileApp(tester);
 
-    expect(find.text('AI Chat'), findsWidgets);
+    expect(find.text('SimiAIChat'), findsWidgets);
     expect(find.text('未选择模型'), findsOneWidget);
     expect(await db.sessionDao.getAllSessions(), hasLength(1));
 

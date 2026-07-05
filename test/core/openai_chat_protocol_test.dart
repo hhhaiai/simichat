@@ -1,3 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:ai_chat_app/core/ai/ai_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ai_chat_app/core/ai/openai_chat_protocol.dart';
 
@@ -45,6 +50,68 @@ void main() {
       expect(chunks.length, 2);
       expect(chunks.first.thinking, 'The user is asking me to say hi.');
       expect(chunks.last.content, 'Hi there! 👋 How are you doing today?');
+    });
+
+    test('sends audio attachments as text with full base64 payload', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'simichat_openai_audio_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      });
+      final audio = File('${tempDir.path}/voice.m4a');
+      await audio.writeAsBytes([0x01, 0x02, 0x03, 0x04]);
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seenPayload = Completer<Map<String, dynamic>>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          seenPayload.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+          );
+          await request.response.close();
+        }),
+      );
+
+      final chunks = await OpenAiChatProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}/v1',
+            apiKey: 'test-key',
+            model: 'gpt-audio-test',
+            messages: [
+              AiMessage(
+                role: 'user',
+                content: '听一下',
+                attachments: [Attachment(type: 'audio', path: audio.path)],
+              ),
+            ],
+          )
+          .toList();
+
+      expect(chunks.single.content, 'ok');
+      final payload = await seenPayload.future;
+      final messages = payload['messages'] as List<dynamic>;
+      final content =
+          (messages.single as Map<String, dynamic>)['content'] as List<dynamic>;
+      expect(content.first, {'type': 'text', 'text': '听一下'});
+      final audioPart = content.last as Map<String, dynamic>;
+      expect(audioPart['type'], 'text');
+      expect(audioPart['text'], contains('[附件: audio]'));
+      expect(audioPart['text'], contains('mime_type: audio/mp4'));
+      expect(audioPart['text'], contains('format: m4a'));
+      expect(
+        audioPart['text'],
+        contains(base64Encode([0x01, 0x02, 0x03, 0x04])),
+      );
+      expect(jsonEncode(payload), isNot(contains('base64 数据已省略')));
+      expect(jsonEncode(payload), isNot(contains('input_audio')));
     });
   });
 }

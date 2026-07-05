@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'code_block_widget.dart';
+import 'drawio_widget.dart';
 import 'mermaid_widget.dart';
 import 'image_viewer.dart';
 
@@ -65,7 +67,8 @@ class LatexMarkdownWidget extends StatelessWidget {
     required Widget Function(MarkdownImageConfig) imageBuilder,
   }) {
     final blocks = _parseMarkdownBlocks(data);
-    if (blocks.length == 1 && blocks.single.type == _MarkdownBlockType.markdown) {
+    if (blocks.length == 1 &&
+        blocks.single.type == _MarkdownBlockType.markdown) {
       return _buildMarkdownBody(
         context,
         data: blocks.single.content,
@@ -100,6 +103,12 @@ class LatexMarkdownWidget extends StatelessWidget {
               styleSheet: styleSheet,
               imageBuilder: imageBuilder,
             );
+          case _MarkdownBlockType.media:
+            return _buildMediaBlock(
+              context,
+              type: block.title ?? 'media',
+              source: block.content,
+            );
         }
       }).toList(),
     );
@@ -115,9 +124,10 @@ class LatexMarkdownWidget extends StatelessWidget {
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 2),
       child: MarkdownBody(
-        data: data,
+        data: _normalizeLegacyMarkdown(data),
         selectable: selectable,
-        builders: {'code': _CodeBlockBuilder()},
+        builders: {'code': _CodeBlockBuilder(), 'math': _InlineMathBuilder()},
+        inlineSyntaxes: [_InlineMathSyntax()],
         checkboxBuilder: _buildCheckbox,
         paddingBuilders: {
           'p': _FixedPaddingBuilder(const EdgeInsets.only(bottom: 10)),
@@ -133,7 +143,7 @@ class LatexMarkdownWidget extends StatelessWidget {
           'section': _FootnoteSectionPaddingBuilder(),
         },
         styleSheet: styleSheet,
-        extensionSet: md.ExtensionSet.gitHubFlavored,
+        extensionSet: md.ExtensionSet.gitHubWeb,
         softLineBreak: true,
         sizedImageBuilder: imageBuilder,
       ),
@@ -144,7 +154,9 @@ class LatexMarkdownWidget extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: 8, top: 2),
       child: Icon(
-        checked ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+        checked
+            ? Icons.check_box_rounded
+            : Icons.check_box_outline_blank_rounded,
         size: 18,
       ),
     );
@@ -209,9 +221,7 @@ class LatexMarkdownWidget extends StatelessWidget {
       margin: const EdgeInsets.only(top: 18),
       padding: const EdgeInsets.only(top: 12),
       decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: borderColor),
-        ),
+        border: Border(top: BorderSide(color: borderColor)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -239,6 +249,66 @@ class LatexMarkdownWidget extends StatelessWidget {
     );
   }
 
+  Widget _buildMediaBlock(
+    BuildContext context, {
+    required String type,
+    required String source,
+  }) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isVideo = type.toLowerCase() == 'video';
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.04)
+            : const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isDark ? Colors.white12 : const Color(0xFFD0D7DE),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isVideo ? Icons.smart_display_outlined : Icons.audiotrack_outlined,
+            size: 22,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isVideo ? '视频附件' : '音频附件',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  source.trim().isEmpty ? '未找到媒体地址' : source.trim(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   MarkdownStyleSheet _buildMarkdownStyle(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -249,12 +319,8 @@ class LatexMarkdownWidget extends StatelessWidget {
     final quoteBg = isDark
         ? Colors.white.withValues(alpha: 0.04)
         : const Color(0xFFF8F9FA);
-    final quoteBorder = isDark
-        ? Colors.white24
-        : const Color(0xFFD0D7DE);
-    final tableBorder = isDark
-        ? Colors.white24
-        : const Color(0xFFD0D7DE);
+    final quoteBorder = isDark ? Colors.white24 : const Color(0xFFD0D7DE);
+    final tableBorder = isDark ? Colors.white24 : const Color(0xFFD0D7DE);
 
     return MarkdownStyleSheet(
       a: TextStyle(
@@ -263,48 +329,44 @@ class LatexMarkdownWidget extends StatelessWidget {
         decorationColor: scheme.primary.withValues(alpha: 0.55),
       ),
       blockSpacing: 14,
-      p: TextStyle(
-        fontSize: 15,
-        height: 1.8,
-        color: scheme.onSurface,
-      ),
+      p: TextStyle(fontSize: 15, height: 1.6, color: scheme.onSurface),
       pPadding: const EdgeInsets.only(bottom: 10),
       h1: TextStyle(
-        fontSize: 28,
+        fontSize: 22,
         height: 1.35,
         fontWeight: FontWeight.w700,
         color: scheme.onSurface,
       ),
       h1Padding: const EdgeInsets.fromLTRB(0, 10, 0, 14),
       h2: TextStyle(
-        fontSize: 23,
+        fontSize: 20,
         height: 1.4,
         fontWeight: FontWeight.w700,
         color: scheme.onSurface,
       ),
       h2Padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
       h3: TextStyle(
-        fontSize: 20,
+        fontSize: 18,
         height: 1.45,
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
       ),
       h3Padding: const EdgeInsets.fromLTRB(0, 8, 0, 10),
       h4: TextStyle(
-        fontSize: 17,
+        fontSize: 16,
         height: 1.45,
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
       ),
       h4Padding: const EdgeInsets.fromLTRB(0, 6, 0, 8),
       h5: TextStyle(
-        fontSize: 16,
+        fontSize: 15,
         height: 1.45,
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
       ),
       h6: TextStyle(
-        fontSize: 15,
+        fontSize: 14,
         height: 1.45,
         fontWeight: FontWeight.w600,
         color: scheme.onSurfaceVariant,
@@ -330,28 +392,17 @@ class LatexMarkdownWidget extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: quoteBorder, width: 4)),
       ),
-      listBullet: TextStyle(
-        fontSize: 15,
-        height: 1.8,
-        color: scheme.onSurface,
-      ),
+      listBullet: TextStyle(fontSize: 15, height: 1.6, color: scheme.onSurface),
       listIndent: 22,
       listBulletPadding: const EdgeInsets.only(right: 8),
-      checkbox: TextStyle(
-        fontSize: 15,
-        color: scheme.primary,
-      ),
+      checkbox: TextStyle(fontSize: 15, color: scheme.primary),
       tableHead: TextStyle(
         fontSize: 14,
         height: 1.6,
         fontWeight: FontWeight.w700,
         color: scheme.onSurface,
       ),
-      tableBody: TextStyle(
-        fontSize: 14,
-        height: 1.65,
-        color: scheme.onSurface,
-      ),
+      tableBody: TextStyle(fontSize: 14, height: 1.65, color: scheme.onSurface),
       tableBorder: TableBorder.all(color: tableBorder, width: 1),
       tableColumnWidth: const FlexColumnWidth(),
       tableScrollbarThumbVisibility: true,
@@ -370,7 +421,9 @@ class LatexMarkdownWidget extends StatelessWidget {
   }
 
   /// 构建图片渲染器：支持网络图片缓存 + 点击放大 + data URI
-  Widget Function(MarkdownImageConfig) _buildImageBuilder(BuildContext context) {
+  Widget Function(MarkdownImageConfig) _buildImageBuilder(
+    BuildContext context,
+  ) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final borderColor = isDark ? Colors.white12 : const Color(0xFFD0D7DE);
@@ -388,10 +441,7 @@ class LatexMarkdownWidget extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: borderColor),
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: child,
-        ),
+        child: ClipRRect(borderRadius: BorderRadius.circular(8), child: child),
       );
     }
 
@@ -405,15 +455,23 @@ class LatexMarkdownWidget extends StatelessWidget {
           final data = uriStr.split(',').last;
           final bytes = base64Decode(data);
           return GestureDetector(
-            onTap: () => showImageViewer(
-              context,
-              imageProvider: MemoryImage(bytes),
-            ),
+            onTap: () =>
+                showImageViewer(context, imageProvider: MemoryImage(bytes)),
             child: wrapImage(Image.memory(bytes, fit: BoxFit.contain)),
           );
         } catch (_) {
           return const SizedBox.shrink();
         }
+      }
+
+      // 本地文件或相对路径图片（移动端优先）。
+      if (uri.scheme == 'file' || uri.scheme.isEmpty) {
+        final path = uri.scheme == 'file' ? uri.toFilePath() : uriStr;
+        return GestureDetector(
+          onTap: () =>
+              showImageViewer(context, imageProvider: FileImage(File(path))),
+          child: wrapImage(Image.file(File(path), fit: BoxFit.contain)),
+        );
       }
 
       // 网络图片
@@ -443,6 +501,184 @@ class LatexMarkdownWidget extends StatelessWidget {
         ),
       );
     };
+  }
+
+  String _normalizeLegacyMarkdown(String text) {
+    var normalized = text;
+    normalized = _normalizeLegacyImageSyntax(normalized);
+    normalized = _normalizeLegacyDiagramSyntax(normalized);
+    normalized = _wrapRawDrawioXmlBlocks(normalized);
+    return normalized;
+  }
+
+  String _normalizeLegacyImageSyntax(String text) {
+    var normalized = text.replaceAllMapped(
+      RegExp(r'\[\[(?:img|image):([^\]]+)\]\]', caseSensitive: false),
+      (match) {
+        final source = match.group(1)?.trim() ?? '';
+        if (source.isEmpty) return match.group(0)!;
+        return _markdownImage(source: source);
+      },
+    );
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'!\[\[([^\]]+)\]\]', caseSensitive: false),
+      (match) {
+        final raw = match.group(1)?.trim() ?? '';
+        final source = raw.split('|').first.trim();
+        if (source.isEmpty) return match.group(0)!;
+        return _markdownImage(source: source, alt: source.split('/').last);
+      },
+    );
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\[(?:img|image):([^\]]+)\]', caseSensitive: false),
+      (match) {
+        final source = match.group(1)?.trim() ?? '';
+        if (source.isEmpty) return match.group(0)!;
+        return _markdownImage(source: source);
+      },
+    );
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'<img\b[^>]*>', caseSensitive: false),
+      (match) {
+        final tag = match.group(0) ?? '';
+        final source = _extractHtmlAttribute(tag, 'src');
+        if (source == null || source.isEmpty) return tag;
+        return _markdownImage(
+          source: source,
+          alt: _extractHtmlAttribute(tag, 'alt') ?? 'image',
+        );
+      },
+    );
+    return normalized;
+  }
+
+  String _normalizeLegacyDiagramSyntax(String text) {
+    var normalized = _normalizeColonDiagramBlocks(text);
+    normalized = normalized.replaceAllMapped(
+      RegExp(
+        r'\[(mermaid|drawio|draw\.io|mxgraph|diagrams\.net)\]\s*([\s\S]*?)\s*\[/\1\]',
+        caseSensitive: false,
+      ),
+      (match) {
+        final language = _normalizeDiagramLanguage(match.group(1) ?? '');
+        final code = match.group(2)?.trim() ?? '';
+        if (code.isEmpty) return match.group(0)!;
+        return '```$language\n$code\n```';
+      },
+    );
+    normalized = normalized.replaceAllMapped(
+      RegExp(
+        r'''<(?:div|pre)\b[^>]*class=["'][^"']*\bmermaid\b[^"']*["'][^>]*>([\s\S]*?)</(?:div|pre)>''',
+        caseSensitive: false,
+      ),
+      (match) {
+        final code = match.group(1)?.trim() ?? '';
+        if (code.isEmpty) return match.group(0)!;
+        return '```mermaid\n$code\n```';
+      },
+    );
+    return normalized;
+  }
+
+  String _normalizeColonDiagramBlocks(String text) {
+    final lines = text.split('\n');
+    final output = <String>[];
+    var index = 0;
+    while (index < lines.length) {
+      final match = RegExp(
+        r'^:::\s*(mermaid|drawio|draw\.io|mxgraph|diagrams\.net)\s*$',
+        caseSensitive: false,
+      ).firstMatch(lines[index].trim());
+      if (match == null) {
+        output.add(lines[index]);
+        index++;
+        continue;
+      }
+
+      final language = _normalizeDiagramLanguage(match.group(1) ?? '');
+      index++;
+      final buffer = <String>[];
+      while (index < lines.length && lines[index].trim() != ':::') {
+        buffer.add(lines[index]);
+        index++;
+      }
+      if (index < lines.length && lines[index].trim() == ':::') {
+        index++;
+      }
+      output
+        ..add('```$language')
+        ..add(buffer.join('\n').trim())
+        ..add('```');
+    }
+    return output.join('\n');
+  }
+
+  String _wrapRawDrawioXmlBlocks(String text) {
+    final lines = text.split('\n');
+    final output = <String>[];
+    var index = 0;
+    var inFence = false;
+    while (index < lines.length) {
+      final trimmed = lines[index].trim();
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        inFence = !inFence;
+        output.add(lines[index]);
+        index++;
+        continue;
+      }
+
+      final lower = trimmed.toLowerCase();
+      final isMxFile = lower.startsWith('<mxfile');
+      final isMxGraph = lower.startsWith('<mxgraphmodel');
+      if (inFence || (!isMxFile && !isMxGraph)) {
+        output.add(lines[index]);
+        index++;
+        continue;
+      }
+
+      final closingTag = isMxFile ? '</mxfile>' : '</mxgraphmodel>';
+      final buffer = <String>[];
+      while (index < lines.length) {
+        buffer.add(lines[index]);
+        if (lines[index].toLowerCase().contains(closingTag)) {
+          index++;
+          break;
+        }
+        index++;
+      }
+      output
+        ..add('```drawio')
+        ..add(buffer.join('\n').trim())
+        ..add('```');
+    }
+    return output.join('\n');
+  }
+
+  String _markdownImage({required String source, String alt = 'image'}) {
+    final safeAlt = alt.replaceAll('[', '').replaceAll(']', '').trim();
+    final value = source.trim();
+    final wrappedSource =
+        RegExp(r'\s').hasMatch(value) &&
+            !value.startsWith('<') &&
+            !value.endsWith('>')
+        ? '<$value>'
+        : value;
+    return '![${safeAlt.isEmpty ? 'image' : safeAlt}]($wrappedSource)';
+  }
+
+  String _normalizeDiagramLanguage(String value) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'mermaid') return 'mermaid';
+    return 'drawio';
+  }
+
+  String? _extractHtmlAttribute(String html, String name) {
+    final escapedName = RegExp.escape(name);
+    final match = RegExp(
+      "$escapedName\\s*=\\s*[\"']([^\"']+)[\"']",
+      caseSensitive: false,
+    ).firstMatch(html);
+    return match?.group(1)?.trim();
   }
 
   Widget _buildBlockLatex(BuildContext context, String latex) {
@@ -510,37 +746,6 @@ class LatexMarkdownWidget extends StatelessWidget {
         continue;
       }
 
-      // 检测行内 LaTeX: $...$（但不匹配 $$ 或 \$）
-      if (text[i] == '\$' && (i + 1 >= text.length || text[i + 1] != '\$')) {
-        // 查找结束的 $
-        final endIdx = text.indexOf('\$', i + 1);
-        if (endIdx == -1 || endIdx == i + 1) {
-          buffer.write(text[i]);
-          i++;
-          continue;
-        }
-        // 确保不是转义的 \$
-        if (i > 0 && text[i - 1] == '\\') {
-          buffer.write(text[i]);
-          i++;
-          continue;
-        }
-        // 保存之前的 markdown
-        if (buffer.isNotEmpty) {
-          segments.add(_Segment(_SegmentType.markdown, buffer.toString()));
-          buffer.clear();
-        }
-        final latex = text.substring(i + 1, endIdx).trim();
-        if (latex.isNotEmpty) {
-          // 行内 LaTeX 用 markdown 的 inline code 风格模拟
-          // 实际渲染为 HTML img 标签会被 flutter_markdown 过滤
-          // 所以用特殊标记，在 markdown 中用 Unicode 替代
-          buffer.write('`$latex`');
-        }
-        i = endIdx + 1;
-        continue;
-      }
-
       buffer.write(text[i]);
       i++;
     }
@@ -572,12 +777,60 @@ class LatexMarkdownWidget extends StatelessWidget {
 
     while (index < lines.length) {
       final trimmed = lines[index].trim();
+      final mediaMatch = RegExp(
+        r'^<(audio|video)\b',
+        caseSensitive: false,
+      ).firstMatch(trimmed);
+      if (mediaMatch != null) {
+        flushMarkdown();
+        final tag = mediaMatch.group(1)!.toLowerCase();
+        final mediaBuffer = <String>[];
+        while (index < lines.length) {
+          mediaBuffer.add(lines[index]);
+          if (lines[index].toLowerCase().contains('</$tag>')) {
+            index++;
+            break;
+          }
+          index++;
+        }
+        final html = mediaBuffer.join('\n');
+        blocks.add(
+          _MarkdownBlock(
+            type: _MarkdownBlockType.media,
+            title: tag,
+            content: _extractHtmlMediaSource(html) ?? html.trim(),
+          ),
+        );
+        continue;
+      }
+
+      if (trimmed.startsWith(RegExp(r'<details\b', caseSensitive: false))) {
+        flushMarkdown();
+        final detailsBuffer = <String>[];
+        while (index < lines.length) {
+          detailsBuffer.add(lines[index]);
+          if (lines[index].toLowerCase().contains('</details>')) {
+            index++;
+            break;
+          }
+          index++;
+        }
+        final parsed = _parseHtmlDetails(detailsBuffer.join('\n'));
+        blocks.add(
+          _MarkdownBlock(
+            type: _MarkdownBlockType.details,
+            title: parsed.title.isEmpty ? '详情' : parsed.title,
+            content: parsed.content,
+          ),
+        );
+        continue;
+      }
+
       if (trimmed == '<section class="footnotes">') {
         flushMarkdown();
         index++;
         final footnoteBuffer = <String>[];
-        while (index < lines.length &&
-            lines[index].trim() != '</section>') {
+        while (index < lines.length && lines[index].trim() != '</section>') {
           footnoteBuffer.add(lines[index]);
           index++;
         }
@@ -628,11 +881,39 @@ class LatexMarkdownWidget extends StatelessWidget {
     flushMarkdown();
     return blocks;
   }
+
+  _HtmlDetails _parseHtmlDetails(String html) {
+    final summaryMatch = RegExp(
+      r'<summary>([\s\S]*?)</summary>',
+      caseSensitive: false,
+    ).firstMatch(html);
+    final title = summaryMatch?.group(1)?.trim() ?? '详情';
+    var content = html
+        .replaceFirst(RegExp(r'^<details[^>]*>\s*', caseSensitive: false), '')
+        .replaceFirst(RegExp(r'</details>\s*$', caseSensitive: false), '');
+    if (summaryMatch != null) {
+      content = content.replaceFirst(summaryMatch.group(0)!, '');
+    }
+    return _HtmlDetails(title: title, content: content.trim());
+  }
+
+  String? _extractHtmlMediaSource(String html) {
+    final sourceMatch = RegExp(
+      r'''<source[^>]+src=["']([^"']+)["']''',
+      caseSensitive: false,
+    ).firstMatch(html);
+    if (sourceMatch != null) return sourceMatch.group(1)?.trim();
+    final directMatch = RegExp(
+      r'''<(?:audio|video)[^>]+src=["']([^"']+)["']''',
+      caseSensitive: false,
+    ).firstMatch(html);
+    return directMatch?.group(1)?.trim();
+  }
 }
 
 enum _SegmentType { markdown, blockLatex }
 
-enum _MarkdownBlockType { markdown, details, footnotes }
+enum _MarkdownBlockType { markdown, details, footnotes, media }
 
 class _Segment {
   final _SegmentType type;
@@ -645,11 +926,27 @@ class _MarkdownBlock {
   final String content;
   final String? title;
 
-  const _MarkdownBlock({
-    required this.type,
-    required this.content,
-    this.title,
-  });
+  const _MarkdownBlock({required this.type, required this.content, this.title});
+}
+
+class _HtmlDetails {
+  final String title;
+  final String content;
+
+  const _HtmlDetails({required this.title, required this.content});
+}
+
+class _InlineMathSyntax extends md.InlineSyntax {
+  _InlineMathSyntax()
+    : super(r'(?<!\\)\$(?!\$)([^$\n]+?)(?<!\\)\$', startCharacter: 36);
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final latex = match.group(1)?.trim();
+    if (latex == null || latex.isEmpty) return false;
+    parser.addNode(md.Element.text('math', latex));
+    return true;
+  }
 }
 
 class _FixedPaddingBuilder extends MarkdownPaddingBuilder {
@@ -670,9 +967,8 @@ class _FootnoteSectionPaddingBuilder extends MarkdownPaddingBuilder {
   }
 
   @override
-  EdgeInsets getPadding() => _isFootnotes
-      ? const EdgeInsets.fromLTRB(0, 16, 0, 0)
-      : EdgeInsets.zero;
+  EdgeInsets getPadding() =>
+      _isFootnotes ? const EdgeInsets.fromLTRB(0, 16, 0, 0) : EdgeInsets.zero;
 }
 
 class _CodeBlockBuilder extends MarkdownElementBuilder {
@@ -683,9 +979,83 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     if (className.startsWith('language-')) {
       language = className.substring(9);
     }
-    if (language == 'mermaid') {
-      return MermaidWidget(code: element.textContent);
+    final code = element.textContent;
+    final normalizedLanguage = language?.toLowerCase();
+    if (_isMermaidLanguage(normalizedLanguage) ||
+        (language == null && _looksLikeMermaid(code))) {
+      return MermaidWidget(code: code);
     }
-    return CodeBlockWidget(code: element.textContent, language: language);
+    if (_isDrawioLanguage(normalizedLanguage) || _looksLikeDrawio(code)) {
+      return DrawioWidget(code: code);
+    }
+    if (language == null && !code.contains('\n')) {
+      return null;
+    }
+    return CodeBlockWidget(code: code, language: language);
+  }
+
+  bool _isMermaidLanguage(String? language) {
+    return language == 'mermaid' || language == 'mmd';
+  }
+
+  bool _isDrawioLanguage(String? language) {
+    return language == 'drawio' ||
+        language == 'draw.io' ||
+        language == 'mxgraph' ||
+        language == 'diagrams.net';
+  }
+
+  bool _looksLikeMermaid(String code) {
+    final firstLine = code
+        .split('\n')
+        .map((line) => line.trim())
+        .firstWhere((line) => line.isNotEmpty, orElse: () => '')
+        .toLowerCase();
+    return firstLine.startsWith('graph ') ||
+        firstLine.startsWith('flowchart ') ||
+        firstLine.startsWith('sequencediagram') ||
+        firstLine.startsWith('classdiagram') ||
+        firstLine.startsWith('statediagram') ||
+        firstLine.startsWith('erdiagram') ||
+        firstLine.startsWith('gantt') ||
+        firstLine.startsWith('journey') ||
+        firstLine.startsWith('pie') ||
+        firstLine.startsWith('mindmap') ||
+        firstLine.startsWith('timeline') ||
+        firstLine.startsWith('gitgraph') ||
+        firstLine.startsWith('quadrantchart') ||
+        firstLine.startsWith('xychart');
+  }
+
+  bool _looksLikeDrawio(String code) {
+    final lower = code.toLowerCase();
+    return lower.contains('<mxgraphmodel') ||
+        lower.contains('<mxfile') ||
+        lower.contains('<mxcell');
+  }
+}
+
+class _InlineMathBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final latex = element.textContent.trim();
+    if (latex.isEmpty) return const SizedBox.shrink();
+    final baseStyle =
+        parentStyle ?? preferredStyle ?? DefaultTextStyle.of(context).style;
+    final textStyle = baseStyle.copyWith(
+      fontSize: (baseStyle.fontSize ?? 15) * 0.98,
+      color: baseStyle.color ?? Theme.of(context).colorScheme.onSurface,
+    );
+    return Math.tex(
+      latex,
+      textStyle: textStyle,
+      onErrorFallback: (_) =>
+          Text(latex, style: textStyle.copyWith(fontFamily: 'monospace')),
+    );
   }
 }

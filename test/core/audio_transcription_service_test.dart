@@ -75,6 +75,54 @@ void main() {
       },
     );
 
+    test('fallback engine retries after provider failure', () async {
+      final failingEngine = _ThrowingAudioTranscriptionExceptionEngine();
+      final nativeEngine = _FakeSpeechToTextEngine('  系统识别成功  ');
+      final service = AudioTranscriptionService(
+        archive: archive,
+        engine: FallbackSpeechToTextEngine([failingEngine, nativeEngine]),
+      );
+
+      final result = await service.transcribeAndArchive(
+        const AudioTranscriptionJob(
+          messageId: 'message:fallback',
+          attachmentId: 'attachment:fallback',
+          audioPath: '/private/audio/fallback.m4a',
+          fileName: 'fallback.m4a',
+          fileSize: 4096,
+        ),
+      );
+
+      expect(result.transcript, '系统识别成功');
+      expect(nativeEngine.lastInput?.fileName, 'fallback.m4a');
+      final markdown = await result.transcriptFile.readAsString();
+      expect(markdown, contains('- status: `ready`'));
+      expect(markdown, contains('系统识别成功'));
+      expect(markdown, isNot(contains('sk-secret-token')));
+    });
+
+    test('fallback engine tries next engine after empty transcript', () async {
+      final service = AudioTranscriptionService(
+        archive: archive,
+        engine: FallbackSpeechToTextEngine([
+          _FakeSpeechToTextEngine('   '),
+          _FakeSpeechToTextEngine('第二个引擎识别成功'),
+        ]),
+      );
+
+      final result = await service.transcribeAndArchive(
+        const AudioTranscriptionJob(
+          messageId: 'message:empty-fallback',
+          attachmentId: 'attachment:empty-fallback',
+          audioPath: '/private/audio/empty-fallback.m4a',
+          fileName: 'empty-fallback.m4a',
+          fileSize: 4096,
+        ),
+      );
+
+      expect(result.transcript, '第二个引擎识别成功');
+    });
+
     test('sanitizes engine failures before surfacing them', () async {
       final service = AudioTranscriptionService(
         archive: archive,

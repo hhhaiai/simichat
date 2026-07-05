@@ -1,4 +1,4 @@
-# SimiChat — 项目总纲与智能体工作账本
+# SimiAIChat — 项目总纲与智能体工作账本
 
 > **定位**：人工智能聊天工具，最终形态 = 好友陪伴（虚拟朋友 / 智能助理）+ 数字孪生（镜像数字人，基于长期对话录入与资料蒸馏生成）。
 >
@@ -6,7 +6,7 @@
 >
 > **主事实来源**：本文件记录项目目标、阶段进度、待办、已完成事项、重要决策与执行约束。`CLAUDE.md` 的项目进度、路线图、已知问题和重要安排已迁移到本文件；后续维护以 `AGENTS.md` 为准。
 >
-> **最后更新**：2026-06-27。
+> **最后更新**：2026-07-05。
 
 ---
 
@@ -34,18 +34,19 @@
 8. **敏感数据规则**：不提交接口密钥、本地数据库、用户聊天记录、用户语音、用户图片、Markdown 原始对话档案。
 9. **账本维护规则**：新需求先登记到“当前待办”或阶段规划；完成后同步更新“已完成能力”“进度记录”和对应 `docs/` 实现文档，并写清验证结果。
 
-### 0.2 当前进度总览（2026-06-27）
+### 0.2 当前进度总览（2026-07-02）
 
 | 方向 | 当前状态 | 下一步重点 |
 | --- | --- | --- |
-| 移动端 MVP | 基础聊天、会话列表、模型切换、本地 SQLite、Markdown 原始档案、主题与全局字体、移动端自动化 smoke 已落地 | 真机主链路：发送、停止、重试、模型切换、历史搜索、设置页、长会话 |
+| 移动端 MVP | 基础聊天、会话列表、模型切换、本地 SQLite、Markdown 原始档案、移动端应用名 `SimiAIChat`、包名 `top.simitalk.aichat`、主题与 90%–120% 全局字体、移动端自动化 smoke 已落地 | 真机主链路：发送、停止、重试、模型切换、历史搜索、设置页、长会话 |
 | 多模型接入 | 已支持 OpenAI Chat / OpenAI Responses / Claude / Gemini / Ollama 协议适配；模型厂商预设、批量 JSON 导入、连通性测试、测试历史、失败重试、一键测试并剔除不可用模型、渠道 / 模型删除引用清理已落地 | 继续扩展国产 / 免费模型来源引导和更完整的协议兼容性测试 |
 | 个人 OpenAI Relay | 已支持 Bearer 鉴权、`/health`、`/v1/health`、`/v1/models`、非流式 / 流式 `/v1/chat/completions`、非流式 buffered `/v1/responses`、CORS 预检、审计、用量统计、并发保护、局域网二次确认、路由策略、多模态安全降级、图片 data URL / 远端图片安全透传、Vision 路由 | 真机长时间运行、更多外部客户端兼容性、后台网络变化恢复 |
-| 记忆与 Dreaming | Key Points、本地语义召回、消息语义索引、本地语义搜索开关、Dreaming 前台到期整理 / 通知、用户画像管理 / 历史 / 待确认变更已落地 | 模型 embedding / ANN、真正后台调度、反思机制、长期上下文压缩增强 |
-| 语音 / 图片 / 多模态 | 语音录音、私有归档、OpenAI 兼容 STT / TTS、语音厂商预设、播放停止 / 完成事件、图片 / 文件附件、图片缩略图已落地 | 更多 STT / TTS 厂商、真机长音频、来电 / 音频焦点中断、声音 / 图像 / 表情画像 |
+| 记忆与 Dreaming / 上下文 | Key Points、本地语义召回、消息语义索引、本地语义搜索开关、Dreaming 前台到期整理 / 通知、用户画像管理 / 历史 / 待确认变更、模型窗口预算裁剪、动态压缩阈值、上下文超限一次严格裁剪重试已落地 | 模型 embedding / ANN、真正后台调度、反思机制、真机长会话基线 |
+| 语音 / 图片 / 多模态 | 语音录音、私有归档、OpenAI 兼容 STT / TTS、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、语音厂商预设、播放停止 / 完成事件、图片 / 文件附件、图片缩略图已落地 | 更多 STT / TTS 厂商、真机长音频、来电 / 音频焦点中断、声音 / 图像 / 表情画像 |
 | 数据管理与同步 | `.tar.gz` 导出、系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步 / 附件 / 冲突 / stale 清理已落地 | Notion / 语雀 / 思源同步、云备份、Obsidian 双向同步 |
 | 数字孪生 | 本地用户画像 v1 已落地，可查看、编辑、删除、恢复历史、逐项采纳 / 拒绝 Dreaming 画像变更 | 声音 / 图像 / 表情处理、镜像数字人生成、代理行为授权与审计 |
-| 最新验证 | `flutter analyze` 通过；`flutter test` 全量 286 个测试通过；模型管理局部回归 5 个测试通过；移动端 smoke 4 个通过；Android release APK 已覆盖安装并启动 Pixel 8；iOS release 已安装并启动 iPhone13；OpenAI Relay `/v1/responses` benchmark 100 次平均约 1.59 ms；生产目标安全扫描与 `git diff --check` 通过 | Responses API 后的 codebase-memory 刷新仍需单独补跑并记录 |
+| 对话页 Markdown / 字体 | 扩展 Markdown 渲染 v2 已落地：用户输入和 AI 输出统一 Markdown 渲染；行内 code 不再误渲染为代码块；支持 GitHub Web 扩展、旧式 / Obsidian / HTML 图片、行内 / 块级公式、HTML audio/video 安全卡片、HTML details、旧式 details、多种 Mermaid 与 Draw.io / mxGraph 新老格式；移动端正文默认 15sp，缩放范围 90%–120% | 真机长文档滚动、复杂表格 / 长代码 / 离线 Mermaid 体验继续优化 |
+| 最新验证 | 2026-07-05 本轮 `flutter analyze` 通过；`flutter test` 全量 318 个测试通过；上下文局部回归覆盖模型上下文预算、旧 OpenAI 小窗口模型保守预算、超过旧 20 条上限的预算构建、小预算保留最新用户问题、上下文超限错误识别 / 提示和语音转写链路；base64 语音局部测试同日通过。2026-07-03 `flutter build ios --release` 成功；people iPhone 当时 `unavailable`，覆盖安装被设备离线状态阻塞 | 长会话 / 复杂 Markdown 真机滚动 / 语音网络等交互仍待补 |
 
 
 ---
@@ -78,7 +79,7 @@
 - 每个对话对应 1 个 Markdown 原始文件。
 - 核心记忆点提取后常驻本地索引 / 内存（Key Points），每次对话带入检索结果。
 - 跨对话内容支持快速检索，形成本地知识库和本地检索增强生成能力。
-- 无限上下文设计：超过模型令牌限制时自动提取重要内容并压缩。
+- 无限上下文设计：超过模型令牌限制时自动提取重要内容并压缩；发送前按模型窗口预算裁剪上下文，优先保留最新用户问题，真实接口返回超限时自动严格裁剪重试一次。
 - 支持人工智能反思机制（Reflection），用于回答质量、长期偏好、用户画像和任务计划改进。
 
 ### M3 — Dreaming（夜间整理）
@@ -133,7 +134,7 @@
 
 ### M11 — 界面与个性化
 
-- 全局字体大小调节，布局自适应，保证可读性。
+- 全局字体大小调节，布局自适应，保证可读性；移动端默认正文 15sp，全局缩放 90%–120%。
 - 主题换色支持。
 - 移动端优先的界面设计。
 
@@ -185,8 +186,10 @@
 - [x] 单对话内模型切换：紧凑模型选择器、会话级模型切换。
 - [x] 基础主题切换与持久化。
 - [x] 每个对话 1 个 Markdown 原始文件：基础追加服务已接入聊天主路径。
-- [x] 全局字体调节：85%–135% 全局缩放，应用级 `TextScaler` 生效，设置页可调且持久化。
+- [x] 全局字体调节：90%–120% 全局缩放，5% 步进，应用级 `TextScaler` 生效，设置页可调且持久化；Markdown 正文默认 15sp，H1/H2/H3 为 22/20/18sp。
 - [x] 移动端自动化主链路冒烟：390×844 移动视口，启动、自动会话、新建会话、设置页、无模型发送保护、抽屉历史搜索。
+- [x] 移动端应用身份：Android / iOS 展示名改为 `SimiAIChat`，Android `applicationId` 与 iOS Bundle ID 改为 `top.simitalk.aichat`。
+- [x] 对话页扩展 Markdown 渲染：兼容参考样例中的标准 / GitHub / 旧式 Markdown、数学公式、HTML 媒体、折叠块、Mermaid、Draw.io / mxGraph。
 - [ ] 移动端真机主链路冒烟：新建会话、发送、停止、重试、模型切换、历史搜索、设置。
 
 ### Phase 2 — 记忆与智能化
@@ -196,7 +199,7 @@
 - [ ] 本地检索增强知识库：本地全文检索 v1、SQLite FTS 搜索索引、Key Points 本地语义向量召回 v1、历史消息本地语义检索 v1、本地消息语义索引 v1、本地语义搜索用户开关 v1 已落地；模型 embedding 和真正向量数据库仍待实现。
 - [x] 核心 Key Points 提取与注入 v1：明示记忆点本地提取、持久化、关键词 + 本地语义向量召回并注入系统提示词。
 - [x] Dreaming 前台到期整理与系统通知 v1：前台到期自动整理、待确认画像提案和完成通知已落地；真正系统后台调度仍待实现。
-- [x] 无限上下文压缩基础策略：滚动压缩、摘要生成、令牌估算。
+- [x] 无限上下文压缩基础策略：滚动压缩、摘要生成、令牌估算、模型窗口预算、请求前裁剪、动态压缩阈值和超限错误兜底。
 - [ ] 人工智能反思机制。
 
 ### Phase 3 — 生态扩展
@@ -250,7 +253,7 @@
 - [x] 数据库层：9 张表 + 8 个 DAO，覆盖 sessions / messages / channels / models / folders / attachments / prompts / mcp_servers / skills。
 - [x] 人工智能协议适配层：OpenAI Chat / OpenAI Responses / Claude / Gemini / Ollama。
 - [x] SSE 流式输出与共享 SSE 辅助工具。
-- [x] 无限上下文引擎：令牌估算、上下文构建、滚动压缩。
+- [x] 无限上下文引擎：令牌估算、上下文构建、滚动压缩、模型窗口预算裁剪、上下文超限错误识别与一次严格裁剪重试。
 - [x] Riverpod 状态管理：database / session / channel / folder / chat / prompt / mcp 等状态提供器。
 - [x] 对话主页：消息气泡、Markdown 渲染、流式输出、输入区。
 - [x] 侧边栏：模型选择器、历史会话列表、文件夹分组。
@@ -276,6 +279,8 @@
 - [x] MCP 协议客户端：stdio/SSE、Tool / Resource / Prompt。
 - [x] 技能市场接入：SkillHub.cn 接口搜索 / 导入 / SHA-256 校验，系统提示词注入。
 - [x] Markdown 图片查看与保存。
+- [x] 对话页扩展 Markdown 渲染 v1：`LatexMarkdownWidget` 使用 GitHub Web 扩展集并补充旧式图片、行内公式、HTML audio/video 安全卡片、HTML details、旧式 details、Mermaid、Draw.io / mxGraph。
+- [x] 移动端应用身份 v1：应用展示名 `SimiAIChat`，Android / iOS 包名 `top.simitalk.aichat`；保留 `simichat.*` 数据格式和 `ai_chat_app` Dart 包名以避免破坏历史数据与 import。
 - [x] 全局搜索。
 - [x] 紧凑模型选择器。
 - [x] 模型连通性测试历史记录：SharedPreferences 本地保存最近结果，设置页模型行展示最近测试状态和时间。
@@ -290,8 +295,8 @@
 ### P0 — 基线稳定与生产化门禁
 
 - [x] 生成 Drift 与本地化代码后，`flutter analyze` 通过。
-- [x] `flutter test` 全量通过（2026-06-27 模型管理与安装复验：286 个测试通过）。
-- [x] 建立移动端主链路冒烟脚本 / 记录：`scripts/smoke_mobile_main_flow.sh` + `docs/mobile-main-flow-smoke-2026-06-27.md`；2026-06-27 复验 4 个 smoke 测试通过。
+- [x] `flutter test` 全量通过（2026-07-02 复验：289 个测试通过；2026-06-27 旧基线为 286 个）。
+- [x] 建立移动端主链路冒烟脚本 / 记录：`scripts/smoke_mobile_main_flow.sh` + `docs/mobile-main-flow-smoke-2026-06-27.md`；2026-07-02 复验 4 个 smoke 测试通过。
 - [x] 建立轻量性能基线：分析、测试、代码生成、搜索索引、Dreaming、Dreaming 通知调度、用户画像、本地数据导出、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步、Obsidian 附件同步 / 链接重写、冲突详情界面、可选覆盖冲突策略、原始音频附件可选同步、同名附件链接精确去重、stale 文件安全清理、stale 冲突详情解释、语音转写状态 / 失败脱敏导出、聊天音频卡片转写状态读取、STT 配置加载 / 引擎创建、音频转写详情读取、TTS 配置加载 / 引擎 / 服务创建、TTS 播放停止控制、TTS 原生播放事件解析、STT/TTS 厂商预设推断、OpenAI Relay 健康检查端点、CORS 预检和 Responses API 非流式端点耗时已记录；真机和长会话基线仍待补。
 - [x] 建立轻量安全基线：密钥字面量、日志输出、对话档案提交风险已扫描；本地数据导出压缩包、移动端系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出 / 增量同步 / 附件链接重写 / 冲突详情界面 / 可选覆盖冲突策略 / 原始音频附件可选同步 / 同名附件链接精确去重 / stale 文件安全清理 / stale 冲突详情解释 / 语音转写失败脱敏 / 聊天音频卡片转写状态展示 / OpenAI 兼容 STT 配置密钥 / 音频转写详情查看复制 / OpenAI 兼容 TTS 配置密钥 / 原生播放边界 / 停止播报控制 / 播放完成事件回传、STT/TTS 厂商预设、OpenAI Relay 健康检查端点、CORS 预检、Responses API 非流式端点和本地通知 ID 专项已补，桌面分享 / 云同步 / 社交通道专项仍待补。
 
@@ -300,7 +305,7 @@
 - [x] 每个对话 1 个 Markdown 原始文件基础追加：新聊天主路径会写入会话 Markdown。
 - [x] SQLite 与 Markdown 一致性校验、历史重建服务、标题同步基础能力。
 - [x] 暴露手动修复入口、异常修复队列和一键重试修复。
-- [x] 全局字体大小调节：85%–135%，持久化保存，应用级 TextScaler 生效，设置页可调。
+- [x] 全局字体大小调节：90%–120%，5% 步进，持久化保存，应用级 TextScaler 生效，设置页可调；移动端正文默认 15sp、最大 18sp，空状态品牌标题 26sp。
 - [x] 移动端语音录音输入与播报链路 v1：录音按钮、原生录音、停止后作为 audio 附件进入本地归档 / STT 草稿链路；OpenAI 兼容 STT 引擎与配置入口已落地；OpenAI 兼容 TTS 语音播报 v1 已落地；STT/TTS 厂商预设 v1 已落地。
   - [x] 基础能力：语音文件附件识别、原始语音文件复制到应用私有目录、消息气泡音频卡片、转写稿件 Markdown 草稿归档。
   - [x] STT 可注入抽象、转写完成后自动更新 `audio_transcripts/*.md` 的服务管线。
@@ -310,6 +315,8 @@
   - [x] 设置页“语音与多模态 / 语音输入”状态入口：展示权限声明、STT 引擎是否配置，并提示当前可先通过附件发送语音文件。
   - [x] 移动端录音按钮 + 原生运行时权限申请 + 本地录音附件 v1：Android `MediaRecorder` / iOS `AVAudioRecorder` 通过 `simichat/voice_recorder` MethodChannel 录制 `.m4a`，停止后作为 `audio` 附件进入现有归档与 STT 草稿管线。
   - [x] OpenAI 兼容 STT 引擎与配置入口 v1：设置页可配置启用状态、Base URL、模型和 API Key；发送 / 录制语音后自动调用 `/v1/audio/transcriptions`，API Key 加密本地保存且不进入结构化备份、导出包、日志或聊天 Markdown。
+  - [x] iOS 系统 Speech 原生识别兜底 v1：当显式 STT / 当前 OpenAI 兼容聊天渠道音频接口失败或不可用时，iOS 通过 `simichat/native_speech_to_text` 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内 `.m4a` 录音，并把识别文本写入 sidecar 后作为普通聊天内容发送。
+  - [x] base64 语音文本输入 v1：聊天输入支持 `data:audio/...;base64,...` 或“base64 的语音字符：...”粘贴；发送前先解码为临时 `audio` 附件并复用现有 STT 级联，原始 base64 不写入聊天上下文 / Markdown，非法、超大或格式不明的 payload 会在本地拦截。
   - [x] 音频转写稿详情查看 / 复制 v1：音频卡片可打开转写详情弹窗，展示状态和脱敏正文 / 状态说明；`ready` 转写支持一键复制正文，不展示本机 sidecar 路径。
   - [x] OpenAI 兼容 TTS 语音播报 v1：设置页可启用 TTS、配置 Base URL / 模型 / 音色 / 加密 API Key；AI 回复卡片提供播报按钮，生成临时 mp3 后通过 `simichat/audio_player` 调用 Android `MediaPlayer` / iOS `AVAudioPlayer`，原生侧限制只能播放应用私有目录内文件。
   - [x] TTS 播放停止控制 v1：播报生成中显示禁用的“正在生成语音”状态；开始播放后当前 assistant 回复显示“停止播报”，用户可主动停止原生播放并清除当前播报状态。
@@ -409,6 +416,7 @@
 
 | 日期 | 事项 | 状态 |
 | --- | --- | --- |
+| 2026-07-02 | 记录 `SimiAIChat` 应用名、`top.simitalk.aichat` 移动端包名、扩展 Markdown 渲染和移动端字号量化指标，并新增 `docs/markdown-rendering.md` | 已完成 |
 | 2026-06-27 | 项目目标梳理，`AGENTS.md` 初始化为项目目标、进度、TODO、DONE、重要安排的主账本 | 已完成 |
 | 2026-06-27 | `CLAUDE.md` 项目进度、路线图、已知问题迁移到 `AGENTS.md`，后续以 `AGENTS.md` 为准 | 已完成 |
 | 2026-06-27 | 根据用户最新完整需求重整项目总纲、核心模块、阶段规划、文档索引和协作规则 | 已完成 |
@@ -422,6 +430,7 @@
 | 2026-06-27 | Markdown 档案 | 每会话 Markdown 原始档案、标题同步、SQLite 重建、一致性校验、设置页修复入口、修复队列和一键重试 | 已完成 |
 | 2026-06-27 | 多模型接入 | 主流厂商预设、批量 JSON 渠道导入、模型连通性结构化结果、测试历史记录、瞬时失败自动重试、一键测试并剔除不可用模型、渠道 / 模型删除引用清理 | 已完成 |
 | 2026-06-27 | 语音 / 多模态 | 语音文件附件、私有音频归档、STT 转写 sidecar、转写状态展示、详情查看 / 复制、移动端录音、OpenAI 兼容 STT、OpenAI 兼容 TTS、播放停止、播放完成事件、STT/TTS 厂商预设 | 已完成 |
+| 2026-07-05 | 语音 / 多模态 | base64 语音文本粘贴识别：发送前解码为临时音频附件，复用 STT 级联；原始 base64 不进入聊天上下文 / Markdown，非法 / 超大 payload 本地拦截 | 已完成 |
 | 2026-06-27 | 记忆 / 搜索 | Key Points 本地记忆、本地语义向量召回、历史消息语义检索、本地消息语义索引、本地语义搜索开关、SQLite FTS 搜索索引 | 已完成 |
 | 2026-06-27 | Dreaming / 用户画像 | Dreaming 前台到期整理、系统通知、待确认画像变更、本地用户画像、画像编辑 / 删除 / 历史 / 差异 / 恢复、逐项采纳 / 拒绝 | 已完成 |
 | 2026-06-27 | 数据导出 / 导入 | 本地 `.tar.gz` 导出、系统分享、安全导入、结构化偏好备份 / 恢复、聊天核心数据库备份 / 恢复、非密钥配置表备份 / 恢复、电脑端本地传输 | 已完成 |
@@ -429,11 +438,20 @@
 | 2026-06-27 | OpenAI Relay | 本地 OpenAI 兼容中转核心服务、设置页启动入口、访问审计、并发保护、局域网二次确认、高级路由、可配置并发、脱敏用量统计、审计明细持久化 / 导出 | 已完成 |
 | 2026-06-27 | OpenAI Relay 多模态 | 多模态 content part 安全降级、图片 data URL 透传、Vision 能力路由、模型能力可见性、远端图片 URL 安全下载透传 | 已完成 |
 | 2026-06-27 | OpenAI Relay 兼容性 | Bearer 鉴权健康检查 `/health` / `/v1/health`、浏览器 CORS 预检、非流式 buffered `/v1/responses` Responses API 兼容端点 | 已完成 |
+| 2026-07-02 | 移动端应用身份 | Android / iOS 展示名 `SimiAIChat`，Android `applicationId` 与 iOS Bundle ID `top.simitalk.aichat`；保留历史数据格式标识 | 已完成 |
+| 2026-07-02 | 对话页 Markdown / 字体 | GitHub Web 扩展、旧式图片、行内 / 块级公式、HTML audio/video 安全卡片、HTML details、旧式 details、Mermaid、Draw.io / mxGraph；字体范围 90%–120%，正文 15sp | 已完成 |
+| 2026-07-03 | Markdown 渲染 v2 | 修复行内 code 被误渲染为大代码块；用户输入与 AI 输出统一使用 Markdown 渲染；补齐旧式 / Obsidian / HTML 图片、`:::mermaid`、`[mermaid]`、HTML Mermaid、`draw.io` / `mxgraph` / 原始 `mxGraphModel` 等新老格式兼容 | 已完成 |
+| 2026-07-02 | 双机真机覆盖安装 | Pixel 8 通过 `adb install -r` 覆盖安装并启动；iPhone13 通过 `devicectl` 安装 release `Runner.app` 并启动；未卸载、未清数据，旧包仍保留 | 已完成 |
+| 2026-07-03 | 音频附件 STT 音频接口前置转写 | audio 附件发送时先调用 OpenAI 兼容 `/v1/audio/transcriptions`：优先使用设置页 STT 配置，未配置时复用当前 `openai_chat` / `openai_response` 渠道 Base URL 与 API Key；成功后把转写结果作为普通文本发给聊天模型，不再把 audio base64 交给聊天模型 | 已完成 |
+| 2026-07-03 | iOS 系统 Speech 原生识别兜底 | 在 STT 引擎链路增加 fallback：显式 STT 配置、当前 OpenAI 兼容聊天渠道音频接口均失败 / 返回空时，iOS 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内录音；新增 `NSSpeechRecognitionUsageDescription` 权限说明、Dart MethodChannel 引擎和 fallback 引擎测试 | 已完成 |
+| 2026-07-05 | 无限上下文预算控制 | 聊天发送前按 `protocol + modelName` 推断模型窗口，预留输出 token 后按 `maxInputTokens` 裁剪 system / memory / skills / MCP 工具说明和历史消息；预算模式不再固定最近 20 条，可在窗口内尽量保留更多历史，优先保留最新用户问题；上下文超限流式错误会严格裁剪重试一次，失败时保留可操作提示 | 已完成 |
 
 ### 8.3 最新验证基线
 
 | 日期 | 验证项 | 结果 |
 | --- | --- | --- |
+| 2026-07-05 | 无限上下文预算控制回归：`flutter test test/core/model_context_budget_test.dart test/core/context_builder_test.dart test/shared/chat_provider_context_limit_test.dart test/shared/chat_provider_audio_test.dart`、`flutter analyze`、`flutter test` | 局部 18 个测试通过；覆盖模型预算推断、未知模型 8K 保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值、预算模式超过旧 20 条上限、小预算裁剪但保留最新用户问题、上下文超限错误识别 / 用户提示、语音转写链路未回退；静态检查无问题；全量 318 个测试通过 |
+| 2026-07-03 | Markdown v2 与 iOS 系统 Speech 兜底回归：`flutter test test/shared/markdown_rendering_test.dart`、`flutter analyze`、`flutter test`、`git diff --check`、`flutter build ios --release` | Markdown 局部 4 个测试通过，全量 305 个测试通过；行内 code 保持行内，fenced code 仍为代码块；用户输入 / AI 输出统一 Markdown 渲染；旧式 / HTML 图片、Mermaid / Draw.io 新老格式均有回归；fallback 引擎可在在线 STT 失败或空结果后继续尝试 iOS 原生 Speech；iOS release 构建成功；people iPhone 当前 `unavailable`，覆盖安装被设备离线状态阻塞 |
 | 2026-06-27 | OpenAI Relay Responses API 局部测试与 benchmark：`flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` | 23 个测试通过；覆盖 `/v1/responses` buffered 输出、多模态 input 解析、`stream=true` 安全拒绝、CORS 预检；局部 benchmark 中 `/v1/responses` 100 次平均约 3.14 ms |
 | 2026-06-27 | OpenAI Relay benchmark 脚本：`scripts/benchmark_openai_relay.sh` | 通过；`/v1/responses` 100 次平均约 1.59 ms，健康检查约 1.91 ms，CORS 预检约 1.24 ms，聊天补全约 1.41 ms |
 | 2026-06-27 | 模型管理局部回归：`flutter test test/core/channel_dao_test.dart test/shared/settings_page_channel_import_test.dart` | 5 个测试全部通过；覆盖渠道 / 模型删除引用清理、一键测试并剔除不可用模型 |
@@ -445,16 +463,26 @@
 | 2026-06-27 | Android 构建：`flutter build apk --debug` | 通过，生成 debug APK |
 | 2026-06-27 | iOS 构建：`flutter build ios --simulator --no-codesign` | 通过，生成 simulator Runner.app |
 | 2026-06-27 | 安全 / 格式复核 | `git diff --check` 无输出；生产代码目标无 `print/debugPrint`、无本机绝对路径 / 本机文件 URL；生产与文档高置信密钥字面量扫描未发现真实密钥 |
-| 2026-06-27 | codebase-memory | CORS 切片后已刷新到 ready，节点 2635、边 6697；Responses API 切片后的刷新仍待补跑并记录 |
+| 2026-07-02 | 应用身份 / Markdown / 字体局部测试：`flutter test test/core/app_identity_test.dart test/shared/settings_provider_test.dart test/shared/markdown_rendering_test.dart test/core/data_export_share_platform_test.dart test/core/microphone_permission_manifest_test.dart` | 13 个测试全部通过，覆盖 Android / iOS 应用身份、字体范围、扩展 Markdown、平台通道路径 |
+| 2026-07-02 | 静态检查：`flutter analyze` | 无问题 |
+| 2026-07-02 | 全量测试：`flutter test` | 289 个测试全部通过；同步修复 `test/shared/dreaming_provider_test.dart` 的日期敏感断言，显式固定消息时间为 2026-06-27 |
+| 2026-07-02 | 移动端 smoke：`scripts/smoke_mobile_main_flow.sh` | 4 个 smoke 全部通过，脚本内置 `flutter analyze` 无问题 |
+| 2026-07-02 | Android 构建：`flutter build apk --debug` | 通过，生成 `build/app/outputs/flutter-apk/app-debug.apk`；源码配置 `namespace` / `applicationId` 为 `top.simitalk.aichat`，应用 label 为 `SimiAIChat` |
+| 2026-07-02 | iOS 构建：`flutter build ios --simulator --no-codesign` | 通过，生成 `build/ios/iphonesimulator/Runner.app`；构建产物 `Info.plist` 确认为 `CFBundleDisplayName=SimiAIChat`、`CFBundleIdentifier=top.simitalk.aichat`、`CFBundleName=SimiAIChat` |
+| 2026-07-02 | Android 真机覆盖安装与启动：`adb -s 37101FDJH0077P install -r build/app/outputs/flutter-apk/app-debug.apk` + `adb shell monkey` | Pixel 8 成功安装并启动；`package=top.simitalk.aichat`，`versionName=1.0.0`，`firstInstallTime=2026-07-02 23:29:09`，`lastUpdateTime=2026-07-02 23:38:17`，`dataDir=/data/user/0/top.simitalk.aichat`，启动后 pid `6420`；未执行卸载或清数据，旧包 `com.aichat.ai_chat_app` 仍存在 |
+| 2026-07-02 | iOS release 真机覆盖安装与启动：`xcrun devicectl device install app --device 00008110-0016349A3A20A01E build/ios/Release-iphoneos/Runner.app` + `xcrun devicectl device process launch` | iPhone13 成功安装并启动；`Name=SimiAIChat`，`Bundle Identifier=top.simitalk.aichat`，`Version=1.0.0`，启动后进程 pid `77277`；未执行卸载或清数据，旧 Bundle `com.aichat.aiChatApp` 仍存在；iOS debug 启动限制已通过 release 安装规避 |
+| 2026-07-02 | iOS 双机真机覆盖安装与启动：`xcrun devicectl device install app` + `xcrun devicectl device process launch` | `people`（iPhone 14 Pro Max）与 `biao的iPhone`（iPhone16,2）均已安装并启动 `SimiAIChat`；Bundle ID `top.simitalk.aichat`，版本 `1.0.0`；`people` 进程 pid `53843` / `54736`，`biao的iPhone` 进程 pid `1152`；`biao的iPhone` 先通过 `xcrun devicectl manage pair` 配对；未执行卸载或清数据 |
+| 2026-07-03 | 静态检查：`flutter analyze` | 无问题 |
+| 2026-07-02 | 安全 / 格式复核 | `git diff --check` 无输出；移动端源码旧包名 / 旧显示名扫描无命中 |
+| 2026-07-05 | codebase-memory | 本轮无限上下文预算控制后已刷新，项目 `Users-sanbo-code-simichat` 节点 2772、边 7067 |
 
 ### 8.4 当前明确未完成项
 
 | 优先级 | 待办 | 说明 |
 | --- | --- | --- |
-| P0 | 移动端真机主链路冒烟 | Android / iOS release 已完成真机安装与启动；仍需真实 Android / iOS 设备长会话、语音、网络切换、后台恢复等交互验证 |
-| P0 | Responses API 切片后刷新 codebase-memory | 当前代码和验证已完成，索引需补跑并把节点 / 边数量写回本文件 |
+| P0 | 移动端真机主链路冒烟 | Android debug APK / iOS release 已按当前新包名完成真机覆盖安装与启动；仍需真实 Android / iOS 设备长会话、语音、网络切换、后台恢复等交互验证 |
 | P1 | Dreaming 系统后台调度 | 当前为前台到期整理 + 通知；需补系统后台限制下的稳定方案 |
-| P1 | 无限上下文与反思增强 | 已有基础压缩和本地记忆；仍需长期压缩策略、AI 反思机制、模型驱动画像增量分析 |
+| P1 | 无限上下文与反思增强 | 已有模型窗口预算裁剪、动态压缩阈值、基础压缩和本地记忆；仍需真机长会话基线、长期压缩质量评估、AI 反思机制、模型驱动画像增量分析 |
 | P1 | OpenAI Relay 真机 / 长时间运行 | 当前本地测试、构建和 benchmark 已过；仍需真实移动端网络、局域网、客户端兼容性验证 |
 | P2 | 社交平台接入 | 飞书 / Telegram / Discord 优先；微信 / QQ / WhatsApp / Slack 后续梳理授权边界 |
 | P2 | 多源 Skills 市场 | SkillHub 基础已落地；OpenClaw、腾讯等市场仍待接入 |
@@ -466,7 +494,7 @@
 
 1. **存储原则**：所有聊天数据本地优先，云同步为可选项，绝不强制上传。
 2. **对话原始文件**：每个对话对应一个 `.md` 原始文件；仓库侧约定目录为 `docs/conversations/`，只允许存放说明或脱敏示例；真实运行时用户数据存放在应用私有数据目录，必须被 Git 忽略，不得直接提交到仓库。实现方案见 `docs/memory-system.md`。
-3. **实现文档**：所有功能的详细实现文档存放于 `docs/` 文件夹。
+3. **实现文档**：所有功能的详细实现文档存放于 `docs/` 文件夹；对话页 Markdown 与字号方案见 `docs/markdown-rendering.md`。
 4. **移动端优先**：功能在移动端稳定后再考虑桌面端适配。
 5. **智能体记录**：本文件负责维护项目目标、进度、待办、已完成事项及重要安排。
 6. **生产化标准**：每个功能进入完成状态前，必须有功能验证、性能影响评估、安全影响评估。
@@ -487,6 +515,7 @@
 | `docs/data-sync.md` | 本地数据导出压缩包、附件原文件导出 / 导入、移动端系统分享、云备份、电脑端传输、笔记工具同步 |
 | `docs/digital-twin.md` | 数字孪生 / 镜像数字人、画像、蒸馏、多模态输入 |
 | `docs/ui-design.md` | 移动端优先界面规范、主题、字体、可访问性 |
+| `docs/markdown-rendering.md` | 对话页扩展 Markdown 渲染能力、移动端字号指标和安全边界 |
 | `docs/media-attachments.md` | 语音、图片、文件附件、归档和多模态输入策略 |
 | `docs/mobile-main-flow-smoke-2026-06-27.md` | 移动端主链路冒烟脚本、自动化结果、真机待测清单 |
 | `docs/requirements.md` | 产品需求总纲、核心模块、阶段规划、页面需求、隐私安全原则 |
@@ -544,7 +573,7 @@
 
 ### 项目结构与模块组织
 
-这是一个名为 `ai_chat_app` 的 Flutter 全平台人工智能聊天应用。主要 Dart 代码位于 `lib/`；测试位于 `test/`；实现文档位于 `docs/`。
+这是一个 Flutter 全平台人工智能聊天应用；移动端展示名为 `SimiAIChat`，Android / iOS 包名为 `top.simitalk.aichat`。Dart 包名暂保留 `ai_chat_app`，主要 Dart 代码位于 `lib/`；测试位于 `test/`；实现文档位于 `docs/`。
 
 ### 构建、测试与开发命令
 

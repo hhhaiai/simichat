@@ -344,7 +344,7 @@ class SettingsPage extends ConsumerWidget {
                 value: value,
                 min: kMinFontScale,
                 max: kMaxFontScale,
-                divisions: 10,
+                divisions: 6,
                 label: formatFontScale(value),
                 onChanged: (v) => setDialogState(() => value = v),
               ),
@@ -1264,13 +1264,12 @@ class SettingsPage extends ConsumerWidget {
                           style: TextStyle(fontSize: 11),
                         ),
                         dense: true,
-                        onTap: () =>
-                            _testAllModelsAndPrune(
-                              context,
-                              ref,
-                              channel,
-                              models,
-                            ),
+                        onTap: () => _testAllModelsAndPrune(
+                          context,
+                          ref,
+                          channel,
+                          models,
+                        ),
                       ),
                   ],
                 );
@@ -2209,7 +2208,9 @@ class SettingsPage extends ConsumerWidget {
             .toList(growable: false);
         for (final model in failedModels) {
           await ref.read(channelDaoProvider).deleteModel(model.id);
-          await ref.read(modelTestHistoryProvider.notifier).clearModel(model.id);
+          await ref
+              .read(modelTestHistoryProvider.notifier)
+              .clearModel(model.id);
         }
         refreshChannelModels(ref, channel.id);
         refreshModels(ref);

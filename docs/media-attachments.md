@@ -1,6 +1,6 @@
 # 语音、图片与附件系统设计
 
-> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 与 Android / iOS 原生播放通道已落地；更多非 OpenAI 兼容语音厂商和真机长时间场景待补。最后更新：2026-06-27。
+> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 与 Android / iOS 原生播放通道已落地；更多非 OpenAI 兼容语音厂商和真机长时间场景待补。最后更新：2026-07-05。
 
 ## 1. 目标
 
@@ -8,7 +8,7 @@
 - 支持文件附件输入：图片、PDF、语音文件、普通文档。
 - 支持多模态模型调用，把图片等附件传给协议层。
 - 附件元数据进入本地数据库，Markdown 原始档案记录附件名称；数据导出会把仍可读取的非语音附件原文件复制到压缩包 `attachments/`。
-- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 和 Android / iOS 原生播放通道；后续仍需补更多非 OpenAI 兼容语音厂商、真机长时间播报和播放中断场景。
+- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、发送前 STT 音频接口转写并把转写文字注入普通聊天、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 和 Android / iOS 原生播放通道；后续仍需补更多非 OpenAI 兼容语音厂商、真机长时间播报和播放中断场景。
 
 ## 2. 当前实现
 
@@ -26,20 +26,22 @@
 - `audio_file_archive.dart` 负责把音频附件复制到应用文档目录下的 `audio_files/<message-id>/<attachment-id>.<ext>`，避免发送后依赖外部临时路径。
 - `audio_transcript_archive.dart` 负责为音频附件创建 Markdown 转写稿件，路径位于应用文档目录下的 `audio_transcripts/`；稿件会记录 `pending` / `ready` / `empty` / `failed` 状态，失败时只写入脱敏后的错误说明，不记录完整本地路径、密钥、令牌或原始厂商错误；`readDetails` 只返回可展示 / 可复制的脱敏详情，不暴露 sidecar 绝对路径。
 - `audio_transcription_service.dart` 定义可注入 `SpeechToTextEngine` 和 `AudioTranscriptionService`，配置 STT 引擎后可对归档音频执行转写并覆盖更新对应 sidecar。
+- `inline_base64_audio.dart` 负责识别聊天文本中的 `data:audio/...;base64,...` 或“base64 的语音字符：...”payload，校验大小和音频格式，发送前转为临时 `audio` 附件并从正文剔除原始 base64。
 - `openai_speech_to_text_engine.dart` 提供 OpenAI 兼容 STT 引擎，调用 `/v1/audio/transcriptions`，限制本地音频 25 MB，校验 HTTP(S) Base URL，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误。
+- `native_speech_to_text_engine.dart` 提供 iOS 系统 Speech 兜底引擎，通过 `simichat/native_speech_to_text` MethodChannel 调用原生 `SFSpeechURLRecognitionRequest`，仅识别应用私有目录内普通音频文件；`audio_transcription_service.dart` 的 `FallbackSpeechToTextEngine` 会在前一个 STT 引擎失败或返回空结果时继续尝试下一个引擎。
 - `openai_text_to_speech_engine.dart` 提供 OpenAI 兼容 TTS 引擎，调用 `/v1/audio/speech` 生成 mp3，使用 OpenAI 兼容 `response_format: mp3` 字段，校验 HTTP(S) Base URL、模型、音色和 10 MB 响应上限，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误。
 - `speech_provider_preset.dart` 提供 STT/TTS 厂商预设 v1：OpenAI 官方、Groq STT 与自定义 OpenAI 兼容；设置页选择预设后自动填充 Base URL、STT 模型、TTS 模型和音色，并在推断已有配置时归一 `/v1` 后缀。
 - `text_to_speech_service.dart` 会将 assistant 文本压缩空白、截断到 4000 字、校验音色格式，把生成音频写入应用临时目录 `tts_audio/` 后调用播放器；`audio_player.dart` 通过 `simichat/audio_player` MethodChannel 调用原生播放。
 - `audio_transcription_provider.dart` 提供 STT 配置状态和默认引擎装配：设置页启用后读取本地加密 API Key、Base URL 与模型，生成 `SpeechToTextEngine`；未配置或密钥解密失败时保持 `null`。
 - `voice_recorder.dart` 定义 `VoiceRecorderPlatform` 与 `MethodChannelVoiceRecorder`，通过 `simichat/voice_recorder` 调用原生录音能力。
 - 输入栏移动端展示语音按钮：点击开始录音，再次点击停止，停止后将 `.m4a` 结果添加为 `audio` 附件，随后复用现有发送、私有归档和 STT 草稿链路。
-- iOS `Info.plist` 已声明 `NSMicrophoneUsageDescription`，`AppDelegate.swift` 使用 `AVAudioRecorder` 请求麦克风权限并录制到应用 cache；Android `AndroidManifest.xml` 已声明 `android.permission.RECORD_AUDIO`，`MainActivity.kt` 使用 `MediaRecorder` 运行时申请权限并录制到应用 cache。
+- iOS `Info.plist` 已声明 `NSMicrophoneUsageDescription` 与 `NSSpeechRecognitionUsageDescription`；`AppDelegate.swift` 使用 `AVAudioRecorder` 请求麦克风权限并录制到应用 cache，同时注册 `simichat/native_speech_to_text`，在网络 STT 不可用时通过 `SFSpeechURLRecognitionRequest` 对应用私有目录内录音做系统识别；Android `AndroidManifest.xml` 已声明 `android.permission.RECORD_AUDIO`，`MainActivity.kt` 使用 `MediaRecorder` 运行时申请权限并录制到应用 cache。
 - 设置页“语音与多模态 / 语音输入”入口已从只读状态升级为配置入口：可启用 / 关闭 STT，设置 OpenAI 兼容 Base URL、模型和 API Key；API Key 加密保存在本机 SharedPreferences，不进入结构化备份、导出包、日志或聊天 Markdown。
 - 设置页“语音与多模态 / 语音播报”入口支持启用 / 关闭 TTS，配置 OpenAI 兼容 Base URL、模型、音色和 API Key；API Key 同样加密本地保存，不进入结构化备份、导出包、日志或聊天 Markdown。
 - AI 回复消息底部提供“语音播报”按钮；仅 assistant 非空文本展示，点击后生成临时 mp3 并调用 Android `MediaPlayer` / iOS `AVAudioPlayer` 播放，原生侧会校验文件存在且位于应用私有目录内；播报生成中显示禁用状态，播放中显示“停止播报”按钮，用户可主动停止原生播放；原生完成 / 停止 / 错误事件会带回当前音频路径，聊天页只在路径匹配当前播报时自动清理“停止播报”状态。
 - 音频附件写入 SQLite 时使用应用私有目录归档路径；转写稿件只记录文件名、大小、状态、转写文本或脱敏错误，不记录完整本地路径。
 - 音频转写稿件写入失败时进入待修复队列；STT 失败会把 sidecar 更新为 `failed`，并脱敏路径、密钥、令牌和 URL；不通过 `debugPrint` 输出音频错误细节，避免异常文本携带本地路径。
-- AI 附件加载对非图片附件不读取 / 不 base64 编码原始文件，避免音频文件被误读入模型请求。
+- 聊天发送链路会先对 audio 附件执行 STT 级联：优先使用设置页显式配置的 OpenAI 兼容 STT；若当前聊天渠道是 `openai_chat` / `openai_response`，继续复用当前渠道 Base URL 与 API Key 调用 `/v1/audio/transcriptions`（默认模型 `whisper-1`）；iOS 上再追加系统 Speech 原生识别兜底。取得转写文本后，把“语音转文字结果”作为普通文本注入聊天上下文，audio 原文件不再作为聊天附件 base64 发送；所有引擎都失败时只向模型注入可解释的配置 / 录音提示，避免模型臆测音频内容。
 - 数据导出会查询 SQLite 附件表，将非语音附件原文件复制到 `attachments/<message-id>/<attachment-id>-<safe-file-name>`；路径片段会净化，缺失文件、符号链接、`exports/` 下文件会跳过，manifest 不记录本机绝对路径。
 - 数据导入已允许恢复 `attachments/` 文件到目标应用目录，并通过 `structured_data/local_database.json` 重建附件 SQLite 元数据；导入后附件 `localPath` 会指向目标设备应用目录下的恢复文件。
 
@@ -69,16 +71,17 @@
 ## 4. 数据流
 
 ```text
-用户选择图片 / 语音 / 文件，或在移动端点击语音按钮录音
+用户选择图片 / 语音 / 文件、在移动端点击语音按钮录音，或粘贴 base64 语音文本
+  -> 若正文包含 base64 语音：sendMessage 先本地解码为临时 audio 附件并移除原始 base64
   -> 录音路径：ChatInputBar -> simichat/voice_recorder -> Android MediaRecorder / iOS AVAudioRecorder -> 应用 cache .m4a
-  -> ChatInputBar 生成 PendingAttachment
+  -> ChatInputBar / base64 解码生成 PendingAttachment
   -> attachment_policy 校验数量 / 大小 / 类型
   -> sendMessage 发送前确认文件存在并读取大小
   -> 若为 audio，发送前复制原始文件到 audio_files/<message-id>/<attachment-id>.<ext>
   -> messages 写入用户消息
   -> attachments 写入附件元数据（audio 使用应用私有目录归档 localPath）
-  -> 若为 audio，异步创建 audio_transcripts/<message-id>/<attachment-id>.md 转写稿件草稿，状态为 pending
-  -> 若设置页启用 OpenAI 兼容 STT，则异步调用 `/v1/audio/transcriptions` 转写归档音频并更新同一个 sidecar：有文字为 ready，空结果为 empty，失败为 failed 且错误脱敏
+  -> 若为 audio，创建 audio_transcripts/<message-id>/<attachment-id>.md 转写稿件草稿，状态为 pending
+  -> 发送给聊天模型前执行 STT 级联：设置页 STT 配置 -> 当前 OpenAI 兼容聊天渠道 `/v1/audio/transcriptions` -> iOS 系统 Speech 原生识别兜底；有文字为 ready，空结果为 empty，失败为 failed 且错误脱敏
 
 用户点击 assistant 回复下方“语音播报”
   -> 读取 TTS 配置和加密 API Key
@@ -91,6 +94,8 @@
   -> ChatPage 通过 audioTranscriptStatusProvider 读取 sidecar 状态并刷新 MessageBubble 音频卡片；用户点击音频卡片时读取 sidecar 脱敏详情并弹窗展示 / 复制
   -> MessageBubble 读取附件元数据并展示图片缩略图 / 音频卡片 / 文件卡片
   -> AiMessage.attachments 传入协议层
+  -> 若 STT 成功：把转写文本作为普通 user 文本发给聊天模型，不再发送 audio base64；粘贴输入的原始 base64 也不进入聊天上下文 / Markdown
+  -> 若所有 STT 引擎都不可用或失败：聊天上下文只包含安全提示，建议配置 STT 音频接口或重新录制
   -> Markdown 原始档案记录附件名称
   -> 数据导出时，非语音附件原文件复制到 attachments/<message-id>/<attachment-id>-<safe-file-name>
   -> 数据导入时，attachments/ 文件恢复到应用目录；structured_data/local_database.json 重建附件 SQLite 元数据并重定向 localPath
@@ -110,8 +115,8 @@
 - 语音附件类型识别测试。
 - 原始语音文件归档测试，验证复制到应用私有目录，删除外部源文件后归档仍存在，且缺失源文件异常不携带完整外部路径。
 - 语音转写稿件草稿归档测试，验证不暴露完整音频路径。
-- STT 转写服务测试：假引擎返回内容时 sidecar 更新为 `ready`，空内容更新为 `empty`，引擎异常更新为 `failed` 且异常文本脱敏为统一错误或安全说明。
-- 麦克风权限声明测试：iOS `NSMicrophoneUsageDescription` 与 Android `RECORD_AUDIO` 均存在。
+- STT 转写服务测试：假引擎返回内容时 sidecar 更新为 `ready`，空内容更新为 `empty`，引擎异常更新为 `failed` 且异常文本脱敏为统一错误或安全说明；fallback 引擎测试覆盖在线 STT 失败 / 空结果后继续尝试下一个引擎。
+- 麦克风与系统语音识别权限声明测试：iOS `NSMicrophoneUsageDescription`、`NSSpeechRecognitionUsageDescription` 与 Android `RECORD_AUDIO` 均存在。
 - OpenAI 兼容 STT 引擎测试：验证 multipart 请求路径、模型字段、文件名、响应解析、HTTP(S) Base URL 校验和失败错误脱敏。
 - STT 配置 Provider 测试：API Key 加密本地保存，启用后可生成引擎，结构化备份不包含 STT 密钥 / Base URL / 模型配置。
 - OpenAI 兼容 TTS 引擎测试：验证 `/v1/audio/speech` JSON 请求、模型 / 音色 / 输入字段、bytes 响应、HTTP(S) Base URL 校验和失败错误脱敏。
@@ -122,7 +127,9 @@
 - 原生音频播放通道静态测试：Android / iOS 注册 `simichat/audio_player`，并分别使用 `MediaPlayer` / `AVAudioPlayer`。
 - 设置页语音输入状态与配置测试：未配置 / 已配置 STT 引擎两种状态均可展示，配置弹窗不回显明文密钥。
 - 输入栏录音按钮组件测试：开始录音、停止后添加音频附件、录音中禁用发送。
-- 非图片附件不读取 / 不 base64 编码原始文件测试。
+- 音频附件 base64 读取测试：校验 `.m4a` 等音频会生成 base64、MIME 和格式字段。
+- inline base64 语音解析测试：覆盖 `data:audio/...;base64,...`、中文 marker、非法 payload 和超大 payload，本地解析后正文不再保留原始 base64。
+- 聊天音频前置转写测试：校验 audio-only 消息使用 STT 转写文本进入普通聊天，上下文不包含音频 base64；OpenAI 兼容 STT 引擎测试覆盖 multipart `/v1/audio/transcriptions` 请求；iOS 原生 Speech MethodChannel 测试覆盖 `transcribeFile` 调用和权限错误映射。
 - 导出包附件完整性测试：非语音附件复制到 `attachments/`，路径净化，不泄露源目录，跳过 audio / 缺失附件。
 - 导入 `attachments/` 文件恢复测试。
 - 聊天核心数据库快照恢复测试：恢复 sessions / messages / attachments，并重定向附件 localPath。
@@ -145,7 +152,9 @@
 - [x] 设置页“语音与多模态 / 语音输入”状态入口：展示权限声明、STT 引擎状态和语音文件附件临时路径说明。
 - [x] OpenAI 兼容 STT 引擎与配置入口：设置页保存启用状态、Base URL、模型和加密 API Key，发送 / 录制语音后自动调用 `/v1/audio/transcriptions` 更新转写 sidecar。
 - [x] 移动端录音按钮与原生运行时权限申请：Android `MediaRecorder` / iOS `AVAudioRecorder` 录制 `.m4a`，停止后添加为音频附件。
-- [x] 非图片附件不读取 / 不 base64 编码原始文件，降低音频附件误上传风险。
+- [x] 音频附件发送前 STT 音频接口转写：发送语音时优先调用显式 STT 配置，未配置时复用当前 OpenAI 兼容聊天渠道调用 `/v1/audio/transcriptions`；成功后把转写文本作为普通聊天内容发送，不再把 audio base64 交给聊天模型。
+- [x] base64 语音文本粘贴转写：支持 `data:audio/...;base64,...` 和“base64 的语音字符：...”输入，先解码为临时音频附件再走 STT 级联，原始 base64 不入库、不进 Markdown、不进模型上下文。
+- [x] iOS 系统 Speech 原生识别兜底：在线 STT 失败或返回空结果后，通过 `simichat/native_speech_to_text` 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内录音；权限说明、路径边界和 MethodChannel 错误映射已测试。
 - [x] 附件导出复制非语音原文件到 `attachments/`，并支持安全导入恢复文件和 SQLite 附件元数据。
 - [x] OpenAI 兼容 TTS 语音播报：assistant 回复一键播报、临时 mp3、Android / iOS 原生播放通道、TTS API Key 本地加密配置。
 - [x] TTS 播放停止控制：播报生成中禁用状态、播放中停止按钮、停止后清理当前播报状态。

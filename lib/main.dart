@@ -65,7 +65,7 @@ class AiChatApp extends ConsumerWidget {
     final fontScale = ref.watch(fontScaleProvider);
 
     return MaterialApp(
-      title: 'AI Chat',
+      title: 'SimiAIChat',
       debugShowCheckedModeBanner: false,
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -314,7 +314,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
       children: [
         Text(
           activeSession.whenOrNull(data: (session) => session?.title) ??
-              'AI Chat',
+              'SimiAIChat',
           style: const TextStyle(fontSize: 16),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,

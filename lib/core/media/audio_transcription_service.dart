@@ -18,6 +18,42 @@ abstract interface class SpeechToTextEngine {
   Future<String> transcribe(AudioTranscriptionInput input);
 }
 
+class FallbackSpeechToTextEngine implements SpeechToTextEngine {
+  final List<SpeechToTextEngine> engines;
+
+  const FallbackSpeechToTextEngine(this.engines);
+
+  @override
+  Future<String> transcribe(AudioTranscriptionInput input) async {
+    if (engines.isEmpty) {
+      throw const AudioTranscriptionException('语音转文字引擎未配置');
+    }
+
+    final errors = <String>[];
+    var hasEmptyTranscript = false;
+    for (final engine in engines) {
+      try {
+        final transcript = (await engine.transcribe(input)).trim();
+        if (transcript.isNotEmpty) return transcript;
+        hasEmptyTranscript = true;
+      } on AudioTranscriptionException catch (error) {
+        final message = error.message.trim();
+        if (message.isNotEmpty && !errors.contains(message)) {
+          errors.add(message);
+        }
+      } catch (_) {
+        const message = '语音转文字失败';
+        if (!errors.contains(message)) errors.add(message);
+      }
+    }
+
+    if (hasEmptyTranscript) return '';
+    throw AudioTranscriptionException(
+      errors.isEmpty ? '语音转文字失败' : errors.join('；'),
+    );
+  }
+}
+
 class AudioTranscriptionJob {
   final String messageId;
   final String attachmentId;

@@ -1,12 +1,14 @@
 import Flutter
 import UIKit
 import AVFoundation
+import Speech
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, AVAudioPlayerDelegate {
   private var dataExportShareChannel: FlutterMethodChannel?
   private var voiceRecorderChannel: FlutterMethodChannel?
   private var audioPlayerChannel: FlutterMethodChannel?
+  private var nativeSpeechToTextChannel: FlutterMethodChannel?
   private var audioRecorder: AVAudioRecorder?
   private var audioPlayer: AVAudioPlayer?
   private var audioPlayerURL: URL?
@@ -26,6 +28,7 @@ import AVFoundation
     registerDataExportShareChannel(messenger: messenger)
     registerVoiceRecorderChannel(messenger: messenger)
     registerAudioPlayerChannel(messenger: messenger)
+    registerNativeSpeechToTextChannel(messenger: messenger)
   }
 
   private func registerDataExportShareChannel(messenger: FlutterBinaryMessenger) {
@@ -80,6 +83,21 @@ import AVFoundation
       }
     }
     audioPlayerChannel = channel
+  }
+
+  private func registerNativeSpeechToTextChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "simichat/native_speech_to_text",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "transcribeFile" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      self?.transcribeSpeechFile(call: call, result: result)
+    }
+    nativeSpeechToTextChannel = channel
   }
 
   private func shareExportFile(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -244,6 +262,140 @@ import AVFoundation
       try? FileManager.default.removeItem(at: fileURL)
     }
     result(true)
+  }
+
+  private func transcribeSpeechFile(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let arguments = call.arguments as? [String: Any],
+          let path = arguments["path"] as? String,
+          !path.isEmpty else {
+      result(FlutterError(code: "INVALID_ARGUMENT", message: "缺少语音文件路径", details: nil))
+      return
+    }
+
+    let fileURL = URL(fileURLWithPath: path)
+      .resolvingSymlinksInPath()
+      .standardizedFileURL
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+          !isDirectory.boolValue else {
+      result(FlutterError(code: "FILE_NOT_FOUND", message: "语音文件不存在，无法转写", details: nil))
+      return
+    }
+
+    let homePath = URL(fileURLWithPath: NSHomeDirectory())
+      .resolvingSymlinksInPath()
+      .standardizedFileURL
+      .path
+    guard fileURL.path == homePath || fileURL.path.hasPrefix(homePath + "/") else {
+      result(FlutterError(code: "OUTSIDE_APP_DATA", message: "只能识别应用私有目录内的语音文件", details: nil))
+      return
+    }
+
+    SFSpeechRecognizer.requestAuthorization { [weak self] status in
+      DispatchQueue.main.async {
+        switch status {
+        case .authorized:
+          let rawLocale = arguments["localeIdentifier"] as? String
+          let localeIdentifier = rawLocale?.isEmpty == false ? rawLocale! : "zh-CN"
+          self?.runSpeechRecognition(
+            fileURL: fileURL,
+            localeIdentifier: localeIdentifier,
+            result: result
+          )
+        case .denied:
+          result(FlutterError(
+            code: "PERMISSION_DENIED",
+            message: "系统语音识别权限被拒绝，请在系统设置中允许语音识别",
+            details: nil
+          ))
+        case .restricted:
+          result(FlutterError(
+            code: "PERMISSION_RESTRICTED",
+            message: "当前设备限制使用系统语音识别",
+            details: nil
+          ))
+        case .notDetermined:
+          result(FlutterError(
+            code: "PERMISSION_DENIED",
+            message: "系统语音识别权限未授权",
+            details: nil
+          ))
+        @unknown default:
+          result(FlutterError(
+            code: "PERMISSION_RESTRICTED",
+            message: "系统语音识别授权状态异常",
+            details: nil
+          ))
+        }
+      }
+    }
+  }
+
+  private func runSpeechRecognition(
+    fileURL: URL,
+    localeIdentifier: String,
+    result: @escaping FlutterResult
+  ) {
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier)),
+          recognizer.isAvailable else {
+      result(FlutterError(code: "RECOGNIZER_UNAVAILABLE", message: "系统语音识别暂不可用", details: nil))
+      return
+    }
+
+    let request = SFSpeechURLRecognitionRequest(url: fileURL)
+    request.shouldReportPartialResults = true
+
+    var completed = false
+    var bestText = ""
+    var recognitionTask: SFSpeechRecognitionTask?
+    let finish: (Any) -> Void = { value in
+      DispatchQueue.main.async {
+        guard !completed else { return }
+        completed = true
+        recognitionTask?.cancel()
+        result(value)
+      }
+    }
+
+    recognitionTask = recognizer.recognitionTask(with: request) { recognitionResult, error in
+      if let text = recognitionResult?.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines),
+         !text.isEmpty {
+        bestText = text
+      }
+
+      if recognitionResult?.isFinal == true {
+        finish(bestText)
+        return
+      }
+
+      if let error {
+        if !bestText.isEmpty {
+          finish(bestText)
+        } else {
+          finish(FlutterError(
+            code: "RECOGNITION_FAILED",
+            message: self.safeSpeechRecognitionError(error),
+            details: nil
+          ))
+        }
+      }
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+      if !completed {
+        if !bestText.isEmpty {
+          finish(bestText)
+        } else {
+          finish(FlutterError(code: "TIMEOUT", message: "系统语音识别超时", details: nil))
+        }
+      }
+    }
+  }
+
+  private func safeSpeechRecognitionError(_ error: Error) -> String {
+    let message = (error as NSError).localizedDescription
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return message.isEmpty ? "系统语音识别失败，请重新录制更清晰的语音" : message
   }
 
   private func playAudioFile(call: FlutterMethodCall, result: @escaping FlutterResult) {

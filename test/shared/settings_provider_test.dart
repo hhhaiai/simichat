@@ -20,8 +20,8 @@ void main() {
 
     test('formats font scale as percentage', () {
       expect(formatFontScale(1), '100%');
-      expect(formatFontScale(1.25), '125%');
-      expect(formatFontScale(10), '135%');
+      expect(formatFontScale(1.15), '115%');
+      expect(formatFontScale(10), '120%');
     });
 
     test('persists clamped font scale', () async {

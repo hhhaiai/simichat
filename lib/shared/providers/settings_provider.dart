@@ -9,8 +9,8 @@ const _kFontScaleKey = 'font_scale';
 const _kSemanticSearchEnabledKey = 'semantic_search_enabled';
 const _kDefaultCompressThreshold = 2000;
 const double kDefaultFontScale = 1.0;
-const double kMinFontScale = 0.85;
-const double kMaxFontScale = 1.35;
+const double kMinFontScale = 0.90;
+const double kMaxFontScale = 1.20;
 const _kSystemPromptsKey = 'system_prompts';
 
 /// 主题模式 Provider（持久化）

@@ -11,7 +11,7 @@ void main() {
       'android/app/src/main/res/xml/simichat_file_paths.xml',
     ).readAsStringSync();
     final activity = File(
-      'android/app/src/main/kotlin/com/aichat/ai_chat_app/MainActivity.kt',
+      'android/app/src/main/kotlin/top/simitalk/aichat/MainActivity.kt',
     ).readAsStringSync();
 
     expect(manifest, contains('androidx.core.content.FileProvider'));

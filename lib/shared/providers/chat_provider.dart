@@ -12,13 +12,18 @@ import '../../core/ai/ai_protocol.dart' as ai;
 import '../../core/ai/model_switch_record.dart';
 import '../../core/ai/openai_chat_protocol.dart' as ai_openai_chat;
 import '../../core/ai/ai_service.dart';
+import '../../core/context/context_budget_trimmer.dart';
 import '../../core/context/context_builder.dart';
 import '../../core/context/context_compressor.dart';
+import '../../core/context/model_context_budget.dart';
 import '../../core/context/token_estimator.dart';
 import '../../core/crypto/key_encryptor.dart';
 import '../../core/media/audio_file_archive.dart';
+import '../../core/media/inline_base64_audio.dart';
 import '../../core/media/audio_transcription_service.dart';
 import '../../core/media/audio_transcript_archive.dart';
+import '../../core/media/native_speech_to_text_engine.dart';
+import '../../core/media/openai_speech_to_text_engine.dart';
 import '../../core/memory/key_point_memory.dart';
 import '../../core/skills/skill.dart' as skill_model;
 import 'mcp_provider.dart';
@@ -37,6 +42,74 @@ import 'session_provider.dart';
 import 'settings_provider.dart';
 
 const _uuid = Uuid();
+const kAudioOnlyMessagePrompt = '语音转文字未得到可用结果。请提示用户检查 STT 音频接口配置，或重新录制更清晰的语音。';
+const _sttNotConfiguredMessage =
+    '未配置语音转文字 STT，且当前模型渠道不支持自动复用 OpenAI 兼容音频接口。请在设置里的语音输入中配置 STT。';
+const _audioTranscriptInstruction = '以下是语音转文字结果，请根据这个语音内容回答：';
+const _contextLimitUserMessage =
+    '当前对话上下文超过了模型限制。已自动优先保留最新问题并裁剪较早历史；如果仍失败，请切换更大上下文模型，或降低长文档 / 工具说明 / 历史消息长度后重试。';
+
+@visibleForTesting
+String? initialAudioTranscriptText(String content) {
+  final trimmed = content.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
+@visibleForTesting
+String audioAwareMessageContent({
+  required String content,
+  required bool hasAudioAttachment,
+  String? audioTranscript,
+}) {
+  if (!hasAudioAttachment) return content;
+  final normalizedContent = content.trim();
+  final normalizedTranscript = audioTranscript?.trim();
+  if (normalizedTranscript != null && normalizedTranscript.isNotEmpty) {
+    final buffer = StringBuffer();
+    if (normalizedContent.isNotEmpty) {
+      buffer
+        ..writeln(normalizedContent)
+        ..writeln();
+    }
+    buffer
+      ..writeln(_audioTranscriptInstruction)
+      ..write(normalizedTranscript);
+    return buffer.toString();
+  }
+  if (normalizedContent.isNotEmpty) {
+    return '$normalizedContent\n\n$kAudioOnlyMessagePrompt';
+  }
+  return kAudioOnlyMessagePrompt;
+}
+
+@visibleForTesting
+bool canUseChannelSpeechToTextFallback(String protocol) {
+  return protocol == 'openai_chat' || protocol == 'openai_response';
+}
+
+@visibleForTesting
+bool isContextLimitErrorForTesting(String error) => _isContextLimitError(error);
+
+@visibleForTesting
+String contextLimitUserMessageForTesting() => _contextLimitUserMessage;
+
+bool _isContextLimitError(Object error) {
+  final text = error.toString().toLowerCase();
+  return text.contains('context_length_exceeded') ||
+      text.contains('maximum context length') ||
+      text.contains('context length') ||
+      text.contains('context window') ||
+      text.contains('too many tokens') ||
+      text.contains('input tokens exceed') ||
+      text.contains('exceeds the model') ||
+      text.contains('超过') && text.contains('上下文');
+}
+
+int _strictRetryInputBudget(int maxInputTokens) {
+  final strict = (maxInputTokens * 0.65).floor();
+  if (maxInputTokens <= 1024) return strict > 0 ? strict : 1;
+  return strict < 1024 ? 1024 : strict;
+}
 
 class AudioTranscriptStatusRequest {
   final String messageId;
@@ -145,7 +218,7 @@ Future<void> _appendConversationArchiveMessage({
   }
 }
 
-Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
+Future<String?> _writeAudioTranscriptDraftAndMaybeTranscribe({
   required WidgetRef ref,
   required String sessionId,
   required String messageId,
@@ -154,18 +227,22 @@ Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
   required String fileName,
   required int fileSize,
   String? transcript,
+  SpeechToTextEngine? engineOverride,
 }) async {
-  if (kIsWeb) return;
+  if (kIsWeb) return null;
   final AudioTranscriptArchive archive;
   try {
     final root = await getApplicationDocumentsDirectory();
     archive = AudioTranscriptArchive(rootDirectory: root);
+    final initialTranscript = transcript == null
+        ? null
+        : initialAudioTranscriptText(transcript);
     await archive.writeDraft(
       messageId: messageId,
       attachmentId: attachmentId,
       fileName: fileName,
       fileSize: fileSize,
-      transcript: transcript,
+      transcript: initialTranscript,
     );
     _invalidateAudioTranscriptStatus(
       ref,
@@ -180,15 +257,43 @@ Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
           operation: 'audio-transcript-draft',
           error: e,
         );
-    return;
+    return null;
   }
 
-  final engine = ref.read(speechToTextEngineProvider);
-  if (engine == null) return;
+  final engine = engineOverride ?? ref.read(speechToTextEngineProvider);
+  if (engine == null) {
+    final initialTranscript = initialAudioTranscriptText(transcript ?? '');
+    if (initialTranscript == null) {
+      try {
+        await archive.writeFailure(
+          messageId: messageId,
+          attachmentId: attachmentId,
+          fileName: fileName,
+          fileSize: fileSize,
+          error: _sttNotConfiguredMessage,
+        );
+      } catch (e) {
+        await ref
+            .read(archiveRepairQueueProvider.notifier)
+            .recordFailure(
+              sessionId: sessionId,
+              operation: 'audio-transcription-not-configured',
+              error: e,
+            );
+      } finally {
+        _invalidateAudioTranscriptStatus(
+          ref,
+          messageId: messageId,
+          attachmentId: attachmentId,
+        );
+      }
+    }
+    return initialTranscript;
+  }
 
   try {
     final service = AudioTranscriptionService(archive: archive, engine: engine);
-    await service.transcribeAndArchive(
+    final result = await service.transcribeAndArchive(
       AudioTranscriptionJob(
         messageId: messageId,
         attachmentId: attachmentId,
@@ -197,6 +302,7 @@ Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
         fileSize: fileSize,
       ),
     );
+    return initialAudioTranscriptText(result.transcript);
   } catch (e) {
     await ref
         .read(archiveRepairQueueProvider.notifier)
@@ -212,6 +318,60 @@ Future<void> _writeAudioTranscriptDraftAndMaybeTranscribe({
       attachmentId: attachmentId,
     );
   }
+  return null;
+}
+
+SpeechToTextEngine? _resolveSpeechToTextEngineForMessage({
+  required WidgetRef ref,
+  required ChannelModelWithChannel modelInfo,
+  required String apiKey,
+}) {
+  final engines = <SpeechToTextEngine>[];
+  final configured = ref.read(speechToTextEngineProvider);
+  if (configured != null) engines.add(configured);
+  if (canUseChannelSpeechToTextFallback(modelInfo.channel.protocol)) {
+    engines.add(
+      OpenAiCompatibleSpeechToTextEngine(
+        baseUrl: modelInfo.channel.baseUrl,
+        apiKey: apiKey,
+      ),
+    );
+  }
+  if (!kIsWeb && Platform.isIOS) {
+    engines.add(const NativeSpeechToTextEngine());
+  }
+  if (engines.isEmpty) return null;
+  if (engines.length == 1) return engines.first;
+  return FallbackSpeechToTextEngine(engines);
+}
+
+Future<String?> _transcribeAudioAttachmentsForAi({
+  required WidgetRef ref,
+  required String sessionId,
+  required String messageId,
+  required List<_StoredAttachment> attachments,
+  required SpeechToTextEngine? engine,
+}) async {
+  final transcripts = <String>[];
+  for (final attachment in attachments) {
+    if (attachment.fileType != 'audio') continue;
+    final transcript = await _writeAudioTranscriptDraftAndMaybeTranscribe(
+      ref: ref,
+      sessionId: sessionId,
+      messageId: messageId,
+      attachmentId: attachment.id,
+      audioPath: attachment.localPath,
+      fileName: attachment.fileName,
+      fileSize: attachment.fileSize,
+      engineOverride: engine,
+    );
+    final normalized = transcript?.trim();
+    if (normalized != null && normalized.isNotEmpty) {
+      transcripts.add('【${attachment.fileName}】\n$normalized');
+    }
+  }
+  if (transcripts.isEmpty) return null;
+  return transcripts.join('\n\n');
 }
 
 class _PreparedAttachment {
@@ -245,6 +405,22 @@ Future<List<_PreparedAttachment>> _prepareAttachments(
     );
   }
   return prepared;
+}
+
+Future<PendingAttachment?> _materializeInlineBase64AudioAttachment(
+  InlineBase64AudioPayload payload,
+) async {
+  if (kIsWeb) return null;
+  final directory = await getTemporaryDirectory();
+  final file = File(
+    '${directory.path}/simichat-inline-audio-${DateTime.now().millisecondsSinceEpoch}.${payload.extension}',
+  );
+  await file.writeAsBytes(payload.bytes, flush: true);
+  return PendingAttachment(
+    path: file.path,
+    name: payload.fileName,
+    type: 'audio',
+  );
 }
 
 class _StoredAttachment {
@@ -522,7 +698,38 @@ Future<bool> sendMessage({
     return false;
   }
 
-  final preparedAttachments = await _prepareAttachments(attachments);
+  var messageContent = content;
+  var messageAttachments = attachments;
+  try {
+    final inlineAudio = extractInlineBase64Audio(messageContent);
+    messageContent = inlineAudio.cleanedContent.trim();
+    final payload = inlineAudio.audio;
+    if (payload != null) {
+      final inlineAttachment = await _materializeInlineBase64AudioAttachment(
+        payload,
+      );
+      if (inlineAttachment == null) {
+        ref.read(streamStateProvider(sessionId).notifier).state =
+            const StreamState(error: '当前平台暂不支持直接粘贴 base64 语音，请改用语音文件附件。');
+        return false;
+      }
+      messageAttachments = [...messageAttachments, inlineAttachment];
+    }
+  } on InlineBase64AudioException catch (error) {
+    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+      error: error.message,
+    );
+    return false;
+  } catch (_) {
+    ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
+      error: 'base64 语音解析失败，请确认内容是完整音频 base64 字符串。',
+    );
+    return false;
+  }
+
+  if (messageContent.isEmpty && messageAttachments.isEmpty) return false;
+
+  final preparedAttachments = await _prepareAttachments(messageAttachments);
 
   // 插入用户消息
   final userMsgId = _uuid.v4();
@@ -530,12 +737,12 @@ Future<bool> sendMessage({
     messageId: userMsgId,
     attachments: preparedAttachments,
   );
-  final userTokens = TokenEstimator.estimate(content);
+  var userTokens = TokenEstimator.estimate(messageContent);
   await messageDao.insertMessage(
     id: userMsgId,
     sessionId: sessionId,
     role: 'user',
-    content: content,
+    content: messageContent,
     tokens: userTokens,
   );
 
@@ -549,20 +756,6 @@ Future<bool> sendMessage({
       fileName: attachment.fileName,
       fileSize: attachment.fileSize,
     );
-    if (attachment.fileType == 'audio') {
-      unawaited(
-        _writeAudioTranscriptDraftAndMaybeTranscribe(
-          ref: ref,
-          sessionId: sessionId,
-          messageId: userMsgId,
-          attachmentId: attachment.id,
-          audioPath: attachment.localPath,
-          fileName: attachment.fileName,
-          fileSize: attachment.fileSize,
-          transcript: content,
-        ),
-      );
-    }
   }
 
   unawaited(
@@ -572,7 +765,7 @@ Future<bool> sendMessage({
       sessionTitle: session.title,
       messageId: userMsgId,
       role: 'user',
-      content: content,
+      content: messageContent,
       attachmentNames: storedAttachments
           .map((attachment) => attachment.fileName)
           .toList(),
@@ -590,7 +783,7 @@ Future<bool> sendMessage({
         .extractFromUserMessage(
           sessionId: sessionId,
           sourceMessageId: userMsgId,
-          content: content,
+          content: messageContent,
         );
     if (extractedMemory.isNotEmpty) {
       await memoryNotifier.rememberAll(extractedMemory);
@@ -614,6 +807,34 @@ Future<bool> sendMessage({
     );
     return false;
   }
+
+  final hasAudioAttachment = storedAttachments.any(
+    (attachment) => attachment.fileType == 'audio',
+  );
+  String? audioTranscriptForAi;
+  if (hasAudioAttachment) {
+    ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
+      isStreaming: true,
+      isWaitingForFirstToken: true,
+    );
+    audioTranscriptForAi = await _transcribeAudioAttachmentsForAi(
+      ref: ref,
+      sessionId: sessionId,
+      messageId: userMsgId,
+      attachments: storedAttachments,
+      engine: _resolveSpeechToTextEngineForMessage(
+        ref: ref,
+        modelInfo: modelInfo,
+        apiKey: apiKey,
+      ),
+    );
+  }
+  final effectiveUserContent = audioAwareMessageContent(
+    content: messageContent,
+    hasAudioAttachment: hasAudioAttachment,
+    audioTranscript: audioTranscriptForAi,
+  );
+  userTokens = TokenEstimator.estimate(effectiveUserContent);
 
   // 构建上下文（包含系统提示词 + Skills + MCP Tools）
   final customPrompt = ref
@@ -641,15 +862,43 @@ Future<bool> sendMessage({
   String? memoryPrompt;
   try {
     memoryPrompt = buildKeyPointMemorySystemPrompt(
-      await memoryNotifier.searchRelevant(content, sessionId: sessionId),
+      await memoryNotifier.searchRelevant(
+        effectiveUserContent,
+        sessionId: sessionId,
+      ),
     );
   } catch (_) {
     // 记忆检索失败时降级为无记忆上下文，避免影响正常模型请求。
     memoryPrompt = null;
   }
+  final contextBudget = resolveModelContextBudget(
+    protocol: modelInfo.channel.protocol,
+    modelName: modelInfo.channelModel.modelName,
+  );
+  final compressionThreshold = dynamicCompressThresholdForBudget(
+    contextBudget,
+    ref.read(compressThresholdProvider),
+  );
+  try {
+    final compressed = await ContextCompressor(messageDao).compressIfNeeded(
+      sessionId: sessionId,
+      threshold: compressionThreshold,
+      protocol: modelInfo.channel.protocol,
+      baseUrl: modelInfo.channel.baseUrl,
+      apiKey: apiKey,
+      model: modelInfo.channelModel.modelName,
+    );
+    if (compressed) {
+      ref.invalidate(messagesProvider(sessionId));
+      ref.invalidate(sessionsProvider);
+    }
+  } catch (_) {
+    // 请求前压缩失败时继续走预算裁剪，避免把一次摘要失败变成发送失败。
+  }
   final contextBuilder = ContextBuilder(messageDao);
   var (systemPrompt, contextMessages) = await contextBuilder.buildContext(
     sessionId,
+    maxInputTokens: contextBudget.maxInputTokens,
     customSystemPrompt: customPrompt,
     memoryPrompt: memoryPrompt,
     skillsPrompt: skillsPrompt,
@@ -660,6 +909,7 @@ Future<bool> sendMessage({
   if (storedAttachments.isNotEmpty) {
     final aiAttachments = <ai.Attachment>[];
     for (final attachment in storedAttachments) {
+      if (attachment.fileType == 'audio') continue;
       aiAttachments.add(
         ai.Attachment(type: attachment.fileType, path: attachment.localPath),
       );
@@ -670,12 +920,17 @@ Future<bool> sendMessage({
         ...contextMessages.sublist(0, contextMessages.length - 1),
         ai.AiMessage(
           role: last.role,
-          content: last.content,
+          content: effectiveUserContent,
           attachments: aiAttachments,
         ),
       ];
     }
   }
+  contextMessages = trimAiMessagesToTokenBudget(
+    systemPrompt: systemPrompt,
+    messages: contextMessages,
+    maxInputTokens: contextBudget.maxInputTokens,
+  );
 
   ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
     isStreaming: true,
@@ -695,6 +950,7 @@ Future<bool> sendMessage({
       userTokens: userTokens,
       systemPrompt: systemPrompt,
       contextMessages: contextMessages,
+      maxInputTokens: contextBudget.maxInputTokens,
     ),
   );
   return true;
@@ -712,11 +968,13 @@ Future<void> _runAssistantResponse({
   required int userTokens,
   required String? systemPrompt,
   required List<ai.AiMessage> contextMessages,
+  required int maxInputTokens,
 }) async {
   try {
     const maxToolRounds = 3;
     var toolRound = 0;
     var totalTokens = session.totalTokens + userTokens;
+    var contextLimitRetryCount = 0;
 
     while (toolRound < maxToolRounds) {
       final assistantMsgId = _uuid.v4();
@@ -726,6 +984,7 @@ Future<void> _runAssistantResponse({
       final completer = Completer<void>();
       _responseCompletions[sessionId] = completer;
       bool firstTokenReceived = false;
+      Object? streamError;
       final cancelToken = CancelToken();
       _cancelTokens[sessionId] = cancelToken;
 
@@ -764,8 +1023,7 @@ Future<void> _runAssistantResponse({
         },
         onError: (Object e) {
           if (!completer.isCompleted) {
-            ref.read(streamStateProvider(sessionId).notifier).state =
-                StreamState(isStreaming: false, error: e.toString());
+            streamError = e;
             completer.complete();
           }
         },
@@ -782,6 +1040,36 @@ Future<void> _runAssistantResponse({
       _responseCompletions.remove(sessionId);
 
       stopwatch.stop();
+
+      if (streamError != null) {
+        if (_isContextLimitError(streamError!) && contextLimitRetryCount < 1) {
+          final retryBudget = _strictRetryInputBudget(maxInputTokens);
+          final trimmedMessages = trimAiMessagesToTokenBudget(
+            systemPrompt: systemPrompt,
+            messages: contextMessages,
+            maxInputTokens: retryBudget,
+          );
+          if (trimmedMessages.isNotEmpty) {
+            contextLimitRetryCount++;
+            contextMessages = trimmedMessages;
+            ref
+                .read(streamStateProvider(sessionId).notifier)
+                .state = const StreamState(
+              isStreaming: true,
+              isWaitingForFirstToken: true,
+            );
+            continue;
+          }
+        }
+
+        ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+          isStreaming: false,
+          error: _isContextLimitError(streamError!)
+              ? _contextLimitUserMessage
+              : streamError.toString(),
+        );
+        return;
+      }
 
       final rawResponseContent = buffer.toString();
       final toolCalls = _parseToolCalls(rawResponseContent, ref);
@@ -970,7 +1258,13 @@ Future<void> _runAssistantResponse({
         unawaited(_generateTitle(ref, sessionId, responseContent, modelInfo));
       }
 
-      final threshold = ref.read(compressThresholdProvider);
+      final threshold = dynamicCompressThresholdForBudget(
+        resolveModelContextBudget(
+          protocol: modelInfo.channel.protocol,
+          modelName: modelInfo.channelModel.modelName,
+        ),
+        ref.read(compressThresholdProvider),
+      );
       final compressor = ContextCompressor(messageDao);
       unawaited(
         compressor

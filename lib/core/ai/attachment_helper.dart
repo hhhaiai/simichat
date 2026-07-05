@@ -4,16 +4,16 @@ import 'ai_protocol.dart';
 
 const kAttachmentImageDataUrlMaxBytes = 1024 * 1024;
 
-/// 读取附件文件为 base64
+/// 读取可直接传给多模态模型的附件为 base64。
 Future<List<AttachmentData>> loadAttachments(
   List<Attachment> attachments,
 ) async {
   final result = <AttachmentData>[];
   for (final att in attachments) {
     final mimeType = att.mimeType ?? _guessMimeType(att.path, att.type);
-    if (att.type == 'image') {
+    if (att.type == 'image' || att.type == 'audio') {
       final dataUrl = parseAttachmentImageDataUrl(att.path);
-      if (dataUrl != null) {
+      if (att.type == 'image' && dataUrl != null) {
         result.add(
           AttachmentData(
             type: att.type,
@@ -26,7 +26,14 @@ Future<List<AttachmentData>> loadAttachments(
       final bytes = await File(att.path).readAsBytes();
       final base64 = base64Encode(bytes);
       result.add(
-        AttachmentData(type: att.type, base64: base64, mimeType: mimeType),
+        AttachmentData(
+          type: att.type,
+          base64: base64,
+          mimeType: mimeType,
+          audioFormat: att.type == 'audio'
+              ? _guessAudioFormat(att.path, mimeType)
+              : null,
+        ),
       );
     } else {
       result.add(
@@ -132,15 +139,62 @@ String _guessMimeType(String path, String type) {
   return 'application/octet-stream';
 }
 
+String _guessAudioFormat(String path, String mimeType) {
+  final ext = path.split('.').last.toLowerCase();
+  switch (ext) {
+    case 'mp3':
+    case 'm4a':
+    case 'mp4':
+    case 'aac':
+    case 'wav':
+    case 'flac':
+    case 'ogg':
+    case 'opus':
+    case 'amr':
+      return ext;
+  }
+  switch (mimeType.toLowerCase()) {
+    case 'audio/mpeg':
+      return 'mp3';
+    case 'audio/mp4':
+      return 'm4a';
+    case 'audio/aac':
+      return 'aac';
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return 'wav';
+    case 'audio/flac':
+      return 'flac';
+    case 'audio/ogg':
+      return 'ogg';
+    case 'audio/opus':
+      return 'opus';
+    case 'audio/amr':
+      return 'amr';
+  }
+  return 'mp3';
+}
+
 class AttachmentData {
   final String type;
   final String base64;
   final String mimeType;
+  final String? audioFormat;
+
   const AttachmentData({
     required this.type,
     required this.base64,
     required this.mimeType,
+    this.audioFormat,
   });
+}
+
+String buildAudioAttachmentText(AttachmentData attachment) {
+  final format = attachment.audioFormat ?? 'mp3';
+  return '[附件: audio]\n'
+      'mime_type: ${attachment.mimeType}\n'
+      'format: $format\n'
+      'base64:\n${attachment.base64}';
 }
 
 class AttachmentImageDataUrl {

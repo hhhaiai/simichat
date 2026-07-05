@@ -111,15 +111,7 @@ class MessageBubble extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (content.isNotEmpty)
-                  SelectableText(
-                    content,
-                    style: TextStyle(
-                      color: scheme.onSurface,
-                      fontSize: 15,
-                      height: 1.45,
-                    ),
-                  ),
+                if (content.isNotEmpty) LatexMarkdownWidget(data: content),
                 if (attachments.isNotEmpty) ...[
                   if (content.isNotEmpty) const SizedBox(height: 10),
                   _AttachmentList(

@@ -31,10 +31,17 @@ class ClaudeProtocol implements AiProtocol {
           if (att.type == 'image') {
             content.add({
               'type': 'image',
-              'source': {'type': 'base64', 'media_type': att.mimeType, 'data': att.base64},
+              'source': {
+                'type': 'base64',
+                'media_type': att.mimeType,
+                'data': att.base64,
+              },
             });
           } else {
-            content.add({'type': 'text', 'text': '[附件: ${att.type}] base64 数据已省略'});
+            content.add({
+              'type': 'text',
+              'text': _unsupportedAttachmentText(att.type),
+            });
           }
         }
         msgList.add({'role': m.role, 'content': content});
@@ -53,38 +60,44 @@ class ClaudeProtocol implements AiProtocol {
       body['system'] = systemPrompt;
     }
 
-    final byteStream = await openSseStream(SseRequestConfig(
-      url: url,
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: body,
-      cancelToken: cancelToken,
-    ));
+    final byteStream = await openSseStream(
+      SseRequestConfig(
+        url: url,
+        headers: {'x-api-key': apiKey, 'anthropic-version': '2023-06-01'},
+        body: body,
+        cancelToken: cancelToken,
+      ),
+    );
 
     await for (final event in parseSseStream(byteStream)) {
       try {
-          final json = jsonDecode(event.data) as Map<String, dynamic>;
-          final type = json['type'] as String?;
-          if (type == 'content_block_delta') {
-            final delta = json['delta'] as Map<String, dynamic>?;
-            if (delta == null) continue;
+        final json = jsonDecode(event.data) as Map<String, dynamic>;
+        final type = json['type'] as String?;
+        if (type == 'content_block_delta') {
+          final delta = json['delta'] as Map<String, dynamic>?;
+          if (delta == null) continue;
 
-            final deltaType = delta['type'] as String?;
-            if (deltaType == 'thinking_delta') {
-              final thinking = delta['thinking'] as String?;
-              if (thinking != null) yield AiChunk(thinking: thinking);
-            } else if (deltaType == 'text_delta') {
-              final text = delta['text'] as String?;
-              if (text != null) yield AiChunk(content: text);
-            }
-          } else if (type == 'message_stop') {
-            return;
+          final deltaType = delta['type'] as String?;
+          if (deltaType == 'thinking_delta') {
+            final thinking = delta['thinking'] as String?;
+            if (thinking != null) yield AiChunk(thinking: thinking);
+          } else if (deltaType == 'text_delta') {
+            final text = delta['text'] as String?;
+            if (text != null) yield AiChunk(content: text);
           }
-        } catch (e) {
-          debugPrint('[Claude] SSE parse error: $e\nLine: ${event.data}');
+        } else if (type == 'message_stop') {
+          return;
         }
+      } catch (e) {
+        debugPrint('[Claude] SSE parse error: $e\nLine: ${event.data}');
+      }
     }
   }
+}
+
+String _unsupportedAttachmentText(String type) {
+  if (type == 'audio') {
+    return '[附件: audio] 当前 Claude 协议不支持直接音频输入，请先转写后发送，或切换到支持音频输入的模型。';
+  }
+  return '[附件: $type] 当前协议不支持直接上传该类型附件。';
 }

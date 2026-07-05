@@ -31,6 +31,10 @@ void main() {
       role: 'user',
       content: '请记住我喜欢移动端优先和本地隐私。',
     );
+    final targetDayMessageTime = DateTime(2026, 6, 27, 8, 30);
+    await db.customStatement(
+      "UPDATE messages SET created_at = ${targetDayMessageTime.millisecondsSinceEpoch} WHERE id = 'm1'",
+    );
 
     DreamingDigest? firstRun;
     DreamingDigest? secondRun;

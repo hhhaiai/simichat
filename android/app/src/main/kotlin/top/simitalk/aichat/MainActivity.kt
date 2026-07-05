@@ -1,4 +1,4 @@
-package com.aichat.ai_chat_app
+package top.simitalk.aichat
 
 import android.Manifest
 import android.content.Intent

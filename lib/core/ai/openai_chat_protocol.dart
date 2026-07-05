@@ -111,10 +111,15 @@ class OpenAiChatProtocol implements AiProtocol {
               'type': 'image_url',
               'image_url': {'url': 'data:${att.mimeType};base64,${att.base64}'},
             });
+          } else if (att.type == 'audio' && att.base64.isNotEmpty) {
+            content.add({
+              'type': 'text',
+              'text': buildAudioAttachmentText(att),
+            });
           } else {
             content.add({
               'type': 'text',
-              'text': '[附件: ${att.type}] base64 数据已省略',
+              'text': _unsupportedAttachmentText(att.type),
             });
           }
         }
@@ -173,10 +178,15 @@ class OpenAiChatProtocol implements AiProtocol {
               'type': 'image_url',
               'image_url': {'url': 'data:${att.mimeType};base64,${att.base64}'},
             });
+          } else if (att.type == 'audio' && att.base64.isNotEmpty) {
+            content.add({
+              'type': 'text',
+              'text': buildAudioAttachmentText(att),
+            });
           } else {
             content.add({
               'type': 'text',
-              'text': '[附件: ${att.type}] base64 数据已省略',
+              'text': _unsupportedAttachmentText(att.type),
             });
           }
         }
@@ -205,4 +215,11 @@ class OpenAiChatProtocol implements AiProtocol {
       }
     }
   }
+}
+
+String _unsupportedAttachmentText(String type) {
+  if (type == 'audio') {
+    return '[附件: audio] 当前 OpenAI Chat 模型不支持读取该音频文件，请先转写后发送。';
+  }
+  return '[附件: $type] 当前协议不支持直接上传该类型附件。';
 }

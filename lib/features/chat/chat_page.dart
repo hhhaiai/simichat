@@ -798,9 +798,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      'AI Chat',
+                      'SimiAIChat',
                       style: TextStyle(
-                        fontSize: 42,
+                        fontSize: 26,
                         fontWeight: FontWeight.w700,
                         color: scheme.onSurface,
                         letterSpacing: -0.8,

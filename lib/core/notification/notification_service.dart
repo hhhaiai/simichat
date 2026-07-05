@@ -29,8 +29,8 @@ class NotificationService {
       defaultActionName: 'Open notification',
     );
     const windowsSettings = WindowsInitializationSettings(
-      appName: 'AI Chat',
-      appUserModelId: 'com.aichat.ai_chat_app',
+      appName: 'SimiAIChat',
+      appUserModelId: 'top.simitalk.aichat',
       guid: '6a5f3b6d-cd14-4aa0-9a1e-7f6c6f61f0d2',
     );
 
