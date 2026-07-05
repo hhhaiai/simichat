@@ -125,6 +125,56 @@ The Dart VM Service was not discovered after 60 seconds. This is taking much lon
 
 结论：当前 iPhone13 构建 / 安装阶段可达，但 Flutter 测试运行器未成功发现 Dart VM Service；iOS 真机发送链路仍未完成，需要后续继续排查 Xcode 自动化权限、设备解锁前台状态、debug/test runner 启动方式或改用 `xcodebuild test` / XCUITest 路径。
 
+### 进一步定位：Xcode debug session 层（2026-07-06 03:47–03:55）
+
+为排除旧进程干扰，先用 `devicectl` 查询并终止 iPhone13 上两个 Runner 进程：
+
+- `com.aichat.aiChatApp` 旧包 Runner，pid `78854`。
+- `top.simitalk.aichat` 新包 Runner，pid `79005`。
+
+终止后再次运行：
+
+```bash
+./scripts/smoke_device_integration_send.sh 00008110-0016349A3A20A01E
+```
+
+本次不再只停在 Dart VM Service 提示，而是给出更明确错误：
+
+```text
+Xcode is taking longer than expected to start debugging the app.
+Error starting debug session in Xcode: Timed out waiting for CONFIGURATION_BUILD_DIR to update.
+Could not run build/ios/iphoneos/Runner.app on 00008110-0016349A3A20A01E.
+Try launching Xcode and selecting "Product > Run" to fix the problem:
+  open ios/Runner.xcworkspace
+```
+
+随后用普通 debug 启动作对照，并同样临时追加 `sqlite3.source=system` hook、避免 native asset 下载干扰：
+
+```bash
+flutter --no-version-check run \
+  -d 00008110-0016349A3A20A01E \
+  --debug --no-resident --no-publish-port --device-connection attached
+```
+
+普通 app debug 也在同一层失败：
+
+```text
+Xcode is taking longer than expected to start debugging the app.
+Error starting debug session in Xcode: Timed out waiting for CONFIGURATION_BUILD_DIR to update.
+Error launching application on iPhone13.
+```
+
+环境版本：
+
+```text
+Flutter 3.41.9 / Dart 3.11.5
+Xcode 26.6 (17F113)
+devicectl 518.33
+iPhone13 iOS 26.5 23F77
+```
+
+结论更新：iPhone13 当前问题不是 `integration_test` 测试体、不是设备内 mock 服务、也不是旧 Runner 进程本身；更接近本机 Flutter→Xcode debug session 启动链路问题。后续优先验证 Xcode 自动化权限 / Xcode GUI `Product > Run` / DerivedData 清理 / `xcodebuild test` 或 XCUITest 替代路径。
+
 ## 验证与边界
 
 本轮已验证：
@@ -137,6 +187,6 @@ The Dart VM Service was not discovered after 60 seconds. This is taking much lon
 
 本轮未完成：
 
-- iPhone13 真机发送链路仍因 Dart VM Service 未发现而未跑到测试体。
+- iPhone13 真机发送链路仍因 Xcode debug session `CONFIGURATION_BUILD_DIR` 超时而未跑到测试体；普通 `flutter run --debug` 也复现同层错误。
 - 未覆盖停止、重试、模型切换；这些已有 Pixel 8 手工真机 smoke 记录。
 - 未覆盖真实外部模型 API。
