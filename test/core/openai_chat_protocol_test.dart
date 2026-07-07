@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/ai/ai_protocol.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ai_chat_app/core/ai/openai_chat_protocol.dart';
 
@@ -113,5 +114,65 @@ void main() {
       expect(jsonEncode(payload), isNot(contains('base64 数据已省略')));
       expect(jsonEncode(payload), isNot(contains('input_audio')));
     });
+
+    test(
+      'cancels SSE cancel token when stream subscription is cancelled',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requestSeen = Completer<void>();
+        final responseFlushed = Completer<void>();
+        unawaited(
+          server.forEach((request) async {
+            if (!requestSeen.isCompleted) requestSeen.complete();
+            await utf8.decodeStream(request);
+            request.response.bufferOutput = false;
+            request.response.headers.contentType = ContentType(
+              'text',
+              'event-stream',
+            );
+            request.response.write(
+              'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+            );
+            await request.response.flush();
+            if (!responseFlushed.isCompleted) responseFlushed.complete();
+            await Future<void>.delayed(const Duration(seconds: 10));
+          }),
+        );
+
+        final cancelToken = CancelToken();
+        final chunks = <AiChunk>[];
+        final firstChunk = Completer<void>();
+        final subscription = OpenAiChatProtocol()
+            .sendStream(
+              baseUrl: 'http://${server.address.host}:${server.port}/v1',
+              apiKey: 'test-key',
+              model: 'gpt-cancel-test',
+              messages: const [AiMessage(role: 'user', content: 'stop')],
+              cancelToken: cancelToken,
+            )
+            .listen((chunk) {
+              chunks.add(chunk);
+              if (!firstChunk.isCompleted) firstChunk.complete();
+            });
+
+        await requestSeen.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => throw TimeoutException('requestSeen'),
+        );
+        await responseFlushed.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => throw TimeoutException('responseFlushed'),
+        );
+        await firstChunk.future.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => throw TimeoutException('firstChunk'),
+        );
+        await subscription.cancel();
+
+        expect(chunks.single.content, 'partial');
+        expect(cancelToken.isCancelled, isTrue);
+      },
+    );
   });
 }

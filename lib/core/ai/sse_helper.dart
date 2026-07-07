@@ -127,7 +127,7 @@ Future<Stream<List<int>>> openSseStream(SseRequestConfig config) async {
       data: jsonEncode(config.body),
       cancelToken: config.cancelToken,
     );
-    return response.data!.stream;
+    return _cancelAwareByteStream(response.data!.stream, config.cancelToken);
   } on DioException catch (e) {
     if (e.type == DioExceptionType.cancel) {
       throw Exception('请求已取消');
@@ -139,6 +139,31 @@ Future<Stream<List<int>>> openSseStream(SseRequestConfig config) async {
       throw Exception('[$statusCode] $message');
     }
     throw Exception(message);
+  }
+}
+
+Stream<List<int>> _cancelAwareByteStream(
+  Stream<List<int>> source,
+  CancelToken? cancelToken,
+) async* {
+  var completedNormally = false;
+  try {
+    await for (final chunk in source) {
+      yield chunk;
+    }
+    completedNormally = true;
+  } on DioException catch (e) {
+    if (e.type == DioExceptionType.cancel &&
+        cancelToken != null &&
+        cancelToken.isCancelled) {
+      completedNormally = true;
+      return;
+    }
+    rethrow;
+  } finally {
+    if (!completedNormally && cancelToken != null && !cancelToken.isCancelled) {
+      cancelToken.cancel('SSE stream subscription cancelled');
+    }
   }
 }
 
@@ -158,7 +183,8 @@ String normalizeUrl(String baseUrl) {
   final isPrivateIpv4 = RegExp(
     r'^(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?(/.*)?$',
   ).hasMatch(lower);
-  final isIpv6 = RegExp(r'^\[[0-9a-f:]+\](:\d+)?(/.*)?$').hasMatch(lower) ||
+  final isIpv6 =
+      RegExp(r'^\[[0-9a-f:]+\](:\d+)?(/.*)?$').hasMatch(lower) ||
       RegExp(r'^[0-9a-f:]+$').hasMatch(lower);
   final isLocalHost =
       lower == 'localhost' ||
@@ -172,8 +198,9 @@ String normalizeUrl(String baseUrl) {
       lower.startsWith('[::1]/') ||
       lower == '::1';
 
-  final scheme =
-      (isLocalHost || isPrivateIpv4 || isIpv4 || isIpv6) ? 'http' : 'https';
+  final scheme = (isLocalHost || isPrivateIpv4 || isIpv4 || isIpv6)
+      ? 'http'
+      : 'https';
   return '$scheme://$normalized';
 }
 

@@ -483,20 +483,6 @@ class OpenAiCompatibleRelaySession {
         );
       }
 
-      if (body['stream'] == true) {
-        await _writeOpenAiError(
-          request.response,
-          statusCode: HttpStatus.badRequest,
-          message: 'Responses API v1 暂不支持流式输出，请使用 stream=false',
-          type: 'invalid_request_error',
-          code: 'unsupported_stream',
-        );
-        return const _OpenAiRelayOutcome(
-          statusCode: HttpStatus.badRequest,
-          code: 'unsupported_stream',
-        );
-      }
-
       final modelId = body['model'];
       final sanitizedModelId = modelId is String ? modelId.trim() : '';
       if (sanitizedModelId.isEmpty && _routeModel == null) {
@@ -571,9 +557,22 @@ class OpenAiCompatibleRelaySession {
         route = visionRoute;
       }
 
+      final stream = body['stream'] == true;
+      final responseId = 'resp-${_now().microsecondsSinceEpoch}';
+      if (stream) {
+        final model = route.primary;
+        return await _writeStreamingResponse(
+          request.response,
+          id: responseId,
+          model: model,
+          messages: parsed.messages,
+          systemPrompt: parsed.systemPrompt,
+        );
+      }
+
       return await _writeBufferedResponse(
         request.response,
-        id: 'resp-${_now().microsecondsSinceEpoch}',
+        id: responseId,
         route: route,
         messages: parsed.messages,
         systemPrompt: parsed.systemPrompt,
@@ -710,18 +709,12 @@ class OpenAiCompatibleRelaySession {
       final completionId = 'chatcmpl-${_now().microsecondsSinceEpoch}';
       if (stream) {
         final model = route.primary;
-        await _writeStreamingCompletion(
+        return await _writeStreamingCompletion(
           request.response,
           id: completionId,
           model: model,
           messages: parsed.messages,
           systemPrompt: parsed.systemPrompt,
-        );
-        return _OpenAiRelayOutcome(
-          statusCode: HttpStatus.ok,
-          code: 'ok',
-          modelId: model.id,
-          stream: true,
         );
       }
 
@@ -896,7 +889,7 @@ class OpenAiCompatibleRelaySession {
     );
   }
 
-  Future<void> _writeStreamingCompletion(
+  Future<_OpenAiRelayOutcome> _writeStreamingCompletion(
     HttpResponse response, {
     required String id,
     required OpenAiCompatibleRelayModel model,
@@ -911,31 +904,285 @@ class OpenAiCompatibleRelaySession {
     );
     response.headers.set('Connection', 'keep-alive');
 
-    var index = 0;
-    await for (final chunk in _forward(
-      model: model,
-      messages: messages,
-      systemPrompt: systemPrompt,
-    )) {
-      final delta = <String, dynamic>{};
-      if (index == 0) delta['role'] = 'assistant';
-      if (chunk.content != null && chunk.content!.isNotEmpty) {
-        delta['content'] = chunk.content;
+    try {
+      var index = 0;
+      await for (final chunk in _forward(
+        model: model,
+        messages: messages,
+        systemPrompt: systemPrompt,
+      )) {
+        final delta = <String, dynamic>{};
+        if (index == 0) delta['role'] = 'assistant';
+        if (chunk.content != null && chunk.content!.isNotEmpty) {
+          delta['content'] = chunk.content;
+        }
+        if (chunk.thinking != null && chunk.thinking!.isNotEmpty) {
+          delta['reasoning_content'] = chunk.thinking;
+        }
+        if (delta.isEmpty) continue;
+        response.write(
+          'data: ${jsonEncode(_streamPayload(id, model.id, delta, null))}\n\n',
+        );
+        index += 1;
       }
-      if (chunk.thinking != null && chunk.thinking!.isNotEmpty) {
-        delta['reasoning_content'] = chunk.thinking;
-      }
-      if (delta.isEmpty) continue;
+    } catch (_) {
       response.write(
-        'data: ${jsonEncode(_streamPayload(id, model.id, delta, null))}\n\n',
+        'data: ${jsonEncode({
+          'error': {'message': '上游模型调用失败', 'type': 'server_error', 'code': 'upstream_error'},
+        })}\n\n',
       );
-      index += 1;
+      response.write('data: [DONE]\n\n');
+      await response.close();
+      return _OpenAiRelayOutcome(
+        statusCode: HttpStatus.ok,
+        code: 'upstream_error',
+        modelId: model.id,
+        stream: true,
+      );
     }
     response.write(
       'data: ${jsonEncode(_streamPayload(id, model.id, const {}, 'stop'))}\n\n',
     );
     response.write('data: [DONE]\n\n');
     await response.close();
+    return _OpenAiRelayOutcome(
+      statusCode: HttpStatus.ok,
+      code: 'ok',
+      modelId: model.id,
+      stream: true,
+    );
+  }
+
+  Future<_OpenAiRelayOutcome> _writeStreamingResponse(
+    HttpResponse response, {
+    required String id,
+    required OpenAiCompatibleRelayModel model,
+    required List<AiMessage> messages,
+    String? systemPrompt,
+  }) async {
+    response.statusCode = HttpStatus.ok;
+    response.headers.contentType = ContentType(
+      'text',
+      'event-stream',
+      charset: 'utf-8',
+    );
+    response.headers.set('Connection', 'keep-alive');
+
+    final itemId = 'msg-${_createdSeconds()}';
+    final createdPayload = {
+      'type': 'response.created',
+      'response': _responsesPayload(
+        id: id,
+        modelId: model.id,
+        status: 'in_progress',
+        outputText: '',
+        itemId: itemId,
+      ),
+    };
+    response.write(
+      'event: response.created\n'
+      'data: ${jsonEncode(createdPayload)}\n\n',
+    );
+
+    final inProgressPayload = {
+      'type': 'response.in_progress',
+      'response': _responsesPayload(
+        id: id,
+        modelId: model.id,
+        status: 'in_progress',
+        outputText: '',
+        itemId: itemId,
+      ),
+    };
+    response.write(
+      'event: response.in_progress\n'
+      'data: ${jsonEncode(inProgressPayload)}\n\n',
+    );
+
+    final itemAddedPayload = {
+      'type': 'response.output_item.added',
+      'response_id': id,
+      'output_index': 0,
+      'item': {
+        'id': itemId,
+        'type': 'message',
+        'status': 'in_progress',
+        'role': 'assistant',
+        'content': const [],
+      },
+    };
+    response.write(
+      'event: response.output_item.added\n'
+      'data: ${jsonEncode(itemAddedPayload)}\n\n',
+    );
+    final contentPartAddedPayload = {
+      'type': 'response.content_part.added',
+      'response_id': id,
+      'item_id': itemId,
+      'output_index': 0,
+      'content_index': 0,
+      'part': {'type': 'output_text', 'text': '', 'annotations': const []},
+    };
+    response.write(
+      'event: response.content_part.added\n'
+      'data: ${jsonEncode(contentPartAddedPayload)}\n\n',
+    );
+
+    final content = StringBuffer();
+    try {
+      await for (final chunk in _forward(
+        model: model,
+        messages: messages,
+        systemPrompt: systemPrompt,
+      )) {
+        final delta = chunk.content;
+        if (delta == null || delta.isEmpty) continue;
+        content.write(delta);
+        final deltaPayload = {
+          'type': 'response.output_text.delta',
+          'response_id': id,
+          'item_id': itemId,
+          'output_index': 0,
+          'content_index': 0,
+          'delta': delta,
+        };
+        response.write(
+          'event: response.output_text.delta\n'
+          'data: ${jsonEncode(deltaPayload)}\n\n',
+        );
+      }
+    } catch (_) {
+      final failedResponse = _responsesPayload(
+        id: id,
+        modelId: model.id,
+        status: 'failed',
+        outputText: content.toString(),
+        itemId: itemId,
+      );
+      failedResponse['error'] = {
+        'code': 'upstream_error',
+        'message': '上游模型调用失败',
+      };
+      final failedPayload = {
+        'type': 'response.failed',
+        'response': failedResponse,
+      };
+      response.write(
+        'event: response.failed\n'
+        'data: ${jsonEncode(failedPayload)}\n\n',
+      );
+      response.write('data: [DONE]\n\n');
+      await response.close();
+      return _OpenAiRelayOutcome(
+        statusCode: HttpStatus.ok,
+        code: 'upstream_error',
+        modelId: model.id,
+        stream: true,
+      );
+    }
+
+    final outputText = content.toString();
+    final textDonePayload = {
+      'type': 'response.output_text.done',
+      'response_id': id,
+      'item_id': itemId,
+      'output_index': 0,
+      'content_index': 0,
+      'text': outputText,
+    };
+    response.write(
+      'event: response.output_text.done\n'
+      'data: ${jsonEncode(textDonePayload)}\n\n',
+    );
+    final completedPart = {
+      'type': 'output_text',
+      'text': outputText,
+      'annotations': const [],
+    };
+    final contentPartDonePayload = {
+      'type': 'response.content_part.done',
+      'response_id': id,
+      'item_id': itemId,
+      'output_index': 0,
+      'content_index': 0,
+      'part': completedPart,
+    };
+    response.write(
+      'event: response.content_part.done\n'
+      'data: ${jsonEncode(contentPartDonePayload)}\n\n',
+    );
+    final itemDonePayload = {
+      'type': 'response.output_item.done',
+      'response_id': id,
+      'output_index': 0,
+      'item': {
+        'id': itemId,
+        'type': 'message',
+        'status': 'completed',
+        'role': 'assistant',
+        'content': [completedPart],
+      },
+    };
+    response.write(
+      'event: response.output_item.done\n'
+      'data: ${jsonEncode(itemDonePayload)}\n\n',
+    );
+    final completedPayload = {
+      'type': 'response.completed',
+      'response': _responsesPayload(
+        id: id,
+        modelId: model.id,
+        status: 'completed',
+        outputText: outputText,
+        itemId: itemId,
+      ),
+    };
+    response.write(
+      'event: response.completed\n'
+      'data: ${jsonEncode(completedPayload)}\n\n',
+    );
+    response.write('data: [DONE]\n\n');
+    await response.close();
+    return _OpenAiRelayOutcome(
+      statusCode: HttpStatus.ok,
+      code: 'ok',
+      modelId: model.id,
+      stream: true,
+    );
+  }
+
+  Map<String, dynamic> _responsesPayload({
+    required String id,
+    required String modelId,
+    required String status,
+    required String outputText,
+    String? itemId,
+  }) {
+    final resolvedItemId = itemId ?? 'msg-${_createdSeconds()}';
+    return {
+      'id': id,
+      'object': 'response',
+      'created_at': _createdSeconds(),
+      'status': status,
+      'model': modelId,
+      'output': [
+        {
+          'id': resolvedItemId,
+          'type': 'message',
+          'status': status,
+          'role': 'assistant',
+          'content': [
+            {
+              'type': 'output_text',
+              'text': outputText,
+              'annotations': const [],
+            },
+          ],
+        },
+      ],
+      'output_text': outputText,
+      'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0},
+    };
   }
 
   Map<String, dynamic> _streamPayload(
@@ -1170,8 +1417,7 @@ List<Map<String, dynamic>>? _normalizeOpenAiRelayResponsesInput(
       continue;
     }
     if (type == 'message') return null;
-    if (type is String &&
-        (_isOpenAiRelayTextPart(type) || _isOpenAiRelayImagePart(type))) {
+    if (type is String && type.trim().isNotEmpty) {
       messages.add({
         'role': 'user',
         'content': [Map<String, dynamic>.from(item)],

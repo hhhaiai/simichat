@@ -361,14 +361,50 @@ void main() {
     expect(response.body, isNot(contains('file:///private')));
   });
 
-  test('POST /v1/responses rejects unsupported streaming safely', () async {
-    var forwarded = false;
+  test('POST /v1/responses safely degrades unsupported input items', () async {
+    List<AiMessage>? routedMessages;
     final session = await _startRelay(
       token: token,
       model: model,
       forward: ({required model, required messages, systemPrompt}) {
-        forwarded = true;
-        return Stream.fromIterable(const [AiChunk(content: 'unexpected')]);
+        routedMessages = messages;
+        return Stream.fromIterable([AiChunk(content: messages.last.content)]);
+      },
+    );
+    addTearDown(session.close);
+
+    final response = await _postJson(
+      session.baseUri.resolve('/v1/responses'),
+      token: token,
+      body: {
+        'model': model.id,
+        'input': [
+          {'type': 'input_text', 'text': '继续处理'},
+          {'type': 'item_reference', 'id': 'resp-secret-item-123'},
+        ],
+      },
+    );
+
+    expect(response.statusCode, HttpStatus.ok);
+    expect(routedMessages, isNotNull);
+    final content = routedMessages!
+        .map((message) => message.content)
+        .join('\n');
+    expect(content, contains('继续处理'));
+    expect(content, contains('已省略非文本内容: item_reference'));
+    expect(response.body, contains('已省略非文本内容: item_reference'));
+    expect(response.body, isNot(contains('resp-secret-item-123')));
+  });
+
+  test('POST /v1/responses streams Responses-compatible SSE chunks', () async {
+    final session = await _startRelay(
+      token: token,
+      model: model,
+      forward: ({required model, required messages, systemPrompt}) {
+        return Stream.fromIterable(const [
+          AiChunk(content: 'A'),
+          AiChunk(content: 'B'),
+        ]);
       },
     );
     addTearDown(session.close);
@@ -379,11 +415,92 @@ void main() {
       body: {'model': model.id, 'stream': true, 'input': 'hello'},
     );
 
-    expect(response.statusCode, HttpStatus.badRequest);
-    expect(response.body, contains('unsupported_stream'));
+    expect(response.statusCode, HttpStatus.ok);
+    expect(response.headers.contentType?.mimeType, 'text/event-stream');
+    final eventNames = response.body
+        .split('\n')
+        .where((line) => line.startsWith('event: '))
+        .map((line) => line.substring('event: '.length))
+        .toList();
+    expect(eventNames, [
+      'response.created',
+      'response.in_progress',
+      'response.output_item.added',
+      'response.content_part.added',
+      'response.output_text.delta',
+      'response.output_text.delta',
+      'response.output_text.done',
+      'response.content_part.done',
+      'response.output_item.done',
+      'response.completed',
+    ]);
+    expect(response.body, contains('event: response.in_progress'));
+    expect(response.body, contains('"type":"response.in_progress"'));
+    expect(response.body, contains('event: response.output_item.added'));
+    expect(response.body, contains('"item":{"id":"msg-'));
+    expect(response.body, contains('"role":"assistant"'));
+    expect(response.body, contains('event: response.content_part.added'));
+    expect(
+      response.body,
+      contains('"part":{"type":"output_text","text":"","annotations":[]}'),
+    );
+    expect(response.body, contains('event: response.output_text.delta'));
+    expect(response.body, contains('"delta":"A"'));
+    expect(response.body, contains('"delta":"B"'));
+    expect(response.body, contains('event: response.output_text.done'));
+    expect(response.body, contains('"text":"AB"'));
+    expect(response.body, contains('event: response.content_part.done'));
+    expect(
+      response.body,
+      contains('"part":{"type":"output_text","text":"AB","annotations":[]}'),
+    );
+    expect(response.body, contains('event: response.output_item.done'));
+    expect(response.body, contains('event: response.completed'));
+    expect(response.body, contains('"output_text":"AB"'));
+    expect(response.body, contains('data: [DONE]'));
     expect(response.body, isNot(contains(token)));
-    expect(forwarded, isFalse);
   });
+
+  test(
+    'POST /v1/responses streams safe failed event on upstream error',
+    () async {
+      final events = <OpenAiRelayAuditEvent>[];
+      final session = await _startRelay(
+        token: token,
+        model: model,
+        auditSink: events.add,
+        forward: ({required model, required messages, systemPrompt}) async* {
+          yield const AiChunk(content: 'A');
+          throw const OpenAiCompatibleRelayException(
+            'upstream secret sk-test /Users/private',
+          );
+        },
+      );
+      addTearDown(session.close);
+
+      final response = await _postJson(
+        session.baseUri.resolve('/v1/responses'),
+        token: token,
+        body: {'model': model.id, 'stream': true, 'input': 'hello'},
+      );
+
+      expect(response.statusCode, HttpStatus.ok);
+      expect(response.headers.contentType?.mimeType, 'text/event-stream');
+      expect(response.body, contains('event: response.output_text.delta'));
+      expect(response.body, contains('"delta":"A"'));
+      expect(response.body, contains('event: response.failed'));
+      expect(response.body, contains('"status":"failed"'));
+      expect(response.body, contains('"code":"upstream_error"'));
+      expect(response.body, contains('data: [DONE]'));
+      expect(response.body, isNot(contains('sk-test')));
+      expect(response.body, isNot(contains('/Users/private')));
+      expect(response.body, isNot(contains(token)));
+      expect(events, hasLength(1));
+      expect(events.single.code, 'upstream_error');
+      expect(events.single.statusCode, HttpStatus.ok);
+      expect(events.single.stream, isTrue);
+    },
+  );
 
   test('relay parses multimodal content with safe local degradation', () {
     final parsed = parseOpenAiRelayMessages([
@@ -806,6 +923,51 @@ void main() {
       expect(response.body, contains('"content":"A"'));
       expect(response.body, contains('"reasoning_content":"B"'));
       expect(response.body, contains('data: [DONE]'));
+    },
+  );
+
+  test(
+    'POST /v1/chat/completions streams safe error on upstream failure',
+    () async {
+      final events = <OpenAiRelayAuditEvent>[];
+      final session = await _startRelay(
+        token: token,
+        model: model,
+        auditSink: events.add,
+        forward: ({required model, required messages, systemPrompt}) async* {
+          yield const AiChunk(content: 'A');
+          throw const OpenAiCompatibleRelayException(
+            'upstream secret sk-chat /Users/private',
+          );
+        },
+      );
+      addTearDown(session.close);
+
+      final response = await _postJson(
+        session.baseUri.resolve('/v1/chat/completions'),
+        token: token,
+        body: {
+          'model': model.id,
+          'stream': true,
+          'messages': [
+            {'role': 'user', 'content': 'hello'},
+          ],
+        },
+      );
+
+      expect(response.statusCode, HttpStatus.ok);
+      expect(response.headers.contentType?.mimeType, 'text/event-stream');
+      expect(response.body, contains('"content":"A"'));
+      expect(response.body, contains('"error":'));
+      expect(response.body, contains('"code":"upstream_error"'));
+      expect(response.body, contains('data: [DONE]'));
+      expect(response.body, isNot(contains('sk-chat')));
+      expect(response.body, isNot(contains('/Users/private')));
+      expect(response.body, isNot(contains(token)));
+      expect(events, hasLength(1));
+      expect(events.single.code, 'upstream_error');
+      expect(events.single.statusCode, HttpStatus.ok);
+      expect(events.single.stream, isTrue);
     },
   );
 

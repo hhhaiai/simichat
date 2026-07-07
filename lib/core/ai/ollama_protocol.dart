@@ -33,10 +33,7 @@ class OllamaProtocol implements AiProtocol {
             images.add(att.base64);
           }
         }
-        final msg = <String, dynamic>{
-          'role': m.role,
-          'content': m.content,
-        };
+        final msg = <String, dynamic>{'role': m.role, 'content': m.content};
         if (images.isNotEmpty) {
           msg['images'] = images;
         }
@@ -57,6 +54,13 @@ class OllamaProtocol implements AiProtocol {
     request.body = body;
 
     final client = http.Client();
+    if (cancelToken != null) {
+      unawaited(
+        cancelToken.whenCancel.then((_) {
+          client.close();
+        }),
+      );
+    }
     try {
       final response = await client.send(request);
       if (response.statusCode != 200) {
@@ -70,6 +74,7 @@ class OllamaProtocol implements AiProtocol {
           .transform(const LineSplitter());
 
       await for (final line in stream) {
+        if (cancelToken?.isCancelled ?? false) return;
         if (line.trim().isEmpty) continue;
         try {
           final json = jsonDecode(line) as Map<String, dynamic>;
@@ -86,6 +91,11 @@ class OllamaProtocol implements AiProtocol {
           debugPrint('[Ollama] Parse error: $e\nLine: $line');
         }
       }
+    } catch (e) {
+      if (cancelToken?.isCancelled ?? false) {
+        return;
+      }
+      rethrow;
     } finally {
       client.close();
     }
@@ -102,6 +112,8 @@ class OllamaProtocol implements AiProtocol {
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     final models = json['models'] as List?;
     if (models == null) return [];
-    return models.map((m) => (m as Map<String, dynamic>)['name'] as String).toList();
+    return models
+        .map((m) => (m as Map<String, dynamic>)['name'] as String)
+        .toList();
   }
 }
