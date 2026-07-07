@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'model_capability.dart';
+import 'model_provider_preset.dart';
 import 'sse_helper.dart';
 
 const supportedImportProtocols = {
@@ -76,9 +77,10 @@ class ModelChannelImportParser {
     if (decoded is Map) {
       final channels = decoded['channels'];
       if (channels is List) return channels;
+      return [decoded];
     }
     throw const ModelChannelImportParseException(
-      '导入 JSON 必须是数组，或包含 channels 数组',
+      '导入 JSON 必须是渠道对象、数组，或包含 channels 数组',
     );
   }
 
@@ -88,14 +90,33 @@ class ModelChannelImportParser {
       throw ModelChannelImportParseException('$label 必须是对象');
     }
     final map = raw.cast<String, dynamic>();
-    final name = _requiredString(map, [
-      'name',
-      'channelName',
-    ], '$label 缺少 name');
-    final baseUrl = normalizeUrl(
-      _requiredString(map, ['baseUrl', 'base_url', 'url'], '$label 缺少 baseUrl'),
-    );
-    final protocol = _readString(map, ['protocol']) ?? 'openai_chat';
+    final presetId = _readString(map, [
+      'presetId',
+      'providerPresetId',
+      'provider',
+      'preset',
+    ]);
+    final preset = presetId == null ? null : findModelProviderPreset(presetId);
+    if (presetId != null && preset == null) {
+      throw ModelChannelImportParseException(
+        '$label 未知厂商预设: ${_safeDiagnosticValue(presetId)}',
+      );
+    }
+    final name =
+        _readString(map, ['name', 'channelName']) ?? preset?.name ?? '';
+    if (name.isEmpty) {
+      throw ModelChannelImportParseException('$label 缺少 name');
+    }
+    final baseUrlRaw =
+        _readString(map, ['baseUrl', 'base_url', 'url']) ??
+        preset?.baseUrl ??
+        '';
+    if (baseUrlRaw.isEmpty) {
+      throw ModelChannelImportParseException('$label 缺少 baseUrl');
+    }
+    final baseUrl = normalizeUrl(baseUrlRaw);
+    final protocol =
+        _readString(map, ['protocol']) ?? preset?.protocol ?? 'openai_chat';
     if (!supportedImportProtocols.contains(protocol)) {
       throw ModelChannelImportParseException('$label 协议不支持: $protocol');
     }
@@ -109,14 +130,25 @@ class ModelChannelImportParser {
       baseUrl: baseUrl,
       protocol: protocol,
       apiKey: apiKey,
-      models: _parseModels(map['models']),
+      models: _parseModels(_readModelsValue(map)),
     );
+  }
+
+  static Object? _readModelsValue(Map<String, dynamic> map) {
+    if (map.containsKey('models')) return map['models'];
+    for (final key in ['model', 'modelName', 'defaultModel']) {
+      if (map.containsKey(key)) return map[key];
+    }
+    return null;
   }
 
   static List<ImportedChannelModel> _parseModels(Object? raw) {
     if (raw == null) return const [];
+    if (raw is String || raw is Map) {
+      return [_parseModel(raw)];
+    }
     if (raw is! List) {
-      throw const ModelChannelImportParseException('models 必须是数组');
+      throw const ModelChannelImportParseException('models 必须是数组、对象或字符串');
     }
 
     final models = <ImportedChannelModel>[];
@@ -175,5 +207,20 @@ class ModelChannelImportParser {
       if (text.isNotEmpty) return text;
     }
     return null;
+  }
+
+  static String _safeDiagnosticValue(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return '';
+    if (RegExp(r'Bearer\s+[A-Za-z0-9._~+/=-]+').hasMatch(text) ||
+        RegExp(r'sk-[A-Za-z0-9_-]{6,}').hasMatch(text) ||
+        RegExp(r'AIza[0-9A-Za-z_-]{10,}').hasMatch(text) ||
+        RegExp(
+          r'(api[_-]?key|token|secret)\s*=',
+          caseSensitive: false,
+        ).hasMatch(text)) {
+      return '[已隐藏]';
+    }
+    return text;
   }
 }

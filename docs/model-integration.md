@@ -1,6 +1,6 @@
 # 多模型接入与个人接口中转方案
 
-> 对应模块：M1。状态：多模型基础接入、对话级模型切换记录、主流厂商预设第一版、连通性测试结构化结果、自动重试、最近测试历史、批量渠道导入、OpenAI 兼容个人中转基础能力、多模态内容安全兼容降级、图片 data URL 端到端透传、视觉能力路由、能力可见性与远端图片 URL 安全下载透传已落地。最后更新：2026-06-27。
+> 对应模块：M1。状态：多模型基础接入、对话级模型切换记录、主流厂商预设第一版、百度千帆 / 讯飞星火 / Kimi / SiliconFlow / 火山方舟 / 腾讯混元 / Groq / Mistral / Together AI / Fireworks AI / xAI / Perplexity / DeepInfra OpenAI 兼容预设、设置页预设建议模型名提示 / 一键复制、Base URL 复制和文档链接复制、添加模型弹窗预设推荐快速填入、连通性测试结构化结果、自动重试、最近测试历史、批量渠道导入与 presetId / provider 显示名预设填充、单渠道对象 JSON 导入、单模型 `model` / `modelName` / `models` 字符串简写、批量导入安全示例 JSON 粘贴 / 复制 / 恢复、OpenAI 兼容个人中转基础能力、多模态内容安全兼容降级、图片 data URL 端到端透传、视觉能力路由、能力可见性、远端图片 URL 安全下载透传和多协议流式取消传播已落地。最后更新：2026-07-07。
 
 ## 1. 目标
 
@@ -14,11 +14,12 @@
 
 当前已具备：
 
-- `model_provider_preset.dart` 提供主流模型厂商预设：OpenAI、Claude / Anthropic、Gemini / Google、DeepSeek、通义千问 / 阿里云百炼、OpenRouter、Ollama。
-- 设置页添加渠道时可选择厂商预设，自动填充渠道名称、Base URL 与协议类型，用户只需输入自己的 API Key，并仍可手动调整。
+- `model_provider_preset.dart` 提供主流模型厂商预设：OpenAI、Claude / Anthropic、Gemini / Google、DeepSeek、通义千问 / 阿里云百炼、百度千帆 / 文心一言、讯飞星火、Kimi / Moonshot AI、硅基流动 / SiliconFlow、Groq、Mistral AI、Together AI、Fireworks AI、xAI / Grok、Perplexity、DeepInfra、火山方舟 / 豆包、腾讯混元、OpenRouter、Ollama。
+- 设置页添加渠道时可选择厂商预设，自动填充渠道名称、Base URL 与协议类型，并展示若干“建议模型名”供手动添加模型时参考，支持一键复制为逐行模型名，也可一键复制厂商文档链接方便申请 Key / 查模型名；保存渠道后，手动添加模型弹窗会按协议与 Base URL 匹配预设并提供推荐模型名快速填入；用户只需输入自己的 API Key，并仍可手动调整。
 - `AiProtocol` 统一协议接口。
 - `AiService` 根据协议分发。
 - OpenAI Chat、OpenAI Responses、Claude、Gemini、Ollama 协议适配。
+- 流式取消传播：OpenAI Chat / Responses / Claude / Gemini 通过统一 SSE helper 把下游订阅取消传播到 `CancelToken`；Ollama 使用 `http.Client`，已把 `CancelToken.whenCancel` 绑定到 `client.close()`，用户停止生成或后台取消时不会继续悬挂本地 Ollama 长连接。
 - `ModelFetcher` / `ModelTester` / `ModelCapability` 基础能力。
 - `ModelTestResult` 已把连通性测试结果结构化为成功 / 失败摘要 / HTTP 状态码 / 详情 / 修复建议，并对常见密钥字面量做脱敏。
 - 设置页单模型测试和一键测试全部模型使用结构化结果，能明确提示认证失败、权限不足、接口或模型不存在、限速 / 额度、厂商服务异常、超时、协议不支持等问题。
@@ -60,8 +61,8 @@
 ## 4. 接入流程
 
 1. 用户选择厂商预设或自定义 OpenAI 兼容渠道。
-2. 预设自动填充渠道名称、Base URL、协议类型；用户输入接口密钥并可手动调整。
-3. 保存渠道后自动尝试拉取模型列表。
+2. 预设自动填充渠道名称、Base URL、协议类型；设置页展示建议模型名并支持一键复制，同时可复制厂商文档链接，保存渠道后手动添加模型弹窗也会显示匹配预设的推荐模型 chip，帮助用户在厂商未开放模型列表或账号权限有限时快速填入第一个模型。
+3. 用户输入接口密钥并可手动调整；保存渠道后自动尝试拉取模型列表。
 4. 对模型做能力识别。
 5. 用户确认添加模型。
 6. 在对话模型选择器中立即可用。
@@ -72,35 +73,73 @@
 
 当前内置预设：
 
-| 厂商 | 协议 | Base URL | 说明 |
-| --- | --- | --- | --- |
-| OpenAI | `openai_chat` | `https://api.openai.com/v1` | 官方 OpenAI API |
-| Claude / Anthropic | `claude` | `https://api.anthropic.com` | Anthropic Messages API |
-| Gemini / Google | `gemini` | `https://generativelanguage.googleapis.com` | Google Gemini API |
-| DeepSeek | `openai_chat` | `https://api.deepseek.com/v1` | OpenAI 兼容接口 |
-| 通义千问 / 阿里云百炼 | `openai_chat` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | DashScope OpenAI 兼容模式 |
-| OpenRouter | `openai_chat` | `https://openrouter.ai/api/v1` | 多模型聚合平台 |
-| Ollama 本地模型 | `ollama` | `http://localhost:11434` | 本地模型服务 |
+| 厂商 | 协议 | Base URL | 建议模型名示例 | 说明 |
+| --- | --- | --- | --- | --- |
+| OpenAI | `openai_chat` | `https://api.openai.com/v1` | `gpt-4o-mini` / `gpt-4.1-mini` | 官方 OpenAI API |
+| Claude / Anthropic | `claude` | `https://api.anthropic.com` | — | Anthropic Messages API |
+| Gemini / Google | `gemini` | `https://generativelanguage.googleapis.com` | — | Google Gemini API |
+| DeepSeek | `openai_chat` | `https://api.deepseek.com/v1` | `deepseek-chat` / `deepseek-reasoner` | OpenAI 兼容接口 |
+| 通义千问 / 阿里云百炼 | `openai_chat` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` / `qwen-turbo` | DashScope OpenAI 兼容模式 |
+| 百度千帆 / 文心一言 | `openai_chat` | `https://qianfan.baidubce.com/v2` | `ernie-4.5-turbo-128k` / `ernie-x1-turbo-32k` | 千帆 v2 OpenAI 兼容接口 |
+| 讯飞星火 | `openai_chat` | `https://spark-api-open.xf-yun.com/v1` | `lite` / `generalv3.5` | 星火 HTTP OpenAI 兼容接口 |
+| Kimi / Moonshot AI | `openai_chat` | `https://api.moonshot.ai/v1` | `kimi-k2-0711-preview` / `moonshot-v1-8k` | Kimi 长上下文 OpenAI 兼容接口 |
+| 硅基流动 / SiliconFlow | `openai_chat` | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` / `deepseek-ai/DeepSeek-V3` | 低价 / 免费额度模型探索平台 |
+| Groq | `openai_chat` | `https://api.groq.com/openai/v1` | `llama-3.1-8b-instant` / `llama-3.3-70b-versatile` | 低延迟 OpenAI 兼容推理平台 |
+| Mistral AI | `openai_chat` | `https://api.mistral.ai/v1` | `mistral-small-latest` / `mistral-large-latest` | Mistral OpenAI 兼容接口 |
+| Together AI | `openai_chat` | `https://api.together.ai/v1` | `MiniMaxAI/MiniMax-M3` / `Qwen/Qwen3-235B-A22B-fp8-tput` | 开源模型托管与低价推理平台 |
+| Fireworks AI | `openai_chat` | `https://api.fireworks.ai/inference/v1` | `accounts/fireworks/models/llama-v3p1-8b-instruct` / `accounts/fireworks/models/deepseek-v3` | 开源模型推理与托管平台 |
+| xAI / Grok | `openai_chat` | `https://api.x.ai/v1` | `grok-4.3` | xAI Grok 系列 OpenAI 兼容接口 |
+| Perplexity | `openai_chat` | `https://api.perplexity.ai` | `sonar-pro` / `sonar` | Perplexity Sonar 搜索增强 OpenAI 兼容接口 |
+| DeepInfra | `openai_chat` | `https://api.deepinfra.com/v1/openai` | `deepseek-ai/DeepSeek-V3` / `meta-llama/Meta-Llama-3.1-8B-Instruct` | 开源模型托管与低价推理平台 |
+| 火山方舟 / 豆包 | `openai_chat` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-250615` / `deepseek-v3-250324` | 火山方舟 OpenAI 兼容接口 |
+| 腾讯混元 | `openai_chat` | `https://api.hunyuan.cloud.tencent.com/v1` | `hunyuan-turbos-latest` / `hunyuan-lite` | 腾讯混元 OpenAI 兼容接口 |
+| OpenRouter | `openai_chat` | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` / `deepseek/deepseek-chat-v3-0324:free` | 多模型聚合平台 |
+| Ollama 本地模型 | `ollama` | `http://localhost:11434` | — | 本地模型服务 |
 
 设计约束：
 
 - 预设只保存公共 Base URL、协议和文档链接，不内置任何 API Key。
 - OpenAI 兼容预设允许用户编辑 Base URL，避免厂商路径调整后无法使用。
-- 保存渠道后仍走现有自动获取模型 / 手动添加模型流程。
-- 百度、讯飞等接口差异较大的厂商暂不硬编码不确定路径，后续在协议或 OpenAI 兼容路径验证后补充。
+- 保存渠道后仍走现有自动获取模型 / 手动添加模型流程；手动添加模型只做推荐模型名填入，不自动创建模型。
+- 建议模型名、Base URL 和文档链接只是设置页提示、剪贴板复制和手动添加模型弹窗快速填入辅助，不会自动创建模型、不代表账号一定有权限，也不会写入 API Key；用户保存渠道后仍需通过模型列表 / 手动模型 / 连通性测试确认账号权限。
 
 ## 6. 免费模型引导与批量渠道导入
 
 第一版不内置不可靠密钥，而是提供“用户自带 Key / 免费 Key 批量接入”的本地导入入口：
 
-- 设置页 `模型渠道` 下提供 `批量导入渠道`。
-- 用户粘贴 JSON，一次导入多个渠道和模型。
-- API Key 只会通过 `KeyEncryptor` 加密写入本地 SQLite，不写入日志、文档或导入历史。
+- 设置页 `模型渠道` 下提供 `批量导入渠道`；弹窗默认模板使用 `presetId: "groq"` 预设示例，并提供“粘贴剪贴板”“复制示例 JSON”和“恢复示例”按钮，方便移动端从外部复制 JSON 后直接粘贴，也可操作固定安全示例，减少用户手填公共 Base URL / 协议的成本，同时避免复制或恢复用户编辑区里的真实 API Key；单模型场景可用 `model` / `modelName` 或 `models` 字符串简写。
+- 用户粘贴 JSON，一次导入一个或多个渠道和模型；根 JSON 可以是单个渠道对象、渠道数组，或包含 `channels` 数组的对象；也可用 `presetId` / `providerPresetId` / `provider` / `preset` 引用内置厂商预设，自动补渠道名称、Base URL 和协议；预设匹配支持 ID、完整显示名、`/` 分隔短别名，并容忍大小写、首尾空格和斜杠两侧空格差异。
+- API Key 只会通过 `KeyEncryptor` 加密写入本地 SQLite，不写入日志、文档或导入历史；未知预设等导入错误会对疑似密钥 / token 的用户输入做脱敏后再提示。
 - 支持 OpenAI 兼容、OpenAI Responses、Claude、Gemini、Ollama。
 - Ollama 本地模型允许空 Key；其他远程协议必须提供用户自己的 Key。
 - Base URL 会复用 `normalizeUrl` 归一化，`localhost` / 私有 IP 默认使用 `http`，公网域名默认使用 `https`。
 
-导入 JSON 支持两种根结构：
+导入 JSON 支持三种根结构：
+
+1. 单个渠道对象：
+
+```json
+{
+  "presetId": "mistral",
+  "apiKey": "sk-...",
+  "model": "mistral-small-latest"
+}
+```
+
+2. 渠道数组：
+
+```json
+[
+  {
+    "name": "Local Ollama",
+    "baseUrl": "localhost:11434",
+    "protocol": "ollama",
+    "models": ["llama3.1"]
+  }
+]
+```
+
+3. `channels` 包裹对象：
 
 ```json
 {
@@ -119,28 +158,31 @@
 }
 ```
 
-或直接使用数组：
+也可引用内置厂商预设，少填公共 Base URL 和协议：
 
 ```json
-[
-  {
-    "name": "Local Ollama",
-    "baseUrl": "localhost:11434",
-    "protocol": "ollama",
-    "models": ["llama3.1"]
-  }
-]
+{
+  "channels": [
+    {
+      "presetId": "groq",
+      "apiKey": "用户自己的 Groq Key",
+      "models": ["llama-3.1-8b-instant"]
+    }
+  ]
+}
 ```
 
 字段约定：
 
 | 字段 | 说明 |
 | --- | --- |
-| `name` / `channelName` | 渠道名称，必填 |
-| `baseUrl` / `base_url` / `url` | 渠道 Base URL，必填 |
-| `protocol` | 协议，默认 `openai_chat` |
+| `presetId` / `providerPresetId` / `provider` / `preset` | 可选，内置厂商预设 ID、完整显示名称或 `/` 分隔显示名称的短别名；填写后可自动补渠道名称、Base URL 和协议；匹配时会忽略大小写、首尾空格和斜杠两侧空格差异，例如 `Kimi/Moonshot AI` 可匹配 `Kimi / Moonshot AI` |
+| `name` / `channelName` | 渠道名称；未填写预设时必填，可覆盖预设名称 |
+| `baseUrl` / `base_url` / `url` | 渠道 Base URL；未填写预设时必填，可覆盖预设 Base URL |
+| `protocol` | 协议；优先使用显式值，其次使用预设协议，最后默认 `openai_chat` |
 | `apiKey` / `api_key` / `key` | 用户自己的 Key；非 Ollama 必填 |
-| `models` | 可选，字符串数组或对象数组 |
+| `models` | 可选，字符串数组、对象数组、单个字符串或单个对象 |
+| `model` / `modelName` / `defaultModel` | 可选，单模型简写；未提供 `models` 时会作为 1 个模型导入 |
 | `models[].name/id/model/modelName` | 模型名 |
 | `models[].capability/type` | `chat` 或 `embedding`，默认 `chat` |
 
@@ -158,14 +200,15 @@ OpenAI 兼容请求
   -> 归一化非流式 / 流式响应
 ```
 
-当前 v1（2026-06-27）已完成核心服务；v1.1 已补齐设置页用户可控启动入口；v1.2 已补齐访问审计、并发保护与局域网开放二次确认；v1.3 已补齐高级路由策略；v1.4 已补齐可配置并发上限与本地脱敏用量统计；v1.5 已补齐持久化脱敏审计明细与 JSON 导出；v1.6 已补齐 OpenAI 多模态 content part 安全兼容降级；v1.7 已补齐图片 data URL 端到端透传；v1.8 已补齐模型视觉能力路由；v1.9 已补齐模型能力可见性；v1.10 已补齐远端图片 URL 安全下载透传；v1.11 已补齐健康检查端点；v1.12 已补齐 CORS / 浏览器客户端兼容：
+当前 v1（2026-06-27）已完成核心服务；v1.1 已补齐设置页用户可控启动入口；v1.2 已补齐访问审计、并发保护与局域网开放二次确认；v1.3 已补齐高级路由策略；v1.4 已补齐可配置并发上限与本地脱敏用量统计；v1.5 已补齐持久化脱敏审计明细与 JSON 导出；v1.6 已补齐 OpenAI 多模态 content part 安全兼容降级；v1.7 已补齐图片 data URL 端到端透传；v1.8 已补齐模型视觉能力路由；v1.9 已补齐模型能力可见性；v1.10 已补齐远端图片 URL 安全下载透传；v1.11 已补齐健康检查端点；v1.12 已补齐 CORS / 浏览器客户端兼容；v1.13 已补齐 Responses API `stream=true` SSE 兼容：
 
 - `OpenAiCompatibleRelayServer`：本地 `HttpServer`，默认绑定 `127.0.0.1`，启动时必须提供至少 16 位本地 `relayToken`。
 - 支持 `GET /health` 与 `GET /v1/health`：需要 Bearer 令牌，只返回 `status`、当前聊天并发、并发上限和远端图片下载开关，不触发模型列表、不暴露 API Key、上游 Base URL、模型 id 或本机路径。
-- CORS / 浏览器客户端兼容 v1：所有响应加 `Access-Control-Allow-Origin: *`、`Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`；`OPTIONS` 预检不要求 Bearer 令牌，但只对 `/health`、`/v1/health`、`/v1/models`、`/v1/chat/completions` 返回 204，允许方法限定为 `GET / POST / OPTIONS`，允许头限定为 `authorization, content-type`。
+- CORS / 浏览器客户端兼容 v1：所有响应加 `Access-Control-Allow-Origin: *`、`Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`；`OPTIONS` 预检不要求 Bearer 令牌，但只对 `/health`、`/v1/health`、`/v1/models`、`/v1/chat/completions`、`/v1/responses` 返回 204，允许方法限定为 `GET / POST / OPTIONS`，允许头限定为 `authorization, content-type`。
 - CORS 安全边界：预检不会返回模型列表、并发状态、令牌或用户内容；真实 `GET` / `POST` 请求仍必须携带正确 Bearer 令牌，未知路径的预检返回安全 `not_found`。
 - 支持 `GET /v1/models`：返回 OpenAI 兼容模型列表，模型 id 使用本机 `ChannelModel.id`，不暴露 API Key 或上游 Base URL。
-- 支持 `POST /v1/chat/completions`：解析 OpenAI 兼容 `messages`，支持 `stream=false` buffered 响应和 `stream=true` SSE 响应。
+- 支持 `POST /v1/chat/completions`：解析 OpenAI 兼容 `messages`，支持 `stream=false` buffered 响应和 `stream=true` SSE 响应；上游流式异常时输出安全 `error` payload 与 `[DONE]`，不回显异常详情。
+- 支持 `POST /v1/responses`：解析 `input` / `instructions`，支持 `stream=false` buffered Responses 输出和 `stream=true` SSE 输出；流式事件包含 `response.created`、`response.in_progress`、`response.output_item.added`、`response.content_part.added`、`response.output_text.delta`、`response.output_text.done`、`response.content_part.done`、`response.output_item.done`、`response.completed` 与 `[DONE]`，上游流式异常时输出安全 `response.failed` / `[DONE]`；顶层 `item_reference` 等非文本 input item 会安全降级为占位，不泄露原始 id / payload。
 - `ChannelModelRelayBridge`：把 drift 数据库中已启用的聊天模型桥接到 relay；转发时才解密 API Key，并调用现有 `AiService.sendMessage()`。
 - 多模态安全兼容降级 v1：`content` 数组中的 `text` / `input_text` / `output_text` 会转为 `AiMessage.content`；默认关闭远端图片下载时，远端 `image_url`、`file://`、`input_audio`、`file`、`input_file`、`video` 等非文本片段只写入安全占位，不读取、不下载、不把原始 URL / 路径 / 文件 id 写进 prompt。
 - 图片 data URL 透传 v1：`image_url` / `input_image` 中合法的 `data:image/png|jpeg|gif|webp|bmp;base64,...` 会转为内存态 `AiMessage.attachments` 图片附件，沿现有 OpenAI Chat / OpenAI Responses / Claude / Gemini / Ollama 协议多模态链路发送给用户选择的上游模型。
@@ -184,7 +227,7 @@ OpenAI 兼容请求
 - 响应统一加 `Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。
 - 错误响应使用 OpenAI 兼容 `error` 结构，只返回安全摘要，不包含本机路径、令牌、渠道密钥、上游 Base URL 或原始异常详情。
 - `OpenAiRelayController`：管理本地 relay 运行状态、令牌、端口和 `OpenAiCompatibleRelaySession` 生命周期。
-- 设置页入口：`个人接口中转 / 本地 OpenAI Relay`，支持生成或输入至少 16 位 Bearer 令牌、启动 / 停止服务、展示 `http://127.0.0.1:<port>/v1` Base URL、说明 `/health` / `/v1/models` / `/v1/chat/completions` 路径和 CORS 兼容能力、复制 Base URL、复制 curl 示例。
+- 设置页入口：`个人接口中转 / 本地 OpenAI Relay`，支持生成或输入至少 16 位 Bearer 令牌、启动 / 停止服务、展示 `http://127.0.0.1:<port>/v1` Base URL、说明 `/health` / `/v1/models` / `/v1/chat/completions` / `/v1/responses` 路径和 CORS 兼容能力、复制 Base URL、复制 curl 示例。
 - 令牌存储：令牌用 `Random.secure()` 生成，写入 SharedPreferences 前通过现有 `KeyEncryptor` 加密；结构化备份白名单不包含 `openai_relay_token_v1`，导出包不携带本地 relay 令牌。
 - curl 示例默认使用 `<YOUR_RELAY_TOKEN>` 占位符，不把真实令牌复制到剪贴板。
 - 访问审计 v1：`OpenAiRelayAuditEvent` 只记录方法、路径、HTTP 状态码、错误码、模型 id、是否流式、耗时和当前并发数；不记录 prompt、消息内容、Bearer 令牌、API Key、上游 Base URL 或本机路径。
@@ -193,7 +236,7 @@ OpenAI 兼容请求
 - 局域网风险边界：开放局域网后，同一网络设备只要持有 Bearer 令牌即可调用本机 relay；界面明确提示只在可信网络中使用，不在公共 Wi-Fi 开启，不把令牌发给他人。
 - 高级路由策略 v1：`/v1/models` 会暴露 `simichat:default`、`simichat:free`、`simichat:fast` 路由别名；请求缺省 `model` 或使用 `simichat:auto` 时按设置页选择的策略路由。
 - 路由策略：支持“指定模型”（真实模型 id 直连）、“默认模型”（优先 `ChannelModel.isDefault`）、“免费优先”（优先空 Key / Ollama / Free 标识模型）、“本地 / 快速优先”（优先 Ollama、localhost、127.0.0.1、本地标识）。
-- 回退策略：非流式请求在路由候选模型调用失败时，会继续尝试后续候选，成功响应的 `model` 字段写入实际命中的模型 id；所有候选失败时返回安全的 OpenAI 兼容 `502 upstream_error`，不暴露上游错误详情、API Key、prompt 或本机路径。流式请求不做中途回退，避免已经发送部分 SSE 后切换模型造成协议混乱。
+- 回退策略：非流式请求在路由候选模型调用失败时，会继续尝试后续候选，成功响应的 `model` 字段写入实际命中的模型 id；所有候选失败时返回安全的 OpenAI 兼容 `502 upstream_error`，不暴露上游错误详情、API Key、prompt 或本机路径。流式请求（含 `/v1/chat/completions` 和 `/v1/responses`）不做中途回退，避免已经发送部分 SSE 后切换模型造成协议混乱；中途失败统一输出安全流内错误并以 `[DONE]` 收口，审计 `code` 记为 `upstream_error`。
 - 路由策略持久化：设置页选择的路由策略写入 `openai_relay_route_strategy_v1`，但该键不进入结构化备份白名单，避免导入备份后意外改变本机中转暴露行为。
 - 可配置并发上限 v1：设置页“并发上限”支持 1 / 2 / 4 / 8 / 16 / 32 个聊天请求，配置写入 `openai_relay_max_concurrent_requests_v1`；启动或运行中修改会重启 relay 并把新上限传给 `OpenAiCompatibleRelayServer`；超限仍返回安全的 OpenAI 兼容 `429 concurrency_limit`。
 - 本地脱敏用量统计 v1：`OpenAiRelayUsageStats` 只累计请求总数、聊天请求数、流式请求数、成功 / 拒绝 / 未授权 / 限流 / 路由 / 上游错误次数、总耗时、平均耗时和最近状态；不记录 prompt、消息正文、Bearer 令牌、API Key、上游 Base URL、本机路径或用户原始内容。
@@ -217,6 +260,7 @@ OpenAI 兼容请求
 - 切换模型后会话默认模型更新测试。
 - 切换模型后时间线记录测试：`model_switch` 事件写入 SQLite，移动端 UI 展示提示条。
 - 上下文隔离测试：`model_switch` 不进入 AI 请求上下文。
+- 流式取消传播测试：所有协议的停止生成都必须能在收到首个 chunk 后响应取消；Ollama 必须覆盖 `CancelToken.cancel()` 后 NDJSON 流快速结束且不抛未处理错误。
 - 切换失败回滚测试：通过故障注入验证持久化失败时会恢复原 selectedModelId 和会话默认模型。
 - 密钥不得进入日志的安全测试。
 - 历史记录持久化测试：保存成功 / 失败结果、同模型覆盖、重启加载、敏感详情不落盘。
@@ -355,12 +399,12 @@ ModelTestHistoryItem
 ## 13. 近期 TODO
 
 - [x] 增加 OpenAI / Claude / Gemini / DeepSeek / 通义千问 / OpenRouter / Ollama 预设渠道第一版。
-- [ ] 百度 / 讯飞等接口差异较大的厂商路径验证后补充预设。
+- [x] 百度千帆 / 讯飞星火 / Kimi / Moonshot AI / SiliconFlow / 火山方舟 / 腾讯混元 OpenAI 兼容路径验证后补充预设。
 - [x] 渠道连通性测试结果结构化展示。
 - [x] 模型连通性测试最近历史记录与设置页状态展示。
 - [x] 模型连通性测试失败自动重试策略。
 - [x] 免费模型引导文档与导入格式。
-- [x] OpenAI 兼容本地中转核心服务 v1：`OpenAiCompatibleRelayServer` + `ChannelModelRelayBridge`，支持模型列表、非流式 / 流式聊天补全、Bearer 鉴权和安全错误响应。
+- [x] OpenAI 兼容本地中转核心服务 v1：`OpenAiCompatibleRelayServer` + `ChannelModelRelayBridge`，支持模型列表、非流式 / 流式聊天补全、Responses API 非流式 / 流式 SSE、Bearer 鉴权和安全错误响应。
 - [x] OpenAI 兼容本地中转设置页启动入口、令牌生成 / 加密持久化、启动 / 停止、端口展示和隐藏真实令牌的 curl 示例。
 - [x] OpenAI 兼容本地中转访问审计与并发保护 v1：脱敏审计事件、默认 4 并发、超限 429、设置页摘要。
 - [x] OpenAI 兼容本地中转局域网开放二次确认 v1：默认仅本机访问，确认风险后才开放局域网，取消不改变状态，设置页展示候选地址。
@@ -371,3 +415,7 @@ ModelTestHistoryItem
 - [x] OpenAI 兼容本地中转模型视觉能力路由。
 - [x] OpenAI 兼容本地中转模型能力可见性与设置页 Vision 标注。
 - [x] OpenAI 兼容本地中转远端图片 URL 安全下载透传。
+- [x] OpenAI 兼容本地中转 Responses API 流式输出：`POST /v1/responses` 支持 `stream=true`，输出 `response.in_progress`、`response.output_item.added` / `response.content_part.added`、`response.output_text.delta` / `done`、`response.content_part.done`、`response.output_item.done`、`response.completed`、失败时 `response.failed` 和 `[DONE]`，`item_reference` 等非文本 input item 安全降级，不回显令牌、密钥、本机路径或多模态源 payload。
+- [x] OpenAI 兼容本地中转流式上游异常安全收口：`/v1/chat/completions` 与 `/v1/responses` 已开始输出 SSE 后若上游抛错，会返回安全流内错误 / failed 事件和 `[DONE]`，避免客户端悬挂且不泄露异常详情，并在审计中记录 `upstream_error`。
+- [x] Ollama 流式取消传播：`OllamaProtocol` 已支持 `CancelToken.whenCancel -> http.Client.close()`，取消导致的 client 异常会被视为正常停止；新增 `test/core/ollama_protocol_test.dart` 覆盖收到首个 NDJSON chunk 后取消并快速结束。
+- [x] 添加模型弹窗预设推荐快速填入：已保存渠道会按 `protocol + baseUrl` 反推内置厂商预设，展示推荐模型 chip，点击后填入模型名；`test/shared/settings_page_channel_import_test.dart` 覆盖 Kimi / Moonshot 渠道。

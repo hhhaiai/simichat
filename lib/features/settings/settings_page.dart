@@ -25,6 +25,7 @@ import '../../core/ai/protocol_icons.dart';
 import '../../core/ai/sse_helper.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/message_dao.dart';
+import '../../core/memory/dreaming_service.dart';
 import '../../core/memory/dreaming_schedule.dart';
 import '../../core/memory/reflection_service.dart';
 import '../../core/memory/user_profile.dart';
@@ -1239,8 +1240,7 @@ class SettingsPage extends ConsumerWidget {
                         style: TextStyle(fontSize: 13),
                       ),
                       dense: true,
-                      onTap: () =>
-                          _showAddModelDialog(context, ref, channel.id),
+                      onTap: () => _showAddModelDialog(context, ref, channel),
                     ),
                     ListTile(
                       leading: const Icon(Icons.cloud_download, size: 18),
@@ -1342,22 +1342,18 @@ class SettingsPage extends ConsumerWidget {
   }
 
   void _showBatchChannelImportDialog(BuildContext context, WidgetRef ref) {
-    final importCtrl = TextEditingController(
-      text: const JsonEncoder.withIndent('  ').convert({
-        'channels': [
-          {
-            'name': '示例 OpenAI 兼容渠道',
-            'baseUrl': 'https://api.example.com/v1',
-            'protocol': 'openai_chat',
-            'apiKey': '在这里粘贴自己的 Key',
-            'models': [
-              {'name': 'free-chat-model', 'capability': 'chat'},
-              {'name': 'free-embedding-model', 'capability': 'embedding'},
-            ],
-          },
-        ],
-      }),
-    );
+    final exampleJson = const JsonEncoder.withIndent('  ').convert({
+      'channels': [
+        {
+          'presetId': 'groq',
+          'apiKey': '在这里粘贴自己的 Groq Key',
+          'models': [
+            {'name': 'llama-3.1-8b-instant', 'capability': 'chat'},
+          ],
+        },
+      ],
+    });
+    final importCtrl = TextEditingController(text: exampleJson);
 
     showDialog(
       context: context,
@@ -1389,7 +1385,7 @@ class SettingsPage extends ConsumerWidget {
                       alignLabelWithHint: true,
                       border: OutlineInputBorder(),
                       helperText:
-                          '支持数组或 {"channels": [...]}；字段：name/baseUrl/protocol/apiKey/models',
+                          '支持渠道对象、数组或 {"channels": [...]}；可用 presetId/provider 自动补名称、Base URL 和协议；单模型可用 model/modelName',
                     ),
                     style: const TextStyle(
                       fontFamily: 'monospace',
@@ -1398,14 +1394,53 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
+                    TextButton(
+                      onPressed: () async {
+                        final data = await Clipboard.getData('text/plain');
+                        if (!ctx.mounted) return;
+                        final text = data?.text ?? '';
+                        if (text.trim().isEmpty) {
+                          if (context.mounted) {
+                            _showArchiveSnack(context, '剪贴板没有可粘贴的 JSON');
+                          }
+                          return;
+                        }
+                        importCtrl.text = text;
+                        importCtrl.selection = TextSelection.collapsed(
+                          offset: importCtrl.text.length,
+                        );
+                        if (context.mounted) {
+                          _showArchiveSnack(context, '已从剪贴板粘贴 JSON');
+                        }
+                      },
+                      child: const Text('粘贴剪贴板'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: exampleJson));
+                        _showArchiveSnack(context, '示例 JSON 已复制');
+                      },
+                      child: const Text('复制示例 JSON'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        importCtrl.text = exampleJson;
+                        importCtrl.selection = TextSelection.collapsed(
+                          offset: importCtrl.text.length,
+                        );
+                        _showArchiveSnack(context, '已恢复示例 JSON');
+                      },
+                      child: const Text('恢复示例'),
+                    ),
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
                       child: const Text('取消'),
                     ),
-                    const SizedBox(width: 8),
                     FilledButton.icon(
                       icon: const Icon(Icons.upload_file),
                       label: const Text('导入'),
@@ -1706,9 +1741,11 @@ class SettingsPage extends ConsumerWidget {
   void _showAddModelDialog(
     BuildContext context,
     WidgetRef ref,
-    String channelId,
+    ModelChannel channel,
   ) {
     final modelCtrl = TextEditingController();
+    final recommendedModels =
+        _findProviderPresetForChannel(channel)?.recommendedModels ?? const [];
     var capability = ModelCapability.chat;
     showDialog(
       context: context,
@@ -1726,6 +1763,41 @@ class SettingsPage extends ConsumerWidget {
                 ),
                 autofocus: true,
               ),
+              if (recommendedModels.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '预设推荐模型',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      for (final modelName in recommendedModels)
+                        ActionChip(
+                          label: Text(modelName),
+                          onPressed: () {
+                            setDialogState(() {
+                              modelCtrl.text = modelName;
+                              modelCtrl.selection = TextSelection.collapsed(
+                                offset: modelName.length,
+                              );
+                            });
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: capability,
@@ -1763,11 +1835,11 @@ class SettingsPage extends ConsumerWidget {
                       .read(channelDaoProvider)
                       .addModel(
                         id: const Uuid().v4(),
-                        channelId: channelId,
+                        channelId: channel.id,
                         modelName: modelCtrl.text.trim(),
                         capability: capability,
                       );
-                  refreshChannelModels(ref, channelId);
+                  refreshChannelModels(ref, channel.id);
                   if (ctx.mounted) Navigator.pop(ctx);
                 }
               },
@@ -3372,7 +3444,7 @@ class SettingsPage extends ConsumerWidget {
       final file = File(path);
       final preview = await service.previewExport(file);
       if (!context.mounted) return;
-      _showDataImportPreviewDialog(context, service, file, preview);
+      _showDataImportPreviewDialog(context, ref, service, file, preview);
     } on DataImportException catch (error) {
       if (!context.mounted) return;
       _showArchiveSnack(context, '导入预览失败：${error.message}');
@@ -3384,6 +3456,7 @@ class SettingsPage extends ConsumerWidget {
 
   void _showDataImportPreviewDialog(
     BuildContext context,
+    WidgetRef ref,
     DataImportService service,
     File file,
     DataImportPreview preview,
@@ -3422,7 +3495,7 @@ class SettingsPage extends ConsumerWidget {
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);
-              _importLocalData(context, service, file);
+              _importLocalData(context, ref, service, file);
             },
             child: const Text('确认导入'),
           ),
@@ -3433,13 +3506,24 @@ class SettingsPage extends ConsumerWidget {
 
   Future<void> _importLocalData(
     BuildContext context,
+    WidgetRef ref,
     DataImportService service,
     File file,
   ) async {
     try {
       final result = await service.importExport(file);
+      var dreamingSyncSuffix = '';
+      try {
+        final restoredDreamingReports =
+            await syncDreamingDigestStateFromDatabase(ref);
+        if (restoredDreamingReports > 0) {
+          dreamingSyncSuffix = '；Dreaming 报告已同步 $restoredDreamingReports 条';
+        }
+      } catch (_) {
+        // Dreaming 状态回灌失败不应阻断文件 / 数据导入结果。
+      }
       if (!context.mounted) return;
-      _showArchiveSnack(context, result.summary);
+      _showArchiveSnack(context, '${result.summary}$dreamingSyncSuffix');
     } on DataImportException catch (error) {
       if (!context.mounted) return;
       _showArchiveSnack(context, '导入失败：${error.message}');
@@ -3594,17 +3678,31 @@ class SettingsPage extends ConsumerWidget {
 
   Widget _buildDreamingTile(BuildContext context, WidgetRef ref) {
     final digest = ref.watch(dreamingDigestProvider);
+    final history = ref.watch(dreamingDigestHistoryProvider);
     final schedule = ref.watch(dreamingScheduleProvider);
+    final latestFailedJob = ref
+        .watch(latestFailedDreamingJobProvider)
+        .valueOrNull;
     final scheduleText =
         '${schedule.enabled ? '自动整理已开启' : '自动整理已关闭'} · ${formatDreamingScheduleTime(schedule)}';
+    const scheduleBoundaryText = '前台到期 · 非系统后台';
+    final nextRunText = formatNextDreamingForegroundRun(
+      schedule,
+      now: DateTime.now(),
+    );
+    final historyText = history.isEmpty ? '' : ' · 历史 ${history.length} 次';
+    final failedText = latestFailedJob == null
+        ? ''
+        : ' · 最近失败 ${latestFailedJob.dayKey} · 可重试';
     final subtitle = digest == null
-        ? '$scheduleText · 可手动生成今日摘要'
-        : '$scheduleText · 最近 ${digest.dayKey} · ${digest.originalMessageCount} 条消息';
+        ? '$scheduleText · $scheduleBoundaryText · $nextRunText · 可手动生成今日摘要$historyText$failedText'
+        : '$scheduleText · $scheduleBoundaryText · $nextRunText · 最近 ${digest.dayKey} · ${_formatDreamingMessageCoverage(digest)}$historyText$failedText';
 
     return ListTile(
       leading: const Icon(Icons.nightlight_round_outlined),
       title: const Text('Dreaming 夜间整理'),
       subtitle: Text(subtitle),
+      isThreeLine: true,
       trailing: const Icon(Icons.chevron_right),
       onTap: () => _showDreamingDialog(context, ref),
     );
@@ -3617,7 +3715,11 @@ class SettingsPage extends ConsumerWidget {
       builder: (ctx) => Consumer(
         builder: (ctx, ref, _) {
           final digest = ref.watch(dreamingDigestProvider);
+          final history = ref.watch(dreamingDigestHistoryProvider);
           final schedule = ref.watch(dreamingScheduleProvider);
+          final latestFailedJob = ref
+              .watch(latestFailedDreamingJobProvider)
+              .valueOrNull;
           final preview = digest?.toMarkdown();
           return AlertDialog(
             title: const Text('Dreaming 夜间整理'),
@@ -3664,12 +3766,49 @@ class SettingsPage extends ConsumerWidget {
                             .setTime(hour: picked.hour, minute: picked.minute);
                       },
                     ),
+                    if (latestFailedJob != null) ...[
+                      const SizedBox(height: 8),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ListTile(
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              leading: const Icon(Icons.error_outline),
+                              title: Text(
+                                '最近 Dreaming 失败：${latestFailedJob.dayKey}',
+                              ),
+                              subtitle: Text(
+                                _formatDreamingFailedJob(latestFailedJob),
+                              ),
+                              trailing: TextButton(
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  _runDreaming(
+                                    context,
+                                    pageRef,
+                                    day: _parseDreamingDayKey(
+                                      latestFailedJob.dayKey,
+                                    ),
+                                  );
+                                },
+                                child: const Text('重试最近失败'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     if (digest == null)
                       const Text('暂无 Dreaming 报告。')
                     else ...[
                       Text(
-                        '最近报告：${digest.dayKey} · ${digest.originalMessageCount} 条消息 · 耗时 ${digest.elapsedMs} ms',
+                        '最近报告：${digest.dayKey} · ${_formatDreamingMessageCoverage(digest)} · 耗时 ${digest.elapsedMs} ms',
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -3679,11 +3818,78 @@ class SettingsPage extends ConsumerWidget {
                         style: const TextStyle(fontSize: 12),
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    if (history.isEmpty)
+                      const Text('暂无历史报告。')
+                    else ...[
+                      Text('历史报告已保留 ${history.length} 次'),
+                      const SizedBox(height: 4),
+                      ...history.take(5).map((item) {
+                        final markdown = item.toMarkdown();
+                        return ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          childrenPadding: EdgeInsets.zero,
+                          title: Text(
+                            '${item.dayKey} · ${_formatDreamingMessageCoverage(item)}',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            '会话 ${item.sessionCount} 个 · 耗时 ${item.elapsedMs} ms',
+                          ),
+                          children: [
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                markdown.isEmpty ? '暂无报告内容' : markdown,
+                                maxLines: 12,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                onPressed: () => _deleteDreamingReport(
+                                  context,
+                                  pageRef,
+                                  item.dayKey,
+                                ),
+                                icon: const Icon(Icons.delete_outline),
+                                label: const Text('删除此报告'),
+                              ),
+                            ),
+                          ],
+                        );
+                      }),
+                      if (history.length > 5)
+                        Text(
+                          '仅显示最近 5 次，其余仍保留在本机历史中。',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                        ),
+                    ],
                   ],
                 ),
               ),
             ),
             actions: [
+              if (latestFailedJob != null)
+                TextButton(
+                  onPressed: () => _dismissDreamingFailedJob(
+                    context,
+                    pageRef,
+                    latestFailedJob,
+                  ),
+                  child: const Text('清除此失败'),
+                ),
+              TextButton(
+                onPressed: digest == null && history.isEmpty
+                    ? null
+                    : () => _clearDreamingReports(context, pageRef),
+                child: const Text('清空报告'),
+              ),
               TextButton(
                 onPressed: () {
                   Navigator.pop(ctx);
@@ -3702,8 +3908,63 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  Future<void> _runDreaming(BuildContext context, WidgetRef ref) async {
-    final digest = await runDreamingDigest(ref);
+  Future<void> _clearDreamingReports(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await ref.read(dreamingDaoProvider).clearReports();
+    await ref.read(dreamingDigestProvider.notifier).clear();
+    await ref.read(dreamingDigestHistoryProvider.notifier).clear();
+    if (!context.mounted) return;
+    _showArchiveSnack(context, 'Dreaming 报告已清空');
+  }
+
+  Future<void> _deleteDreamingReport(
+    BuildContext context,
+    WidgetRef ref,
+    String dayKey,
+  ) async {
+    final digest = ref.read(dreamingDigestProvider);
+    await ref.read(dreamingDaoProvider).deleteReportByDay(dayKey);
+    await ref.read(dreamingDigestHistoryProvider.notifier).removeDay(dayKey);
+    if (digest?.dayKey == dayKey) {
+      final remainingHistory = ref.read(dreamingDigestHistoryProvider);
+      if (remainingHistory.isEmpty) {
+        await ref.read(dreamingDigestProvider.notifier).clear();
+      } else {
+        await ref
+            .read(dreamingDigestProvider.notifier)
+            .save(remainingHistory.first);
+      }
+    }
+    if (!context.mounted) return;
+    _showArchiveSnack(context, '已删除 Dreaming 报告：$dayKey');
+  }
+
+  Future<void> _dismissDreamingFailedJob(
+    BuildContext context,
+    WidgetRef ref,
+    DreamingJob job,
+  ) async {
+    await ref.read(dreamingDaoProvider).dismissFailedJob(job.id);
+    ref.invalidate(latestFailedDreamingJobProvider);
+    if (!context.mounted) return;
+    _showArchiveSnack(context, '已清除 Dreaming 失败提示：${job.dayKey}');
+  }
+
+  Future<void> _runDreaming(
+    BuildContext context,
+    WidgetRef ref, {
+    DateTime? day,
+  }) async {
+    final DreamingDigest digest;
+    try {
+      digest = await runDreamingDigest(ref, day: day);
+    } catch (_) {
+      if (!context.mounted) return;
+      _showArchiveSnack(context, 'Dreaming 失败，可到设置页重试');
+      return;
+    }
     final proposal = digest.hasContent
         ? await proposeUserProfileChanges(ref, reason: 'profile_proposal')
         : null;
@@ -3724,12 +3985,70 @@ class SettingsPage extends ConsumerWidget {
     final reflectionSuffix = reflectionActionCount > 0
         ? '，反思 $reflectionActionCount 个行动项'
         : '';
+    final messageCoverage = _formatDreamingMessageCoverage(digest);
     final message = digest.hasContent
         ? proposal == null
-              ? 'Dreaming 已完成：${digest.originalMessageCount} 条消息，画像暂无新增变更$reflectionSuffix'
-              : 'Dreaming 已完成：${digest.originalMessageCount} 条消息，已生成待确认画像变更（${proposal.diff.summary}）$reflectionSuffix'
+              ? 'Dreaming 已完成：$messageCoverage，画像暂无新增变更$reflectionSuffix'
+              : 'Dreaming 已完成：$messageCoverage，已生成待确认画像变更（${proposal.diff.summary}）$reflectionSuffix'
         : 'Dreaming 已完成：今天暂无可整理对话';
     _showArchiveSnack(context, message);
+  }
+
+  String _formatDreamingFailedJob(DreamingJob job) {
+    final trigger = switch (job.trigger) {
+      'manual' => '手动运行',
+      'foreground_due' => '前台到期',
+      _ => job.trigger,
+    };
+    final error = _sanitizeDreamingFailedJobError(job.error);
+    final errorText = error == null || error.isEmpty
+        ? '未知错误'
+        : error.length > 120
+        ? '${error.substring(0, 120)}…'
+        : error;
+    return '$trigger · $errorText';
+  }
+
+  DateTime? _parseDreamingDayKey(String dayKey) {
+    final parts = dayKey.split('-');
+    if (parts.length != 3) return DateTime.tryParse(dayKey);
+    final year = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final day = int.tryParse(parts[2]);
+    if (year == null || month == null || day == null) {
+      return DateTime.tryParse(dayKey);
+    }
+    return DateTime(year, month, day, 22);
+  }
+
+  String? _sanitizeDreamingFailedJobError(String? raw) {
+    if (raw == null) return null;
+    var sanitized = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (sanitized.isEmpty) return sanitized;
+    sanitized = sanitized
+        .replaceAll(
+          RegExp(r'\bBearer\s+[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+          'Bearer ***',
+        )
+        .replaceAll(RegExp(r'sk-[A-Za-z0-9_-]{6,}'), 'sk-***')
+        .replaceAll(RegExp(r'AIza[0-9A-Za-z_-]{10,}'), 'AIza***')
+        .replaceAll(
+          RegExp(r'xox[baprs]-[A-Za-z0-9-]+', caseSensitive: false),
+          'xox***',
+        )
+        .replaceAll(
+          RegExp(r'https?://[^\s，。；;,)]+', caseSensitive: false),
+          '[链接]',
+        )
+        .replaceAllMapped(
+          RegExp(
+            r'((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd)=)[^\s&]+',
+            caseSensitive: false,
+          ),
+          (match) => '${match.group(1)}***',
+        )
+        .replaceAll(RegExp(r'(/Users/|/var/|/private/)[^\s，。；;,)]+'), '[本机路径]');
+    return sanitized;
   }
 
   // ====== 本地反思 / 自我优化 ======
@@ -3739,11 +4058,17 @@ class SettingsPage extends ConsumerWidget {
     final history = ref.watch(assistantReflectionHistoryProvider);
     final digest = ref.watch(dreamingDigestProvider);
     final promptEnabled = ref.watch(assistantReflectionPromptEnabledProvider);
+    final reflectionFreshnessText =
+        report != null &&
+            report.sourceDigestDayKey.isNotEmpty &&
+            report.sourceDigestDayKey != report.dayKey
+        ? ' · 来源 ${report.sourceDigestDayKey} · 先运行今日 Dreaming'
+        : '';
     final subtitle = report == null
         ? digest == null
               ? '暂无反思 · 先运行 Dreaming 后再生成'
               : '可基于 ${digest.dayKey} 的 Dreaming 报告生成本地反思'
-        : '最近 ${report.dayKey} · ${report.insights.length} 条结论 · ${report.actionItems.length} 个行动项 · 历史 ${history.length} 次 · 短期提示${promptEnabled ? '开启' : '关闭'}';
+        : '最近 ${report.dayKey}$reflectionFreshnessText · ${report.insights.length} 条结论 · ${report.actionItems.length} 个行动项 · 历史 ${history.length} 次 · 短期提示${promptEnabled ? '开启' : '关闭'}';
 
     return ListTile(
       leading: const Icon(Icons.psychology_alt_outlined),
@@ -3817,12 +4142,6 @@ class SettingsPage extends ConsumerWidget {
                       Text(
                         '结论 ${report.insights.length} 条 · 行动项 ${report.actionItems.length} 个',
                       ),
-                      if (history.isNotEmpty)
-                        Text(
-                          '历史已保留 ${history.length} 次：${history.take(3).map((item) => item.dayKey).join('、')}',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
                       const SizedBox(height: 8),
                       Text(
                         preview == null || preview.isEmpty ? '暂无反思内容' : preview,
@@ -3831,6 +4150,57 @@ class SettingsPage extends ConsumerWidget {
                         style: const TextStyle(fontSize: 12),
                       ),
                       const SizedBox(height: 12),
+                      if (history.isNotEmpty) ...[
+                        Text('历史反思已保留 ${history.length} 次'),
+                        const SizedBox(height: 4),
+                        ...history.take(5).map((item) {
+                          final markdown = item.toMarkdown();
+                          return ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: Text(
+                              '${item.dayKey} · 来源 ${item.sourceDigestDayKey}',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            subtitle: Text(
+                              '结论 ${item.insights.length} 条 · 行动项 ${item.actionItems.length} 个',
+                            ),
+                            children: [
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  markdown.isEmpty ? '暂无反思内容' : markdown,
+                                  maxLines: 12,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton.icon(
+                                  onPressed: () => _deleteAssistantReflection(
+                                    context,
+                                    parentRef,
+                                    item.dayKey,
+                                    item.sourceDigestDayKey,
+                                  ),
+                                  icon: const Icon(Icons.delete_outline),
+                                  label: const Text('删除此反思'),
+                                ),
+                              ),
+                            ],
+                          );
+                        }),
+                        if (history.length > 5)
+                          Text(
+                            '仅显示最近 5 次，其余仍保留在本机历史中。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                      ],
                       if (promptEnabled &&
                           promptPreview != null &&
                           promptPreview.isNotEmpty) ...[
@@ -3858,6 +4228,12 @@ class SettingsPage extends ConsumerWidget {
             ),
             actions: [
               TextButton(
+                onPressed: report == null && history.isEmpty
+                    ? null
+                    : () => _clearAssistantReflection(context, parentRef),
+                child: const Text('清空反思'),
+              ),
+              TextButton(
                 onPressed: () {
                   Navigator.pop(ctx);
                   _runReflection(context, parentRef);
@@ -3873,6 +4249,41 @@ class SettingsPage extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  Future<void> _clearAssistantReflection(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await ref.read(assistantReflectionProvider.notifier).clear();
+    await ref.read(assistantReflectionHistoryProvider.notifier).clear();
+    if (!context.mounted) return;
+    _showArchiveSnack(context, '本地反思报告已清空');
+  }
+
+  Future<void> _deleteAssistantReflection(
+    BuildContext context,
+    WidgetRef ref,
+    String dayKey,
+    String sourceDigestDayKey,
+  ) async {
+    final report = ref.read(assistantReflectionProvider);
+    await ref
+        .read(assistantReflectionHistoryProvider.notifier)
+        .removeReport(dayKey: dayKey, sourceDigestDayKey: sourceDigestDayKey);
+    if (report?.dayKey == dayKey &&
+        report?.sourceDigestDayKey == sourceDigestDayKey) {
+      final remainingHistory = ref.read(assistantReflectionHistoryProvider);
+      if (remainingHistory.isEmpty) {
+        await ref.read(assistantReflectionProvider.notifier).clear();
+      } else {
+        await ref
+            .read(assistantReflectionProvider.notifier)
+            .save(remainingHistory.first);
+      }
+    }
+    if (!context.mounted) return;
+    _showArchiveSnack(context, '已删除本地反思：$dayKey · 来源 $sourceDigestDayKey');
   }
 
   Future<void> _runReflection(BuildContext context, WidgetRef ref) async {
@@ -5017,6 +5428,33 @@ class SettingsPage extends ConsumerWidget {
   }
 }
 
+String _formatDreamingMessageCoverage(DreamingDigest digest) {
+  final total = digest.totalOriginalMessageCount;
+  if (total > digest.originalMessageCount) {
+    return '${digest.originalMessageCount} / $total 条消息';
+  }
+  return '${digest.originalMessageCount} 条消息';
+}
+
+ModelProviderPreset? _findProviderPresetForChannel(ModelChannel channel) {
+  final channelBaseUrl = _normalizeProviderBaseUrl(channel.baseUrl);
+  for (final preset in kModelProviderPresets) {
+    if (preset.protocol != channel.protocol) continue;
+    if (_normalizeProviderBaseUrl(preset.baseUrl) == channelBaseUrl) {
+      return preset;
+    }
+  }
+  return null;
+}
+
+String _normalizeProviderBaseUrl(String value) {
+  var normalized = value.trim();
+  while (normalized.endsWith('/') && normalized.length > 1) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  return normalized;
+}
+
 class _ProviderPresetHint extends StatelessWidget {
   final ModelProviderPreset preset;
 
@@ -5060,10 +5498,77 @@ class _ProviderPresetHint extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(preset.description, style: const TextStyle(fontSize: 12)),
+          if (preset.recommendedModels.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '建议模型名',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: scheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              preset.recommendedModels.join('、'),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(
+                    ClipboardData(text: preset.recommendedModels.join('\n')),
+                  );
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context)
+                    ..clearSnackBars()
+                    ..showSnackBar(const SnackBar(content: Text('建议模型名已复制')));
+                },
+                icon: const Icon(Icons.copy_outlined, size: 16),
+                label: const Text('复制建议模型名'),
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           SelectableText(
             preset.docsUrl,
             style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: preset.baseUrl),
+                    );
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context)
+                      ..clearSnackBars()
+                      ..showSnackBar(
+                        const SnackBar(content: Text('Base URL 已复制')),
+                      );
+                  },
+                  icon: const Icon(Icons.link, size: 16),
+                  label: const Text('复制 Base URL'),
+                ),
+                TextButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: preset.docsUrl));
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context)
+                      ..clearSnackBars()
+                      ..showSnackBar(const SnackBar(content: Text('文档链接已复制')));
+                  },
+                  icon: const Icon(Icons.link_outlined, size: 16),
+                  label: const Text('复制文档链接'),
+                ),
+              ],
+            ),
           ),
         ],
       ),

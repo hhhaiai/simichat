@@ -6,6 +6,7 @@ import 'package:ai_chat_app/shared/providers/database_provider.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -86,35 +87,56 @@ void main() {
     expect(find.textContaining('free-test-key'), findsNothing);
   });
 
-  testWidgets('settings page deletes a channel with existing model references', (
+  testWidgets('batch import dialog defaults to preset-based example', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
 
-    await db.channelDao.createChannel(
-      id: 'delete-channel',
-      name: 'Delete Me',
-      baseUrl: 'https://delete.example.com/v1',
-      apiKeyEncrypted: KeyEncryptor.encrypt('delete-test-key'),
-      protocol: 'openai_chat',
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
     );
-    await db.channelDao.addModel(
-      id: 'delete-model',
-      channelId: 'delete-channel',
-      modelName: 'delete-model-name',
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('批量导入渠道'));
+    await tester.pumpAndSettle();
+
+    final importField = tester.widget<TextField>(find.byType(TextField).last);
+    final initialJson = importField.controller!.text;
+    expect(initialJson, contains('"presetId": "groq"'));
+    expect(initialJson, contains('"apiKey": "在这里粘贴自己的 Groq Key"'));
+    expect(initialJson, contains('"models": ['));
+    expect(initialJson, isNot(contains('api.example.com')));
+    expect(find.textContaining('presetId/provider'), findsOneWidget);
+    expect(find.textContaining('渠道对象、数组'), findsOneWidget);
+    expect(find.textContaining('model/modelName'), findsOneWidget);
+  });
+
+  testWidgets('batch import dialog copies safe preset example json', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map?)?['text'] as String?;
+        }
+        return null;
+      },
     );
-    await db.sessionDao.createSession(
-      id: 'delete-session',
-      defaultChannelModelId: 'delete-model',
-    );
-    await db.messageDao.insertMessage(
-      id: 'delete-message',
-      sessionId: 'delete-session',
-      role: 'assistant',
-      content: 'ok',
-      channelModelId: 'delete-model',
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
     );
 
     await tester.pumpWidget(
@@ -125,19 +147,362 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Delete Me'), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.delete).first);
+    await tester.tap(find.text('批量导入渠道'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.enterText(
+      find.byType(TextField).last,
+      '{"apiKey":"sk-live-should-not-copy"}',
+    );
+
+    await tester.tap(find.text('复制示例 JSON'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Delete Me'), findsNothing);
-    expect(await db.channelDao.getAllChannels(), isEmpty);
-    expect(await db.channelDao.getModelsByChannel('delete-channel'), isEmpty);
-    final session = await db.sessionDao.getSession('delete-session');
-    expect(session!.defaultChannelModelId, isNull);
-    final messages = await db.messageDao.getMessagesBySession('delete-session');
-    expect(messages.single.channelModelId, isNull);
+    expect(copiedText, contains('"presetId": "groq"'));
+    expect(copiedText, contains('"apiKey": "在这里粘贴自己的 Groq Key"'));
+    expect(copiedText, isNot(contains('sk-live-should-not-copy')));
+    expect(find.text('示例 JSON 已复制'), findsOneWidget);
+  });
+
+  testWidgets('batch import dialog restores safe preset example json', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('批量导入渠道'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField).last,
+      '{"apiKey":"sk-live-should-not-restore"}',
+    );
+
+    await tester.tap(find.text('恢复示例'));
+    await tester.pumpAndSettle();
+
+    final editableText = tester.widget<EditableText>(find.byType(EditableText));
+    expect(editableText.controller.text, contains('"presetId": "groq"'));
+    expect(
+      editableText.controller.text,
+      contains('"apiKey": "在这里粘贴自己的 Groq Key"'),
+    );
+    expect(editableText.controller.text, isNot(contains('sk-live')));
+    expect(find.text('已恢复示例 JSON'), findsOneWidget);
+  });
+
+  testWidgets('batch import dialog pastes json from clipboard', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    const clipboardJson =
+        '{"channels":[{"presetId":"mistral","apiKey":"paste-test-key","models":["mistral-small-latest"]}]}';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return {'text': clipboardJson};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('批量导入渠道'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, '{}');
+
+    await tester.tap(find.text('粘贴剪贴板'));
+    await tester.pumpAndSettle();
+
+    final editableText = tester.widget<EditableText>(find.byType(EditableText));
+    expect(editableText.controller.text, clipboardJson);
+    expect(find.text('已从剪贴板粘贴 JSON'), findsOneWidget);
+  });
+
+  testWidgets(
+    'settings page deletes a channel with existing model references',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      await db.channelDao.createChannel(
+        id: 'delete-channel',
+        name: 'Delete Me',
+        baseUrl: 'https://delete.example.com/v1',
+        apiKeyEncrypted: KeyEncryptor.encrypt('delete-test-key'),
+        protocol: 'openai_chat',
+      );
+      await db.channelDao.addModel(
+        id: 'delete-model',
+        channelId: 'delete-channel',
+        modelName: 'delete-model-name',
+      );
+      await db.sessionDao.createSession(
+        id: 'delete-session',
+        defaultChannelModelId: 'delete-model',
+      );
+      await db.messageDao.insertMessage(
+        id: 'delete-message',
+        sessionId: 'delete-session',
+        role: 'assistant',
+        content: 'ok',
+        channelModelId: 'delete-model',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: SettingsPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete Me'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.delete).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete Me'), findsNothing);
+      expect(await db.channelDao.getAllChannels(), isEmpty);
+      expect(await db.channelDao.getModelsByChannel('delete-channel'), isEmpty);
+      final session = await db.sessionDao.getSession('delete-session');
+      expect(session!.defaultChannelModelId, isNull);
+      final messages = await db.messageDao.getMessagesBySession(
+        'delete-session',
+      );
+      expect(messages.single.channelModelId, isNull);
+    },
+  );
+
+  testWidgets('provider preset hint shows recommended starter models', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加渠道'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kimi / Moonshot AI').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('建议模型名'), findsOneWidget);
+    expect(find.textContaining('kimi-k2-0711-preview'), findsOneWidget);
+    expect(find.textContaining('moonshot-v1-8k'), findsOneWidget);
+  });
+
+  testWidgets('provider preset hint copies recommended starter models', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map?)?['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加渠道'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kimi / Moonshot AI').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('复制建议模型名'));
+    await tester.pumpAndSettle();
+
+    expect(copiedText, 'kimi-k2-0711-preview\nmoonshot-v1-8k');
+    expect(find.text('建议模型名已复制'), findsOneWidget);
+  });
+
+  testWidgets('provider preset hint copies provider docs link', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map?)?['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加渠道'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kimi / Moonshot AI').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('复制文档链接'));
+    await tester.pumpAndSettle();
+
+    expect(copiedText, 'https://platform.kimi.ai/docs/api/overview');
+    expect(find.text('文档链接已复制'), findsOneWidget);
+  });
+
+  testWidgets('provider preset hint copies provider base url', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map?)?['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加渠道'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kimi / Moonshot AI').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('复制 Base URL'));
+    await tester.pumpAndSettle();
+
+    expect(copiedText, 'https://api.moonshot.ai/v1');
+    expect(find.text('Base URL 已复制'), findsOneWidget);
+  });
+
+  testWidgets('add model dialog fills recommended model from channel preset', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.channelDao.createChannel(
+      id: 'moonshot-channel',
+      name: 'Kimi Channel',
+      baseUrl: 'https://api.moonshot.ai/v1',
+      apiKeyEncrypted: KeyEncryptor.encrypt('moonshot-test-key'),
+      protocol: 'openai_chat',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Kimi Channel'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('手动添加模型'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('预设推荐模型'), findsOneWidget);
+    await tester.tap(find.text('kimi-k2-0711-preview'));
+    await tester.pumpAndSettle();
+
+    final editableText = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(editableText.controller.text, 'kimi-k2-0711-preview');
   });
 
   testWidgets('settings page one-tap test prunes unavailable models', (
