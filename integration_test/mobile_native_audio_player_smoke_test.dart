@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ai_chat_app/core/media/audio_player.dart';
@@ -17,7 +16,7 @@ void main() {
     final audioDir = Directory('${tempRoot.path}/native_audio_player_smoke')
       ..createSync(recursive: true);
     final audioFile = File('${audioDir.path}/simichat-native-smoke.wav');
-    await audioFile.writeAsBytes(_buildSineWaveWav(), flush: true);
+    await audioFile.writeAsBytes(_buildSilentWav(), flush: true);
     addTearDown(() async {
       if (await audioDir.exists()) await audioDir.delete(recursive: true);
     });
@@ -27,11 +26,18 @@ void main() {
     final subscription = player.events.listen(events.add);
     addTearDown(subscription.cancel);
 
-    await player.playFile(audioFile.path);
-    await tester.pump(const Duration(milliseconds: 250));
-    await player.stop();
-    await _pumpUntil(
-      tester,
+    await player
+        .playFileForTesting(audioFile.path, skipAudioFocusRequest: true)
+        .timeout(_stepTimeout, onTimeout: () => fail('playFile timed out'));
+    await Future<void>.delayed(const Duration(milliseconds: 250)).timeout(
+      _stepTimeout,
+      onTimeout: () => fail('delay after play timed out'),
+    );
+    await player.stop().timeout(
+      _stepTimeout,
+      onTimeout: () => fail('stop timed out'),
+    );
+    await _waitUntil(
       () async =>
           events.any((event) => event.type == AudioPlaybackEventType.stopped),
     );
@@ -50,11 +56,9 @@ void main() {
   });
 }
 
-List<int> _buildSineWaveWav({
-  int sampleRate = 44100,
-  int durationMs = 1800,
-  double frequency = 440,
-}) {
+const _stepTimeout = Duration(seconds: 8);
+
+List<int> _buildSilentWav({int sampleRate = 44100, int durationMs = 1800}) {
   const channels = 1;
   const bitsPerSample = 16;
   final sampleCount = (sampleRate * durationMs / 1000).round();
@@ -83,22 +87,18 @@ List<int> _buildSineWaveWav({
   writeAscii(36, 'data');
   data.setUint32(40, dataSize, Endian.little);
 
-  for (var i = 0; i < sampleCount; i++) {
-    final sample = (math.sin(2 * math.pi * frequency * i / sampleRate) * 12000)
-        .round();
-    data.setInt16(44 + i * 2, sample, Endian.little);
-  }
+  // Leave the PCM payload zero-filled so device smoke tests verify native
+  // playback events without producing an audible tone.
   return bytes;
 }
 
-Future<void> _pumpUntil(
-  WidgetTester tester,
+Future<void> _waitUntil(
   Future<bool> Function() condition, {
   Duration timeout = const Duration(seconds: 5),
 }) async {
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
-    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
     if (await condition()) return;
   }
   fail('Timed out waiting for condition');

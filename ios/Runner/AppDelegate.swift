@@ -9,9 +9,12 @@ import Speech
   private var voiceRecorderChannel: FlutterMethodChannel?
   private var audioPlayerChannel: FlutterMethodChannel?
   private var nativeSpeechToTextChannel: FlutterMethodChannel?
+  private var deepLinkChannel: FlutterMethodChannel?
+  private var pendingInitialDeepLink: String?
   private var audioRecorder: AVAudioRecorder?
   private var audioPlayer: AVAudioPlayer?
   private var audioPlayerURL: URL?
+  private var audioSessionInterruptionObserver: NSObjectProtocol?
   private var recordingURL: URL?
   private var recordingStartedAt: Date?
 
@@ -19,7 +22,21 @@ import Speech
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    if let url = launchOptions?[.url] as? URL {
+      _ = handleIncomingDeepLink(url)
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    if handleIncomingDeepLink(url) {
+      return true
+    }
+    return super.application(app, open: url, options: options)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -29,6 +46,37 @@ import Speech
     registerVoiceRecorderChannel(messenger: messenger)
     registerAudioPlayerChannel(messenger: messenger)
     registerNativeSpeechToTextChannel(messenger: messenger)
+    registerDeepLinkChannel(messenger: messenger)
+  }
+
+  @discardableResult
+  func handleIncomingDeepLink(_ url: URL) -> Bool {
+    guard url.scheme == "ai-chat" else { return false }
+    let link = url.absoluteString
+    guard let channel = deepLinkChannel else {
+      pendingInitialDeepLink = link
+      return true
+    }
+    DispatchQueue.main.async {
+      channel.invokeMethod("linkOpened", arguments: link)
+    }
+    return true
+  }
+
+  private func registerDeepLinkChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "simichat/deep_link",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "getInitialLink" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(self?.pendingInitialDeepLink)
+      self?.pendingInitialDeepLink = nil
+    }
+    deepLinkChannel = channel
   }
 
   private func registerDataExportShareChannel(messenger: FlutterBinaryMessenger) {
@@ -83,6 +131,7 @@ import Speech
       }
     }
     audioPlayerChannel = channel
+    registerAudioSessionInterruptionObserver()
   }
 
   private func registerNativeSpeechToTextChannel(messenger: FlutterBinaryMessenger) {
@@ -431,6 +480,7 @@ import Speech
       try session.setActive(true)
       let player = try AVAudioPlayer(contentsOf: fileURL)
       guard player.prepareToPlay(), player.play() else {
+        deactivatePlaybackSession()
         result(FlutterError(code: "PLAY_FAILED", message: "语音播放失败，请稍后重试", details: nil))
         return
       }
@@ -441,6 +491,7 @@ import Speech
     } catch {
       audioPlayer = nil
       audioPlayerURL = nil
+      deactivatePlaybackSession()
       result(FlutterError(code: "PLAY_FAILED", message: "语音播放失败，请稍后重试", details: nil))
     }
   }
@@ -450,7 +501,36 @@ import Speech
     audioPlayer?.stop()
     audioPlayer = nil
     audioPlayerURL = nil
+    deactivatePlaybackSession()
     emitAudioPlaybackEvent(method: "playbackStopped", path: stoppedPath)
+  }
+
+  private func registerAudioSessionInterruptionObserver() {
+    guard audioSessionInterruptionObserver == nil else { return }
+    audioSessionInterruptionObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: AVAudioSession.sharedInstance(),
+      queue: .main
+    ) { [weak self] notification in
+      self?.handleAudioSessionInterruption(notification)
+    }
+  }
+
+  private func handleAudioSessionInterruption(_ notification: Notification) {
+    guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+          type == .began,
+          audioPlayer != nil else {
+      return
+    }
+    stopAudioPlayback()
+  }
+
+  private func deactivatePlaybackSession() {
+    try? AVAudioSession.sharedInstance().setActive(
+      false,
+      options: [.notifyOthersOnDeactivation]
+    )
   }
 
   func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -458,6 +538,7 @@ import Speech
     let finishedPath = audioPlayerURL?.path
     audioPlayer = nil
     audioPlayerURL = nil
+    deactivatePlaybackSession()
     emitAudioPlaybackEvent(
       method: flag ? "playbackCompleted" : "playbackError",
       path: finishedPath
@@ -469,6 +550,7 @@ import Speech
     let failedPath = audioPlayerURL?.path
     audioPlayer = nil
     audioPlayerURL = nil
+    deactivatePlaybackSession()
     emitAudioPlaybackEvent(method: "playbackError", path: failedPath)
   }
 

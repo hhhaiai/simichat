@@ -1,8 +1,13 @@
 package top.simitalk.aichat
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -18,10 +23,26 @@ class MainActivity : FlutterActivity() {
     private var recorder: MediaRecorder? = null
     private var audioPlayer: MediaPlayer? = null
     private var audioPlayerChannel: MethodChannel? = null
+    private var deepLinkChannel: MethodChannel? = null
+    private var pendingInitialDeepLink: String? = null
+    private var audioFocusRequest: Any? = null
+    private var audioManager: AudioManager? = null
+    private var competingAudioFocusRequest: Any? = null
+    private var competingAudioManager: AudioManager? = null
     private var audioPlayerPath: String? = null
     private var recordingFile: File? = null
     private var recordingStartedAtMs: Long = 0L
     private var pendingRecordPermissionResult: MethodChannel.Result? = null
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            -> stopAudioPlayback()
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> audioPlayer?.setVolume(0.3f, 0.3f)
+            AudioManager.AUDIOFOCUS_GAIN -> audioPlayer?.setVolume(1.0f, 1.0f)
+        }
+    }
+    private val competingAudioFocusChangeListener = AudioManager.OnAudioFocusChangeListener {}
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -46,6 +67,21 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        deepLinkChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            DEEP_LINK_CHANNEL,
+        ).also { channel ->
+            pendingInitialDeepLink = extractSimiDeepLink(intent)
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialLink" -> {
+                        result.success(pendingInitialDeepLink)
+                        pendingInitialDeepLink = null
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
         audioPlayerChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             AUDIO_PLAYER_CHANNEL,
@@ -57,10 +93,54 @@ class MainActivity : FlutterActivity() {
                         stopAudioPlayback()
                         result.success(true)
                     }
+                    "simulateAudioFocusLossForTesting" -> {
+                        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+                            result.notImplemented()
+                            return@setMethodCallHandler
+                        }
+                        audioFocusChangeListener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+                        result.success(true)
+                    }
+                    "requestCompetingAudioFocusForTesting" -> {
+                        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+                            result.notImplemented()
+                            return@setMethodCallHandler
+                        }
+                        result.success(requestCompetingAudioFocusForTesting())
+                    }
+                    "abandonCompetingAudioFocusForTesting" -> {
+                        if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+                            result.notImplemented()
+                            return@setMethodCallHandler
+                        }
+                        abandonCompetingAudioFocusForTesting()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val link = extractSimiDeepLink(intent) ?: return
+        val channel = deepLinkChannel
+        if (channel == null) {
+            pendingInitialDeepLink = link
+            return
+        }
+        runOnUiThread {
+            channel.invokeMethod("linkOpened", link)
+        }
+    }
+
+    private fun extractSimiDeepLink(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val data = intent.data ?: return null
+        if (data.scheme != "ai-chat") return null
+        return data.toString()
     }
 
     private fun shareExportFile(arguments: Map<*, *>?, result: MethodChannel.Result) {
@@ -228,6 +308,9 @@ class MainActivity : FlutterActivity() {
 
     private fun playAudioFile(arguments: Map<*, *>?, result: MethodChannel.Result) {
         val path = arguments?.get("path") as? String
+        // Direct integration tests do not run through the normal user-tap
+        // foreground audio-focus flow. Product calls must not set this flag.
+        val skipAudioFocusRequest = arguments?.get("skipAudioFocusRequest") == true
         if (path.isNullOrBlank()) {
             result.error("INVALID_ARGUMENT", "缺少语音文件路径", null)
             return
@@ -256,6 +339,7 @@ class MainActivity : FlutterActivity() {
                 if (audioPlayer === it) {
                     audioPlayer = null
                     audioPlayerPath = null
+                    abandonAudioPlaybackFocus()
                     emitAudioPlaybackEvent("playbackCompleted", audioPath)
                 }
                 try {
@@ -267,6 +351,7 @@ class MainActivity : FlutterActivity() {
                 if (audioPlayer === mp) {
                     audioPlayer = null
                     audioPlayerPath = null
+                    abandonAudioPlaybackFocus()
                     emitAudioPlaybackEvent("playbackError", audioPath)
                 }
                 try {
@@ -276,6 +361,16 @@ class MainActivity : FlutterActivity() {
                 true
             }
             player.prepare()
+            if (!skipAudioFocusRequest) {
+                if (!requestAudioPlaybackFocus()) {
+                    try {
+                        player.release()
+                    } catch (_: Exception) {
+                    }
+                    result.error("AUDIO_FOCUS_DENIED", "无法获取音频播放焦点", null)
+                    return
+                }
+            }
             player.start()
             audioPlayer = player
             audioPlayerPath = audioPath
@@ -287,6 +382,7 @@ class MainActivity : FlutterActivity() {
             }
             audioPlayer = null
             audioPlayerPath = null
+            abandonAudioPlaybackFocus()
             result.error("PLAY_FAILED", "语音播放失败，请稍后重试", null)
         }
     }
@@ -296,6 +392,7 @@ class MainActivity : FlutterActivity() {
         val stoppedPath = audioPlayerPath
         audioPlayer = null
         audioPlayerPath = null
+        abandonAudioPlaybackFocus()
         try {
             if (player.isPlaying) {
                 player.stop()
@@ -307,6 +404,94 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
         }
         emitAudioPlaybackEvent("playbackStopped", stoppedPath)
+    }
+
+    private fun requestAudioPlaybackFocus(): Boolean {
+        val manager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        audioManager = manager
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .build()
+            audioFocusRequest = request
+            manager.requestAudioFocus(request)
+        } else {
+            @Suppress("DEPRECATION")
+            manager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+        }
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            abandonAudioPlaybackFocus()
+            return false
+        }
+        return true
+    }
+
+    private fun abandonAudioPlaybackFocus() {
+        val manager = audioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            (audioFocusRequest as? AudioFocusRequest)?.let {
+                manager.abandonAudioFocusRequest(it)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            manager.abandonAudioFocus(audioFocusChangeListener)
+        }
+        audioFocusRequest = null
+        audioManager = null
+    }
+
+    private fun requestCompetingAudioFocusForTesting(): Boolean {
+        val manager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        competingAudioManager = manager
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(competingAudioFocusChangeListener)
+                .build()
+            competingAudioFocusRequest = request
+            manager.requestAudioFocus(request)
+        } else {
+            @Suppress("DEPRECATION")
+            manager.requestAudioFocus(
+                competingAudioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+            )
+        }
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            abandonCompetingAudioFocusForTesting()
+            return false
+        }
+        return true
+    }
+
+    private fun abandonCompetingAudioFocusForTesting() {
+        val manager = competingAudioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            (competingAudioFocusRequest as? AudioFocusRequest)?.let {
+                manager.abandonAudioFocusRequest(it)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            manager.abandonAudioFocus(competingAudioFocusChangeListener)
+        }
+        competingAudioFocusRequest = null
+        competingAudioManager = null
     }
 
     private fun emitAudioPlaybackEvent(method: String, path: String?) {
@@ -345,6 +530,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         stopAudioPlayback()
+        abandonCompetingAudioFocusForTesting()
         super.onDestroy()
     }
 
@@ -352,6 +538,7 @@ class MainActivity : FlutterActivity() {
         private const val DATA_EXPORT_SHARE_CHANNEL = "simichat/data_export_share"
         private const val VOICE_RECORDER_CHANNEL = "simichat/voice_recorder"
         private const val AUDIO_PLAYER_CHANNEL = "simichat/audio_player"
+        private const val DEEP_LINK_CHANNEL = "simichat/deep_link"
         private const val RECORD_AUDIO_PERMISSION_REQUEST = 4107
     }
 }

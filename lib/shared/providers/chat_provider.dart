@@ -195,19 +195,33 @@ void _invalidateAudioTranscriptStatus(
 final _streamSubscriptions = <String, StreamSubscription<ai.AiChunk>>{};
 final _cancelTokens = <String, CancelToken>{};
 final _responseCompletions = <String, Completer<void>>{};
+final _interruptedStreamCancellationErrors = <String, String>{};
+
+const backgroundStreamingInterruptedMessage = '应用进入后台，已停止本次生成，回到前台后可重试。';
+const networkStreamingInterruptedMessage = '网络连接断开，已停止本次生成，联网后可重试。';
+const kBackgroundInterruptedSessionStorageKey =
+    'simichat.background_interrupted_session_id';
+const kBackgroundInterruptedSessionsStorageKey =
+    'simichat.background_interrupted_session_ids';
 
 /// 取消当前会话的流式输出
-void cancelStreaming(WidgetRef ref, String sessionId) {
+void cancelStreaming(WidgetRef ref, String sessionId, {String? error}) {
+  if (error != null) {
+    _interruptedStreamCancellationErrors[sessionId] = error;
+  }
   _cancelTokens[sessionId]?.cancel('用户取消');
   _cancelTokens.remove(sessionId);
   final completer = _responseCompletions.remove(sessionId);
   if (completer != null && !completer.isCompleted) {
     completer.complete();
   }
-  _streamSubscriptions[sessionId]?.cancel();
-  _streamSubscriptions.remove(sessionId);
-  ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
+  final subscription = _streamSubscriptions.remove(sessionId);
+  if (subscription != null) {
+    unawaited(subscription.cancel().catchError((_) {}));
+  }
+  ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
     isStreaming: false,
+    error: error,
   );
 }
 
@@ -223,6 +237,10 @@ Future<void> _appendConversationArchiveMessage({
   List<String> attachmentNames = const [],
 }) async {
   if (kIsWeb) return;
+  if (const bool.fromEnvironment('SIMICHAT_RELEASE_SEND_SMOKE') &&
+      sessionId == 'ios-release-smoke-session') {
+    return;
+  }
   try {
     final root = await getApplicationDocumentsDirectory();
     final archive = MarkdownConversationArchive(rootDirectory: root);
@@ -522,22 +540,26 @@ void retryLastUserMessage(WidgetRef ref, {String? sessionId}) {
   final resolvedSessionId = sessionId ?? ref.read(activeSessionIdProvider);
   if (resolvedSessionId == null) return;
 
-  final messagesAsync = ref.read(messagesProvider(resolvedSessionId));
-  messagesAsync.whenData((messages) {
-    if (messages.isEmpty) return;
-    for (int i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role == 'user') {
-        ref.read(streamStateProvider(resolvedSessionId).notifier).state =
-            const StreamState();
-        sendMessage(
-          ref: ref,
-          sessionId: resolvedSessionId,
-          content: messages[i].content,
-        );
-        return;
-      }
+  unawaited(_retryLastUserMessage(ref, resolvedSessionId));
+}
+
+Future<void> _retryLastUserMessage(WidgetRef ref, String sessionId) async {
+  final messages = await ref
+      .read(messageDaoProvider)
+      .getMessagesBySession(sessionId);
+  if (messages.isEmpty) return;
+  for (int i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role == 'user') {
+      ref.read(streamStateProvider(sessionId).notifier).state =
+          const StreamState();
+      await sendMessage(
+        ref: ref,
+        sessionId: sessionId,
+        content: messages[i].content,
+      );
+      return;
     }
-  });
+  }
 }
 
 /// 当前会话的消息列表
@@ -1092,6 +1114,16 @@ Future<void> _runAssistantResponse({
 
       stopwatch.stop();
 
+      final interruptedCancellationError = _interruptedStreamCancellationErrors
+          .remove(sessionId);
+      if (interruptedCancellationError != null) {
+        ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+          isStreaming: false,
+          error: interruptedCancellationError,
+        );
+        return;
+      }
+
       if (streamError != null) {
         if (_isContextLimitError(streamError!) && contextLimitRetryCount < 1) {
           final retryBudget = _strictRetryInputBudget(maxInputTokens);
@@ -1345,6 +1377,7 @@ Future<void> _runAssistantResponse({
     _streamSubscriptions.remove(sessionId);
     _cancelTokens.remove(sessionId);
     _responseCompletions.remove(sessionId);
+    _interruptedStreamCancellationErrors.remove(sessionId);
   }
 }
 

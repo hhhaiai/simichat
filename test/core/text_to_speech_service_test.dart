@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('TextToSpeechService', () {
     late Directory tempDir;
 
@@ -154,6 +156,72 @@ void main() {
       expect(
         AudioPlaybackEvent.fromMethodCall(const MethodCall('unknown')),
         isNull,
+      );
+    });
+
+    test(
+      'method channel audio player keeps audio focus skip test-only',
+      () async {
+        final audioFile = File('${tempDir.path}/tts.mp3')
+          ..writeAsBytesSync([0x49, 0x44, 0x33]);
+        const channel = MethodChannel('simichat/audio_player');
+        final calls = <MethodCall>[];
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+              calls.add(call);
+              return true;
+            });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(channel, null);
+        });
+
+        const player = MethodChannelAudioPlayer();
+
+        await player.playFile(audioFile.path);
+        await player.playFileForTesting(
+          audioFile.path,
+          skipAudioFocusRequest: true,
+        );
+
+        expect(calls, hasLength(2));
+        expect(calls.first.method, 'playFile');
+        expect(calls.first.arguments, isA<Map>());
+        expect(
+          (calls.first.arguments as Map).containsKey('skipAudioFocusRequest'),
+          isFalse,
+        );
+        expect(
+          calls.last.arguments,
+          containsPair('skipAudioFocusRequest', true),
+        );
+      },
+    );
+
+    test('method channel audio player maps audio focus denial', () async {
+      final audioFile = File('${tempDir.path}/tts.mp3')
+        ..writeAsBytesSync([0x49, 0x44, 0x33]);
+      const channel = MethodChannel('simichat/audio_player');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (_) async {
+            throw PlatformException(code: 'AUDIO_FOCUS_DENIED');
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null);
+      });
+
+      const player = MethodChannelAudioPlayer();
+
+      await expectLater(
+        player.playFile(audioFile.path),
+        throwsA(
+          isA<AudioPlaybackException>().having(
+            (error) => error.message,
+            'message',
+            '无法获取音频播放焦点',
+          ),
+        ),
       );
     });
   });

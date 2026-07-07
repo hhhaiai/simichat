@@ -286,6 +286,43 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
         .get();
   }
 
+  Future<List<Message>> getLatestOriginalMessagesInTimeRange({
+    required DateTime start,
+    required DateTime end,
+    int limit = 5000,
+  }) {
+    return (select(messages)
+          ..where(
+            (t) =>
+                t.messageType.equals('original') &
+                t.createdAt.isBiggerOrEqualValue(start.millisecondsSinceEpoch) &
+                t.createdAt.isSmallerThanValue(end.millisecondsSinceEpoch),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  Future<int> countOriginalMessagesInTimeRange({
+    required DateTime start,
+    required DateTime end,
+  }) {
+    final count = messages.id.count();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.messageType.equals('original') &
+                messages.createdAt.isBiggerOrEqualValue(
+                  start.millisecondsSinceEpoch,
+                ) &
+                messages.createdAt.isSmallerThanValue(
+                  end.millisecondsSinceEpoch,
+                ),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .getSingle();
+  }
+
   Future<List<Message>> getRecentOriginalMessages({int limit = 500}) {
     return (select(messages)
           ..where((t) => t.messageType.equals('original'))

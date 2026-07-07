@@ -1,6 +1,6 @@
 # 语音、图片与附件系统设计
 
-> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 与 Android / iOS 原生播放通道已落地；Pixel 8 已补 base64 语音真机发送 smoke、OpenAI 兼容 STT 网络 fallback smoke、真实录音按钮 smoke、OpenAI 兼容 TTS 网络 smoke 和原生音频播放通道 smoke；更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS 和真机长时间场景待补。最后更新：2026-07-06。
+> 对应模块：M8。状态：图片 / 文件附件基础稳定化、发送后图片缩略图预览、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1、Android / iOS 原生播放通道、Android 音频焦点基础处理与 iOS AVAudioSession 中断开始停止播放已落地；Pixel 8 已补 base64 语音真机发送 smoke、OpenAI 兼容 STT 网络 fallback smoke、真实录音按钮 smoke、OpenAI 兼容 TTS 网络 smoke、原生音频播放通道 smoke、长音频播放 smoke 和播放替换 / 中断 smoke；移动端音频焦点 / 中断加固已通过静态回归、全量 334 个测试、analyze、临时 sqlite hook 下 Android debug APK 与 iOS Debug 构建和 Pixel 8 三条原生音频 smoke 复验；direct-channel smoke 通过测试参数跳过焦点请求且已改用低振幅 WAV，真实外部音频焦点抢占和 iOS 真机音频中断场景仍待补。最后更新：2026-07-06。
 
 ## 1. 目标
 
@@ -8,7 +8,7 @@
 - 支持文件附件输入：图片、PDF、语音文件、普通文档。
 - 支持多模态模型调用，把图片等附件传给协议层。
 - 附件元数据进入本地数据库，Markdown 原始档案记录附件名称；数据导出会把仍可读取的非语音附件原文件复制到压缩包 `attachments/`。
-- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、发送前 STT 音频接口转写并把转写文字注入普通聊天、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1 和 Android / iOS 原生播放通道；Pixel 8 已补 base64 语音粘贴 → audio 附件 → fake STT ready sidecar → 净化后模型请求真机 smoke，当前 OpenAI 兼容聊天渠道复用 `/v1/audio/transcriptions` 的 multipart STT 网络 smoke，以及聊天页麦克风按钮 → Android 原生录音 `.m4a` → STT → 聊天回复真机 smoke，以及 assistant 播报按钮 → `/v1/audio/speech` → 临时音频 → 停止播报真机 smoke，以及应用私有目录 WAV → Android `MediaPlayer` → stopped 事件回传 smoke；后续仍需补更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS、真机长时间播报和播放中断场景。
+- 语音输入当前已具备语音文件附件识别、移动端录音按钮、Android / iOS 原生运行时权限申请、本地 `.m4a` 录音附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件 sidecar、`pending` / `ready` / `empty` / `failed` 状态、失败错误脱敏、可注入 STT 更新管线、OpenAI 兼容 STT 自动转写、发送前 STT 音频接口转写并把转写文字注入普通聊天、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、移动端麦克风权限声明、设置页配置入口、OpenAI 兼容 TTS 语音播报、AI 回复播报按钮、播放停止控制、播放完成事件回传、STT/TTS 厂商预设 v1、Android / iOS 原生播放通道、Android 音频焦点基础处理和 iOS AVAudioSession 中断开始停止播放；Pixel 8 已补 base64 语音粘贴 → audio 附件 → fake STT ready sidecar → 净化后模型请求真机 smoke，当前 OpenAI 兼容聊天渠道复用 `/v1/audio/transcriptions` 的 multipart STT 网络 smoke，以及聊天页麦克风按钮 → Android 原生录音 `.m4a` → STT → 聊天回复真机 smoke，以及 assistant 播报按钮 → `/v1/audio/speech` → 临时音频 → 停止播报真机 smoke，以及应用私有目录 WAV → Android `MediaPlayer` → stopped / completed 事件回传、播放替换 / 中断 smoke；后续仍需补更多非 OpenAI 兼容语音厂商、真实云端 STT / TTS、真实外部音频焦点抢占、iOS 真机音频中断和后台场景。
 
 ## 2. 当前实现
 
@@ -39,6 +39,8 @@
 - 设置页“语音与多模态 / 语音输入”入口已从只读状态升级为配置入口：可启用 / 关闭 STT，设置 OpenAI 兼容 Base URL、模型和 API Key；API Key 加密保存在本机 SharedPreferences，不进入结构化备份、导出包、日志或聊天 Markdown。
 - 设置页“语音与多模态 / 语音播报”入口支持启用 / 关闭 TTS，配置 OpenAI 兼容 Base URL、模型、音色和 API Key；API Key 同样加密本地保存，不进入结构化备份、导出包、日志或聊天 Markdown。
 - AI 回复消息底部提供“语音播报”按钮；仅 assistant 非空文本展示，点击后生成临时 mp3 并调用 Android `MediaPlayer` / iOS `AVAudioPlayer` 播放，原生侧会校验文件存在且位于应用私有目录内；播报生成中显示禁用状态，播放中显示“停止播报”按钮，用户可主动停止原生播放；原生完成 / 停止 / 错误事件会带回当前音频路径，聊天页只在路径匹配当前播报时自动清理“停止播报”状态。
+- Android 正式播放路径会在启动前请求音频焦点；焦点丢失或短暂丢失时停止当前播放并复用 stopped 事件回传，允许 duck 时临时降低音量、焦点恢复后恢复音量；播放完成、错误、主动停止和启动失败都会释放焦点。当前 direct-channel integration smoke 不是普通用户点击前台流，因此通过 `MethodChannelAudioPlayer.playFileForTesting(..., skipAudioFocusRequest: true)` 跳过焦点请求，只验证播放 / 停止 / 完成 / 替换事件没有被改造破坏；真实来电 / 闹钟 / 其他播放器抢占焦点仍需真机复验。
+- iOS 原生播放路径会监听 `AVAudioSession.interruptionNotification`；收到 interruption began 且当前正在播放时停止播放并复用 stopped 事件回传，播放完成 / 错误 / 主动停止 / 启动失败都会 `setActive(false, options: [.notifyOthersOnDeactivation])` 释放音频会话；真实来电 / 耳机 / 系统中断和自动恢复策略仍需真机复验。
 - 音频附件写入 SQLite 时使用应用私有目录归档路径；转写稿件只记录文件名、大小、状态、转写文本或脱敏错误，不记录完整本地路径。
 - 音频转写稿件写入失败时进入待修复队列；STT 失败会把 sidecar 更新为 `failed`，并脱敏路径、密钥、令牌和 URL；不通过 `debugPrint` 输出音频错误细节，避免异常文本携带本地路径。
 - 聊天发送链路会先对 audio 附件执行 STT 级联：优先使用设置页显式配置的 OpenAI 兼容 STT；若当前聊天渠道是 `openai_chat` / `openai_response`，继续复用当前渠道 Base URL 与 API Key 调用 `/v1/audio/transcriptions`（默认模型 `whisper-1`）；iOS 上再追加系统 Speech 原生识别兜底。取得转写文本后，把“语音转文字结果”作为普通文本注入聊天上下文，audio 原文件不再作为聊天附件 base64 发送；所有引擎都失败时只向模型注入可解释的配置 / 录音提示，避免模型臆测音频内容。
@@ -47,7 +49,7 @@
 
 待实现：
 
-- 继续补更多非 OpenAI 兼容语音厂商预设和真机长时间播报 / 中断场景复验。
+- 继续补更多非 OpenAI 兼容语音厂商预设和真机长时间播报 / 外部音频焦点中断场景复验。
 - 录音真机长时间 / 后台中断 / 来电打断场景复验。
 
 ## 3. 附件策略
@@ -133,7 +135,9 @@
 - OpenAI 兼容 STT 网络真机 smoke：Pixel 8 上通过 `integration_test/mobile_stt_network_smoke_test.dart` 验证未配置独立 STT 时复用当前 `openai_chat` 渠道发起 multipart `/v1/audio/transcriptions`，sidecar ready 后再发送净化后的聊天请求。
 - 真机录音按钮 smoke：Pixel 8 上通过 `integration_test/mobile_voice_recording_smoke_test.dart` 验证聊天页麦克风按钮、Android 原生 `MediaRecorder`、`.m4a` audio 附件、STT fallback、ready sidecar 和净化后聊天请求闭环。
 - OpenAI 兼容 TTS 网络真机 smoke：Pixel 8 上通过 `integration_test/mobile_tts_network_smoke_test.dart` 验证 assistant 播报按钮、`/v1/audio/speech` JSON 请求、临时音频写入、播放接口调用、停止播报和 UI 状态回退。
-- 原生音频播放通道真机 smoke：Pixel 8 上通过 `integration_test/mobile_native_audio_player_smoke_test.dart` 验证正式 `MethodChannelAudioPlayer`、Android `MediaPlayer`、应用私有目录 WAV、停止事件回传和无错误事件。
+- 原生音频播放通道真机 smoke：Pixel 8 上通过 `integration_test/mobile_native_audio_player_smoke_test.dart` 验证 Android `MediaPlayer`、低振幅应用私有目录 WAV、停止事件回传和无错误事件；该 direct-channel smoke 显式跳过音频焦点请求，避免真机测试发出明显提示音。
+- Android 音频焦点回归：`test/core/microphone_permission_manifest_test.dart` 锁定原生播放器的 `AudioFocusRequest` / `AudioManager` / `OnAudioFocusChangeListener` / `requestAudioFocus` / `abandonAudioFocus` 路径；`test/core/text_to_speech_service_test.dart` 锁定正式 `playFile()` 不传测试跳过焦点参数，并覆盖 `AUDIO_FOCUS_DENIED` 无 message 时的明确中文提示；全量 334 个测试、analyze、临时 sqlite hook 下 Android debug APK / iOS Debug 构建与 Pixel 8 三条原生音频 smoke 均已通过，真实外部焦点抢占和 iOS 真机音频中断仍待复验。
+- iOS 音频中断回归：`test/core/microphone_permission_manifest_test.dart` 锁定 `AVAudioSession.interruptionNotification`、`AVAudioSessionInterruptionTypeKey`、interruption began 停止播放、`setActive(false)` 和 `notifyOthersOnDeactivation`；iOS Debug `Runner.app` 已构建通过，真实设备中断仍待复验。
 - 聊天音频前置转写测试：校验 audio-only 消息使用 STT 转写文本进入普通聊天，上下文不包含音频 base64；OpenAI 兼容 STT 引擎测试覆盖 multipart `/v1/audio/transcriptions` 请求；iOS 原生 Speech MethodChannel 测试覆盖 `transcribeFile` 调用和权限错误映射。
 - 导出包附件完整性测试：非语音附件复制到 `attachments/`，路径净化，不泄露源目录，跳过 audio / 缺失附件。
 - 导入 `attachments/` 文件恢复测试。
@@ -170,4 +174,6 @@
 - [x] TTS 播放停止控制：播报生成中禁用状态、播放中停止按钮、停止后清理当前播报状态。
 - [x] TTS 播放完成事件回传：Android / iOS 原生播放器完成 / 停止 / 错误事件回传，聊天页按当前音频路径自动清理播报状态。
 - [x] STT/TTS 厂商预设 v1：OpenAI 官方、Groq STT、自定义 OpenAI 兼容；设置页语音输入 / 语音播报弹窗可选择预设并自动填充 Base URL、模型和音色。
-- [ ] 继续补更多非 OpenAI 兼容语音厂商，并完成真机长时间播报和播放中断场景复验。
+- [x] Android 音频焦点基础处理：正式原生播放前请求焦点，焦点丢失停止播放，允许 duck 时降低音量并在恢复时还原；代码级回归、analyze、Pixel 8 静音原生音频 smoke、debug-only competing AudioFocus smoke、独立 helper APK 外部焦点抢占 smoke 和一键音频焦点 suite 已通过；direct-channel smoke 仍显式跳过焦点请求，真实来电 / 闹钟 / 第三方媒体播放器抢占仍待复验。详见 `docs/mobile-audio-focus-hardening-2026-07-06.md`。
+- [x] iOS AVAudioSession 中断基础处理：监听 interruption began，当前播放中会停止并回传 stopped，播放完成 / 错误 / 主动停止 / 启动失败释放音频会话；代码级回归和 iOS Debug 构建已通过，真实来电 / 耳机 / 系统中断仍待补。详见 `docs/mobile-audio-focus-hardening-2026-07-06.md`。
+- [ ] 继续补更多非 OpenAI 兼容语音厂商，并完成真机长时间播报、真实外部音频焦点抢占、iOS 真机音频中断和后台场景复验。

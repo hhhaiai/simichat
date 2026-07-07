@@ -1,20 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'l10n/generated/app_localizations.dart';
 
 import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/marketplace/marketplace_page.dart';
 import 'features/search/search_sheet.dart';
+import 'core/deep_link/deep_link_service.dart';
 import 'core/database/app_database.dart';
 import 'core/skills/skill.dart' show builtInSkills;
 import 'core/notification/notification_service.dart';
+import 'core/smoke/release_background_smoke_harness.dart';
+import 'core/smoke/release_deep_link_smoke_harness.dart';
+import 'core/smoke/release_network_smoke_harness.dart';
+import 'core/smoke/release_send_smoke_harness.dart';
 import 'core/database/dao/channel_dao.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
 import 'shared/providers/channel_provider.dart';
+import 'shared/providers/connectivity_provider.dart';
+import 'shared/providers/database_provider.dart';
 import 'shared/providers/dreaming_provider.dart';
 import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
@@ -23,6 +33,25 @@ import 'shared/providers/user_profile_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (releaseSendSmokeEnabled) {
+    await runReleaseSendSmokeApp(child: const AiChatApp());
+    return;
+  }
+  if (releaseBackgroundSmokeEnabled) {
+    await runReleaseBackgroundSmokeApp(child: const AiChatApp());
+    return;
+  }
+  if (releaseNetworkSmokeEnabled) {
+    await runReleaseNetworkSmokeApp(child: const AiChatApp());
+    return;
+  }
+  if (releaseDeepLinkSmokeEnabled) {
+    await runReleaseDeepLinkSmokeApp(
+      buildApp: (observers) => AiChatApp(navigatorObservers: observers),
+    );
+    return;
+  }
+
   try {
     await NotificationService().init();
   } catch (e) {
@@ -57,8 +86,56 @@ Future<void> _seedBuiltInSkills(AppDatabase db) async {
   }
 }
 
+typedef DreamingDigestCompleteNotifier =
+    Future<void> Function({
+      required String dayKey,
+      required int originalMessageCount,
+      int? totalOriginalMessageCount,
+      required int memoryCandidateCount,
+      int profileProposalCount,
+    });
+
+typedef DreamingDigestFailedNotifier =
+    Future<void> Function({required String dayKey});
+
+Future<void> _defaultDreamingDigestCompleteNotifier({
+  required String dayKey,
+  required int originalMessageCount,
+  int? totalOriginalMessageCount,
+  required int memoryCandidateCount,
+  int profileProposalCount = 0,
+}) {
+  return NotificationService().showDreamingDigestComplete(
+    dayKey: dayKey,
+    originalMessageCount: originalMessageCount,
+    totalOriginalMessageCount: totalOriginalMessageCount,
+    memoryCandidateCount: memoryCandidateCount,
+    profileProposalCount: profileProposalCount,
+  );
+}
+
+Future<void> _defaultDreamingDigestFailedNotifier({required String dayKey}) {
+  return NotificationService().showDreamingDigestFailed(dayKey: dayKey);
+}
+
+@visibleForTesting
+DreamingDigestCompleteNotifier dreamingDigestCompleteNotifier =
+    _defaultDreamingDigestCompleteNotifier;
+
+@visibleForTesting
+DreamingDigestFailedNotifier dreamingDigestFailedNotifier =
+    _defaultDreamingDigestFailedNotifier;
+
+@visibleForTesting
+void resetDreamingDigestCompleteNotifierForTesting() {
+  dreamingDigestCompleteNotifier = _defaultDreamingDigestCompleteNotifier;
+  dreamingDigestFailedNotifier = _defaultDreamingDigestFailedNotifier;
+}
+
 class AiChatApp extends ConsumerWidget {
-  const AiChatApp({super.key});
+  const AiChatApp({super.key, this.navigatorObservers = const []});
+
+  final List<NavigatorObserver> navigatorObservers;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -87,6 +164,7 @@ class AiChatApp extends ConsumerWidget {
           child: child ?? const SizedBox.shrink(),
         );
       },
+      navigatorObservers: navigatorObservers,
       routes: {
         '/': (_) => const ResponsiveShell(),
         '/settings': (_) => const SettingsPage(),
@@ -124,6 +202,25 @@ class _CancelStreamingIntent extends Intent {
   const _CancelStreamingIntent();
 }
 
+const _kDefaultDreamingForegroundCheckInterval = Duration(minutes: 1);
+
+@visibleForTesting
+Duration dreamingForegroundCheckInterval =
+    _kDefaultDreamingForegroundCheckInterval;
+
+@visibleForTesting
+void resetDreamingForegroundCheckIntervalForTesting() {
+  dreamingForegroundCheckInterval = _kDefaultDreamingForegroundCheckInterval;
+}
+
+@visibleForTesting
+Duration backgroundInterruptedPersistDelayForTesting = Duration.zero;
+
+@visibleForTesting
+void resetBackgroundInterruptedPersistDelayForTesting() {
+  backgroundInterruptedPersistDelayForTesting = Duration.zero;
+}
+
 /// 响应式外壳：桌面端固定侧边栏，移动端 Drawer
 class ResponsiveShell extends ConsumerStatefulWidget {
   const ResponsiveShell({super.key});
@@ -132,18 +229,472 @@ class ResponsiveShell extends ConsumerStatefulWidget {
   ConsumerState<ResponsiveShell> createState() => _ResponsiveShellState();
 }
 
-class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
+class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
+    with WidgetsBindingObserver {
   static const _kDesktopBreakpoint = 720.0;
+  final MethodChannelSimiDeepLinkService _deepLinkService =
+      MethodChannelSimiDeepLinkService();
   bool _autoSelectingSession = false;
+  Timer? _dreamingForegroundTimer;
+  StreamSubscription<SimiDeepLink>? _deepLinkSubscription;
+  List<String> _backgroundInterruptedSessionIds = const [];
+  List<String> _networkInterruptedSessionIds = const [];
+  Future<void>? _backgroundInterruptedPersistFuture;
+  String? _lastPromptedDreamingFailedJobId;
+  String? _lastNotifiedDreamingFailedDayKey;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _startDreamingForegroundTimer();
+    _deepLinkSubscription = _deepLinkService.links.listen((link) {
+      unawaited(_handleDeepLink(link));
+    });
     // 首次启动时，如果没有会话则自动创建
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _autoSelectOrCreateSession();
-      _runDueDreamingIfNeeded();
+      unawaited(_runStartupTasks());
     });
+  }
+
+  @override
+  void dispose() {
+    _dreamingForegroundTimer?.cancel();
+    unawaited(_deepLinkSubscription?.cancel());
+    unawaited(_deepLinkService.dispose());
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startDreamingForegroundTimer();
+      unawaited(
+        _runDueDreamingIfNeeded().whenComplete(
+          _showDreamingFailedJobPromptIfNeeded,
+        ),
+      );
+      _showBackgroundInterruptedRetryPromptIfNeeded();
+    } else {
+      _dreamingForegroundTimer?.cancel();
+      _dreamingForegroundTimer = null;
+      final streamingSessionIds =
+          _streamingSessionIdsForLifecycleCancellation();
+      if (streamingSessionIds.isNotEmpty) {
+        _backgroundInterruptedSessionIds = streamingSessionIds;
+        final persistFuture = _persistBackgroundInterruptedSessions(
+          streamingSessionIds,
+        );
+        _backgroundInterruptedPersistFuture = persistFuture;
+        unawaited(
+          persistFuture.whenComplete(() {
+            if (identical(_backgroundInterruptedPersistFuture, persistFuture)) {
+              _backgroundInterruptedPersistFuture = null;
+            }
+          }),
+        );
+        for (final sessionId in streamingSessionIds) {
+          cancelStreaming(
+            ref,
+            sessionId,
+            error: backgroundStreamingInterruptedMessage,
+          );
+        }
+      }
+    }
+  }
+
+  void _handleNetworkBecameOffline() {
+    final streamingSessionIds = _streamingSessionIdsForLifecycleCancellation();
+    if (streamingSessionIds.isEmpty) return;
+    _networkInterruptedSessionIds = streamingSessionIds;
+    for (final sessionId in streamingSessionIds) {
+      cancelStreaming(
+        ref,
+        sessionId,
+        error: networkStreamingInterruptedMessage,
+      );
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.fixed,
+          content: Text('网络连接断开，已停止生成，联网后可重试'),
+        ),
+      );
+  }
+
+  void _showNetworkInterruptedRetryPromptIfNeeded() {
+    if (!mounted) return;
+    final interruptedSessionIds = _networkInterruptedSessionIds;
+    if (interruptedSessionIds.isEmpty) return;
+    final retryableSessionIds = interruptedSessionIds
+        .where(
+          (sessionId) =>
+              ref.read(streamStateProvider(sessionId)).error ==
+              networkStreamingInterruptedMessage,
+        )
+        .toList();
+    _networkInterruptedSessionIds = const [];
+    if (retryableSessionIds.isEmpty) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.fixed,
+          content: Text(
+            _networkInterruptedRestoredSnackBarText(retryableSessionIds.length),
+          ),
+          action: SnackBarAction(
+            label: _backgroundInterruptedRestoredSnackBarActionText(
+              retryableSessionIds.length,
+            ),
+            onPressed: () =>
+                _retryBackgroundInterruptedSessions(retryableSessionIds),
+          ),
+        ),
+      );
+  }
+
+  String _networkInterruptedRestoredSnackBarText(int count) {
+    if (count <= 1) {
+      return '网络已恢复，可点“重试”继续';
+    }
+    return '网络已恢复，$count 个会话可点“重试全部”继续';
+  }
+
+  void _startDreamingForegroundTimer() {
+    _dreamingForegroundTimer?.cancel();
+    _dreamingForegroundTimer = Timer.periodic(dreamingForegroundCheckInterval, (
+      _,
+    ) {
+      if (mounted) {
+        _runDueDreamingIfNeeded();
+      }
+    });
+  }
+
+  Future<void> _runStartupTasks() async {
+    await _autoSelectOrCreateSession();
+    await _restorePersistedBackgroundInterruptedRetryIfNeeded();
+    unawaited(
+      _runDueDreamingIfNeeded().whenComplete(
+        _showDreamingFailedJobPromptIfNeeded,
+      ),
+    );
+    unawaited(_handleInitialDeepLinkIfNeeded());
+  }
+
+  Future<void> _handleInitialDeepLinkIfNeeded() async {
+    try {
+      final link = await _deepLinkService.getInitialLink();
+      if (link == null || !mounted) return;
+      await _handleDeepLink(link);
+    } catch (_) {
+      // 深度链接失败不影响正常启动。
+    }
+  }
+
+  Future<void> _handleDeepLink(SimiDeepLink link) async {
+    if (!mounted) return;
+    switch (link.action) {
+      case SimiDeepLinkAction.home:
+        _popToHome();
+        return;
+      case SimiDeepLinkAction.newChat:
+        _popToHome();
+        await createNewSession(ref);
+        if (!mounted) return;
+        _showDeepLinkSnackBar('已通过链接新建会话');
+        return;
+      case SimiDeepLinkAction.settings:
+        _popToHome();
+        if (!mounted) return;
+        await _pushDeepLinkRoute('/settings');
+        return;
+      case SimiDeepLinkAction.marketplace:
+        _popToHome();
+        if (!mounted) return;
+        await _pushDeepLinkRoute('/marketplace');
+        return;
+      case SimiDeepLinkAction.session:
+        final sessionId = link.sessionId;
+        if (sessionId == null) return;
+        final session = await ref
+            .read(sessionDaoProvider)
+            .getSession(sessionId);
+        if (!mounted) return;
+        if (session == null) {
+          _showDeepLinkSnackBar('链接中的会话不存在或已删除');
+          return;
+        }
+        _popToHome();
+        ref.read(activeSessionIdProvider.notifier).state = session.id;
+        refreshSessions(ref);
+        _showDeepLinkSnackBar('已打开链接中的会话');
+        return;
+    }
+  }
+
+  Future<void> _pushDeepLinkRoute(String routeName) async {
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    await Navigator.of(context, rootNavigator: true).pushNamed(routeName);
+  }
+
+  void _popToHome() {
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).popUntil((route) => route.isFirst);
+  }
+
+  void _showDeepLinkSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  List<String> _streamingSessionIdsForLifecycleCancellation() {
+    final sessionIds = <String>[];
+    void addIfStreaming(String? sessionId) {
+      if (sessionId == null || sessionIds.contains(sessionId)) return;
+      if (!ref.read(streamStateProvider(sessionId)).isStreaming) return;
+      sessionIds.add(sessionId);
+    }
+
+    addIfStreaming(ref.read(activeSessionIdProvider));
+    for (final session
+        in ref.read(sessionsProvider).valueOrNull ?? const <Session>[]) {
+      addIfStreaming(session.id);
+    }
+    return sessionIds;
+  }
+
+  Future<void> _persistBackgroundInterruptedSessions(
+    List<String> sessionIds,
+  ) async {
+    try {
+      if (backgroundInterruptedPersistDelayForTesting > Duration.zero) {
+        await Future<void>.delayed(backgroundInterruptedPersistDelayForTesting);
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final persistedSessionIds = _readPersistedBackgroundInterruptedSessionIds(
+        prefs,
+      );
+      for (final sessionId in sessionIds) {
+        if (!persistedSessionIds.contains(sessionId)) {
+          persistedSessionIds.add(sessionId);
+        }
+      }
+      await prefs.setStringList(
+        kBackgroundInterruptedSessionsStorageKey,
+        persistedSessionIds,
+      );
+      await prefs.setString(
+        kBackgroundInterruptedSessionStorageKey,
+        sessionIds.first,
+      );
+    } catch (_) {
+      // 持久化失败不能影响后台切出取消流式请求。
+    }
+  }
+
+  Future<void> _restorePersistedBackgroundInterruptedRetryIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final interruptedSessionIds =
+          _readPersistedBackgroundInterruptedSessionIds(prefs);
+      if (interruptedSessionIds.isEmpty) return;
+      if (!mounted) return;
+
+      final restoredSessionIds = <String>[];
+      final sessionDao = ref.read(sessionDaoProvider);
+      for (final sessionId in interruptedSessionIds) {
+        final interruptedSession = await sessionDao.getSession(sessionId);
+        if (!mounted) return;
+        if (interruptedSession == null) {
+          continue;
+        }
+        restoredSessionIds.add(sessionId);
+        ref.read(streamStateProvider(sessionId).notifier).state =
+            const StreamState(error: backgroundStreamingInterruptedMessage);
+      }
+
+      await _clearPersistedBackgroundInterruptedSession();
+      if (!mounted || restoredSessionIds.isEmpty) return;
+
+      final primarySessionId = restoredSessionIds.first;
+      if (ref.read(activeSessionIdProvider) != primarySessionId) {
+        ref.read(activeSessionIdProvider.notifier).state = primarySessionId;
+      }
+      if (!mounted || ref.read(activeSessionIdProvider) != primarySessionId) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.fixed,
+            content: Text(
+              _backgroundInterruptedRestoredSnackBarText(
+                restoredSessionIds.length,
+              ),
+            ),
+            action: SnackBarAction(
+              label: _backgroundInterruptedRestoredSnackBarActionText(
+                restoredSessionIds.length,
+              ),
+              onPressed: () =>
+                  _retryBackgroundInterruptedSessions(restoredSessionIds),
+            ),
+          ),
+        );
+    } catch (_) {
+      // 恢复提示失败不能影响应用启动。
+    }
+  }
+
+  String _backgroundInterruptedRestoredSnackBarText(int count) {
+    if (count <= 1) {
+      return '已恢复上次后台中断，可点“重试”继续';
+    }
+    return '已恢复 $count 个后台中断会话，可点“重试全部”继续';
+  }
+
+  String _backgroundInterruptedRestoredSnackBarActionText(int count) {
+    if (count <= 1) {
+      return '重试';
+    }
+    return '重试全部';
+  }
+
+  void _retryBackgroundInterruptedSessions(List<String> sessionIds) {
+    for (final sessionId in sessionIds) {
+      retryLastUserMessage(ref, sessionId: sessionId);
+    }
+  }
+
+  List<String> _readPersistedBackgroundInterruptedSessionIds(
+    SharedPreferences prefs,
+  ) {
+    final sessionIds = <String>[];
+    void addSessionId(String? value) {
+      final sessionId = value?.trim();
+      if (sessionId == null ||
+          sessionId.isEmpty ||
+          sessionIds.contains(sessionId)) {
+        return;
+      }
+      sessionIds.add(sessionId);
+    }
+
+    for (final sessionId
+        in prefs.getStringList(kBackgroundInterruptedSessionsStorageKey) ??
+            const <String>[]) {
+      addSessionId(sessionId);
+    }
+    addSessionId(prefs.getString(kBackgroundInterruptedSessionStorageKey));
+    return sessionIds;
+  }
+
+  void _showBackgroundInterruptedRetryPromptIfNeeded() {
+    if (!mounted) return;
+    final interruptedSessionIds = _backgroundInterruptedSessionIds;
+    if (interruptedSessionIds.isEmpty) {
+      return;
+    }
+    final retryableSessionIds = interruptedSessionIds
+        .where(
+          (sessionId) =>
+              ref.read(streamStateProvider(sessionId)).error ==
+              backgroundStreamingInterruptedMessage,
+        )
+        .toList();
+    if (retryableSessionIds.isEmpty) {
+      _backgroundInterruptedSessionIds = const [];
+      return;
+    }
+    _backgroundInterruptedSessionIds = const [];
+    unawaited(_clearPersistedBackgroundInterruptedSession());
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.fixed,
+          content: Text(
+            _backgroundInterruptedResumedSnackBarText(
+              retryableSessionIds.length,
+            ),
+          ),
+          action: SnackBarAction(
+            label: _backgroundInterruptedRestoredSnackBarActionText(
+              retryableSessionIds.length,
+            ),
+            onPressed: () =>
+                _retryBackgroundInterruptedSessions(retryableSessionIds),
+          ),
+        ),
+      );
+  }
+
+  String _backgroundInterruptedResumedSnackBarText(int count) {
+    if (count <= 1) {
+      return '已停止后台生成，可点“重试”继续';
+    }
+    return '已停止 $count 个后台生成，可点“重试全部”继续';
+  }
+
+  Future<void> _showDreamingFailedJobPromptIfNeeded() async {
+    try {
+      final failedJob = await ref.read(latestFailedDreamingJobProvider.future);
+      if (!mounted || failedJob == null) return;
+      if (_lastPromptedDreamingFailedJobId == failedJob.id) return;
+      _lastPromptedDreamingFailedJobId = failedJob.id;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.fixed,
+          content: const Text('上次 Dreaming 失败，可到设置页重试'),
+          action: SnackBarAction(
+            label: '去设置',
+            onPressed: () {
+              if (!mounted) return;
+              unawaited(
+                Navigator.of(
+                  context,
+                  rootNavigator: true,
+                ).pushNamed('/settings'),
+              );
+            },
+          ),
+        ),
+      );
+    } catch (_) {
+      // Dreaming 失败提示读取失败不能影响主聊天入口。
+    }
+  }
+
+  Future<void> _clearPersistedBackgroundInterruptedSession() async {
+    final pendingPersist = _backgroundInterruptedPersistFuture;
+    if (pendingPersist != null) {
+      try {
+        await pendingPersist;
+      } catch (_) {
+        // 即使上一次 marker 写入失败，也继续执行清理。
+      }
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(kBackgroundInterruptedSessionStorageKey);
+      await prefs.remove(kBackgroundInterruptedSessionsStorageKey);
+    } catch (_) {
+      // 清理失败只会导致下次启动再次提示，不影响当前恢复。
+    }
   }
 
   Future<void> _autoSelectOrCreateSession() async {
@@ -167,6 +718,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
   Future<void> _runDueDreamingIfNeeded() async {
     try {
       final digest = await maybeRunDueDreaming(ref);
+      if (!mounted) return;
       if (digest != null && digest.hasContent) {
         var profileProposalCount = 0;
         try {
@@ -178,6 +730,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
         } catch (_) {
           // 画像候选生成失败也不影响 Dreaming 完成通知。
         }
+        if (!mounted) return;
         try {
           await runAssistantReflection(
             ref,
@@ -187,15 +740,31 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
         } catch (_) {
           // 本地反思失败不能影响 Dreaming 完成通知。
         }
-        await NotificationService().showDreamingDigestComplete(
+        if (!mounted) return;
+        await dreamingDigestCompleteNotifier(
           dayKey: digest.dayKey,
           originalMessageCount: digest.originalMessageCount,
+          totalOriginalMessageCount: digest.totalOriginalMessageCount,
           memoryCandidateCount: digest.memoryCandidates.length,
           profileProposalCount: profileProposalCount,
         );
       }
     } catch (_) {
-      // 前台到期整理失败不能影响聊天主链路；用户仍可在设置页手动运行。
+      if (!mounted) return;
+      await _notifyDreamingFailedIfNeeded();
+    }
+  }
+
+  Future<void> _notifyDreamingFailedIfNeeded() async {
+    try {
+      ref.invalidate(latestFailedDreamingJobProvider);
+      final failedJob = await ref.read(latestFailedDreamingJobProvider.future);
+      if (!mounted || failedJob == null) return;
+      if (_lastNotifiedDreamingFailedDayKey == failedJob.dayKey) return;
+      _lastNotifiedDreamingFailedDayKey = failedJob.dayKey;
+      await dreamingDigestFailedNotifier(dayKey: failedJob.dayKey);
+    } catch (_) {
+      // 前台到期整理失败通知也不能影响聊天主链路；用户仍可在设置页手动重试。
     }
   }
 
@@ -204,6 +773,13 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell> {
     // watch 以保持响应式（子组件依赖这些 provider）
     ref.watch(sessionsProvider);
     ref.watch(activeSessionIdProvider);
+    ref.listen<bool>(isOnlineProvider, (previous, next) {
+      if (previous == true && !next) {
+        _handleNetworkBecameOffline();
+      } else if (previous == false && next) {
+        _showNetworkInterruptedRetryPromptIfNeeded();
+      }
+    });
 
     return Shortcuts(
       shortcuts: {

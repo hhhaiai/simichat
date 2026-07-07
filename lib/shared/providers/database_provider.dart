@@ -7,11 +7,28 @@ final databaseProvider = Provider<AppDatabase>((ref) {
   return db;
 });
 
-final sessionDaoProvider = Provider((ref) => ref.watch(databaseProvider).sessionDao);
-final messageDaoProvider = Provider((ref) => ref.watch(databaseProvider).messageDao);
-final channelDaoProvider = Provider((ref) => ref.watch(databaseProvider).channelDao);
-final folderDaoProvider = Provider((ref) => ref.watch(databaseProvider).folderDao);
-final attachmentDaoProvider = Provider((ref) => ref.watch(databaseProvider).attachmentDao);
-final promptDaoProvider = Provider((ref) => ref.watch(databaseProvider).promptDao);
+final sessionDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).sessionDao,
+);
+final messageDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).messageDao,
+);
+final channelDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).channelDao,
+);
+final folderDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).folderDao,
+);
+final attachmentDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).attachmentDao,
+);
+final dreamingDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).dreamingDao,
+);
+final promptDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).promptDao,
+);
 final mcpDaoProvider = Provider((ref) => ref.watch(databaseProvider).mcpDao);
-final skillDaoProvider = Provider((ref) => ref.watch(databaseProvider).skillDao);
+final skillDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).skillDao,
+);

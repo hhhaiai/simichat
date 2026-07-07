@@ -70,6 +70,23 @@ class MethodChannelAudioPlayer implements AudioPlayerPlatform {
 
   @override
   Future<void> playFile(String audioPath) async {
+    await _playFile(audioPath);
+  }
+
+  Future<void> playFileForTesting(
+    String audioPath, {
+    bool skipAudioFocusRequest = false,
+  }) async {
+    // Flutter integration tests call this channel outside the normal user-tap
+    // foreground flow. Production code must use playFile(), which requires the
+    // native side to obtain audio focus before playback.
+    await _playFile(audioPath, skipAudioFocusRequest: skipAudioFocusRequest);
+  }
+
+  Future<void> _playFile(
+    String audioPath, {
+    bool skipAudioFocusRequest = false,
+  }) async {
     final path = audioPath.trim();
     if (path.isEmpty) {
       throw const AudioPlaybackException('缺少语音文件路径');
@@ -79,7 +96,11 @@ class MethodChannelAudioPlayer implements AudioPlayerPlatform {
       throw const AudioPlaybackException('语音文件不存在');
     }
     try {
-      await _channel.invokeMethod<bool>('playFile', {'path': path});
+      await _channel.invokeMethod<bool>('playFile', {
+        'path': path,
+        if (skipAudioFocusRequest)
+          'skipAudioFocusRequest': skipAudioFocusRequest,
+      });
     } on PlatformException catch (error) {
       throw AudioPlaybackException(_safePlatformError(error));
     }
@@ -111,6 +132,8 @@ class MethodChannelAudioPlayer implements AudioPlayerPlatform {
         return '语音文件不存在';
       case 'OUTSIDE_APP_DATA':
         return '只能播放应用私有目录内的语音文件';
+      case 'AUDIO_FOCUS_DENIED':
+        return '无法获取音频播放焦点';
       case 'PLAY_FAILED':
         return '语音播放失败，请稍后重试';
       default:

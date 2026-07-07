@@ -2,6 +2,9 @@
 
 ## 目标
 
+> **iOS 运行边界更新**：用户已明确 iOS 必须使用 release 版本，否则不能作为有效运行证明。因此本文件中的 iPhone13 debug / integration_test 记录只保留为排障历史；iOS 有效运行证明以 `scripts/smoke_ios_release_install_launch.sh` 和 `docs/mobile-device-install-smoke-2026-07-06.md` 的 release 结果为准。`scripts/smoke_device_integration_send.sh` 现在会拒绝 iOS 设备并提示改用 release smoke。
+
+
 补一个可重复执行的真机级发送验证入口，用设备内本地 OpenAI 兼容 mock 服务验证对话页真实链路：Flutter UI 输入 → `sendMessage` → OpenAI Chat SSE → assistant 落库 → UI 展示。
 
 该验证不依赖外部 API Key，不访问真实模型，不提交用户数据。
@@ -10,7 +13,7 @@
 
 新增文件：`integration_test/mobile_real_send_smoke_test.dart`。
 
-新增脚本：`scripts/smoke_device_integration_send.sh`。脚本默认使用 Pixel 8 设备 ID `37101FDJH0077P`，也可传入设备 ID 或通过 `DEVICE_ID` 环境变量指定；脚本会精确备份 `pubspec.yaml` / `pubspec.lock`，临时追加 `sqlite3.source=system` hook，测试结束后无论成功失败都会恢复正式文件并执行 `pub get`，避免把临时 hook 留在仓库。
+新增脚本：`scripts/smoke_device_integration_send.sh`。脚本默认使用 Pixel 8 设备 ID `37101FDJH0077P`，也可传入设备 ID 或通过 `DEVICE_ID` 环境变量指定；若传入 iOS CoreDevice UUID，脚本会通过 `devicectl device info details` 自动解析为 Flutter 可识别的硬件 UDID；iOS 运行前还会通过 `devicectl device info processes` 清理残留 `Runner.app/Runner` 测试进程，避免旧 VM service / Runner 干扰；脚本会精确备份 `pubspec.yaml` / `pubspec.lock`，临时追加 `sqlite3.source=system` hook，测试结束后无论成功失败都会恢复正式文件并执行 `pub get`，避免把临时 hook 留在仓库。
 
 新增 dev 依赖：
 
@@ -95,7 +98,7 @@ Installing build/app/outputs/flutter-apk/app-debug.apk... 5.8s
 
 结论：Pixel 8 真机上，新增集成 smoke 可稳定验证 UI 输入、真实发送、SSE 解析、assistant 落库和 UI 展示闭环。
 
-## iPhone13 尝试结果
+## iPhone13 历史尝试与排障
 
 设备：iPhone13，UDID `00008110-0016349A3A20A01E`，iOS 26.5。
 
@@ -123,7 +126,7 @@ The Dart VM Service was not discovered after 60 seconds. This is taking much lon
 - `xcrun devicectl device info processes` 只看到既有 Runner 进程，未发现新的可调试测试 Runner 进入稳定状态。
 - 为避免长时间悬挂，已中止该次测试，输出 `No tests ran.`。
 
-结论：当前 iPhone13 构建 / 安装阶段可达，但 Flutter 测试运行器未成功发现 Dart VM Service；iOS 真机发送链路仍未完成，需要后续继续排查 Xcode 自动化权限、设备解锁前台状态、debug/test runner 启动方式或改用 `xcodebuild test` / XCUITest 路径。
+历史结论：当时 iPhone13 构建 / 安装阶段可达，但 Flutter 测试运行器未成功发现 Dart VM Service；后续已通过清理旧 Runner、使用 Flutter 识别的 UDID 并复跑 smoke 解决。
 
 ### 进一步定位：Xcode debug session 层（2026-07-06 03:47–03:55）
 
@@ -173,7 +176,7 @@ devicectl 518.33
 iPhone13 iOS 26.5 23F77
 ```
 
-结论更新：iPhone13 当前问题不是 `integration_test` 测试体、不是设备内 mock 服务、也不是旧 Runner 进程本身；当时现象更接近本机 Flutter→Xcode debug session 启动链路问题。后续优先验证 Xcode 自动化权限 / Xcode GUI `Product > Run` / DerivedData 清理 / `xcodebuild test` 或 XCUITest 替代路径。
+历史结论更新：iPhone13 当时问题不是 `integration_test` 测试体、不是设备内 mock 服务；现象更接近本机 Flutter→Xcode debug session 启动链路问题。后续已用 Flutter UDID 和清理旧 Runner 的方式复跑通过。
 
 ### 进一步定位：直接 `xcodebuild` 与设备锁屏边界（2026-07-06 04:01–04:04）
 
@@ -246,24 +249,153 @@ BSErrorCodeDescription = Locked
 - 项目 iOS Debug 构建配置可正常解析 `CONFIGURATION_BUILD_DIR`。
 - 直接 `xcodebuild build` 成功，说明当前不是项目无法 Debug 构建或签名失败。
 - 同一 Debug 产物可通过 `devicectl install app` 覆盖安装到 `top.simitalk.aichat`，未执行卸载或清数据。
-- 当前无法继续 iPhone13 集成发送 smoke 的直接阻塞变为：设备当前锁屏 / 无法被自动化解锁，SpringBoard 拒绝 launch。
-- 需要在 iPhone13 物理解锁并保持前台可启动后，优先复跑 `devicectl process launch` 与 `./scripts/smoke_device_integration_send.sh 00008110-0016349A3A20A01E`，再判断 Flutter→Xcode debug session 是否仍有独立问题。
+- 当时无法继续 iPhone13 集成发送 smoke 的直接阻塞变为：设备锁屏 / 无法被自动化解锁，SpringBoard 拒绝 launch。
+- 后续设备可用后，已用 Flutter 识别的 UDID `00008110-0016349A3A20A01E` 复跑 `./scripts/smoke_device_integration_send.sh` 并通过。
+
+
+## iPhone13 复跑通过（2026-07-06 11:42）
+
+设备：iPhone13，Flutter / xcdevice 识别 UDID `00008110-0016349A3A20A01E`，CoreDevice UUID `CAFC7AFA-4565-5C8D-B724-090061D144D0`。
+
+关键边界：`devicectl list devices` 展示的是 CoreDevice UUID，但 `flutter test -d` 需要使用 xcdevice / Flutter 设备列表中的 UDID。脚本已补自动解析；修复前误用 CoreDevice UUID 会得到：
+
+```text
+No supported devices found with name or id matching 'CAFC7AFA-4565-5C8D-B724-090061D144D0'.
+```
+
+本轮先用 `flutter --no-version-check devices -v` 确认 Flutter 可见设备：
+
+```text
+iPhone13 (mobile) • 00008110-0016349A3A20A01E • ios • iOS 26.5 23F77
+```
+
+随后第一次用 UDID 运行时，测试在 `Installing and launching...` 后长时间无 Dart 测试输出。诊断显示设备隧道、`iproxy` 和 Dart VM service 进程已启动，设备上有多个 `Runner.app/Runner` 进程；中断后输出 `No tests ran.`。为排除旧进程干扰，使用 `devicectl device info processes` 找到并终止测试 Runner 进程后复跑。
+
+通过命令：
+
+```bash
+./scripts/smoke_device_integration_send.sh 00008110-0016349A3A20A01E
+```
+
+结果：
+
+```text
+00:00 +0: loading /Users/sanbo/code/simichat/integration_test/mobile_real_send_smoke_test.dart
+Automatically signing iOS for device deployment using specified development team in Xcode project: 6X97AH5URL
+Running Xcode build...
+Xcode build done. 21.7s
+Installing and launching... 20.2s
+00:00 +0: mobile device real send smoke uses local OpenAI mock
+00:12 +1: (tearDownAll)
+00:13 +1: All tests passed!
+```
+
+历史结论：iPhone13 debug integration_test 曾跑通设备内本地 OpenAI SSE mock、UI 输入、`sendMessage`、assistant 落库和 UI 展示闭环；但按最新约束，iOS 必须 release 运行，因此该结果只作为排障历史，不作为 iOS 有效运行证明。脚本现已改为拒绝 iOS debug integration 路径。
+
+
+## 脚本边界复验（2026-07-06）
+
+用户确认 iOS 必须 release 版本后，`scripts/smoke_device_integration_send.sh` 已增加 iOS 防护：传入 iOS CoreDevice UUID 时会先解析为 Flutter UDID，然后拒绝 debug integration runner，并提示改用 release smoke：
+
+```text
+Resolved iOS device id CAFC7AFA-4565-5C8D-B724-090061D144D0 to Flutter UDID 00008110-0016349A3A20A01E
+iOS devices must be validated with a release build for this project.
+Use scripts/smoke_ios_release_install_launch.sh instead of the debug integration runner.
+ios_debug_guard=OK
+```
+
+同一脚本继续支持 Android；复验命令：
+
+```bash
+./scripts/smoke_device_integration_send.sh 37101FDJH0077P
+```
+
+结果：
+
+```text
+✓ Built build/app/outputs/flutter-apk/app-debug.apk
+Installing build/app/outputs/flutter-apk/app-debug.apk... 5.8s
+00:00 +0: mobile device real send smoke uses local OpenAI mock
+00:03 +1: (tearDownAll)
+00:03 +1: All tests passed!
+```
 
 ## 验证与边界
 
 本轮已验证：
 
 - 新增跨平台 `integration_test` 真机发送 smoke 文件。
-- 新增 `scripts/smoke_device_integration_send.sh`，封装临时 sqlite3 hook、真机测试和恢复流程。
+- 新增 `scripts/smoke_device_integration_send.sh`，封装临时 sqlite3 hook、真机测试、iOS CoreDevice UUID 到 Flutter UDID 的自动解析、旧 Runner 清理和恢复流程。
 - Pixel 8 真机通过设备内本地 mock 完成 UI→发送→SSE→DB→UI 闭环。
 - 正式 `pubspec.yaml` 不保留临时 sqlite3 hook。
 - `flutter --no-version-check analyze` 通过。
 - iPhone13 直接 `xcodebuild -showBuildSettings` 可正常产出 `CONFIGURATION_BUILD_DIR`，直接 `xcodebuild build` 成功。
 - iPhone13 同一 Debug `Runner.app` 可通过 `devicectl install app` 覆盖安装到 `top.simitalk.aichat`，未卸载、未清数据。
-- iPhone13 当前 `devicectl process launch` 被 SpringBoard 以 `RequestDenied` / `Locked` 拒绝，需设备物理解锁后继续复跑。
+- iPhone13 历史上曾出现 `devicectl process launch` 被 SpringBoard 以 `RequestDenied` / `Locked` 拒绝；本轮设备可用后已用 Flutter UDID 复跑集成发送 smoke 并通过。
+- iPhone13 debug integration 历史上曾完成 UI→发送→SSE→DB→UI 闭环，但不作为 iOS release 有效证明。
 
 本轮未完成：
 
-- iPhone13 真机发送链路仍未跑到测试体；直接 `xcodebuild build` 与 Debug 覆盖安装已成功，但 `devicectl process launch` 被当前设备锁屏状态拒绝，需要设备物理解锁后复跑。
-- 未覆盖停止、重试、模型切换；这些已有 Pixel 8 手工真机 smoke 记录。
+- iOS release 发送链路已通过 `scripts/smoke_ios_release_send.sh` 覆盖；停止、重试、模型切换仍只有 Pixel 8 手工真机 smoke 记录，iOS release 侧待补。
 - 未覆盖真实外部模型 API。
+
+
+## iOS release 发送链路补证（2026-07-06）
+
+用户确认 iOS 必须 release 版本后，已新增 `scripts/smoke_ios_release_send.sh` 和 release-only harness。`people` 设备（`BAD258BF-4E4A-5C40-9701-AEF8CCF43E6D`）已通过 release 发送闭环：
+
+```text
+iOS release send smoke passed:
+- runId: ios-release-send-20260706121606
+- reply: IOS release smoke reply 20260706
+- request.path: /v1/chat/completions
+- request.model: ios-release-smoke-model
+- request.lastUser: ios release send smoke
+Restoring normal iOS release build without smoke dart-defines...
+Launched release app:
+- pid: 64165
+```
+
+补充取证确认普通 release 进程可见，且 smoke 临时 Markdown 档案不残留：
+
+```text
+SMOKE_ARCHIVE_ABSENT
+result.status=passed
+result.runId=ios-release-send-20260706121606
+```
+
+详见 `docs/mobile-ios-release-send-smoke-2026-07-06.md`。
+
+## Android 真机复跑与 release 恢复（2026-07-06 15:07）
+
+本轮再次按主力机保护原则只在 Pixel 8 上复跑 Android 集成发送：
+
+```bash
+scripts/smoke_device_integration_send.sh 37101FDJH0077P
+```
+
+结果：
+
+```text
+✓ Built build/app/outputs/flutter-apk/app-debug.apk
+Installing build/app/outputs/flutter-apk/app-debug.apk... 4.1s
+00:00 +0: mobile device real send smoke uses local OpenAI mock
+00:03 +1: (tearDownAll)
+00:03 +1: All tests passed!
+```
+
+由于 Android `integration_test` 会安装 debug 包，本轮复跑后立即恢复普通 release：
+
+```bash
+scripts/smoke_android_release_install_launch.sh 37101FDJH0077P
+```
+
+恢复结果：
+
+- `app-release.apk` 约 `31.5MB`。
+- `adb install -r` 成功。
+- 启动 pid `4047`，20 秒后仍为 `4047`。
+- 最终包信息：`versionName=1.0.0`，`versionCode=1`，`dataDir=/data/user/0/top.simitalk.aichat`，`firstInstallTime=2026-07-06 15:07:44`，`lastUpdateTime=2026-07-06 15:07:44`。
+- logcat crash 扫描无命中。
+
+结论：Pixel 8 测试机发送闭环通过，且最终已恢复为普通 release 包；该 debug integration 路径不用于 `people` 主力 iPhone。

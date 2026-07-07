@@ -162,7 +162,7 @@ contains long session False
 本轮未覆盖：
 
 - 真机模型切换到另一个模型。
-- iPhone13 的真实发送 / 重试 / 停止 / 搜索。
+- iPhone13 的手工真实发送 / 重试 / 停止 / 搜索；可重复集成发送 smoke 已在 iPhone13 通过，见 `docs/mobile-device-integration-send-smoke-2026-07-06.md`。
 - 外部真实模型 API。
 - 语音、附件、网络切换、后台恢复。
 - 停止后的产品语义优化，例如是否显示“已停止”状态、是否保留 / 丢弃 partial assistant。

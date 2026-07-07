@@ -49,6 +49,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   String? _lastTerminalSpeechAudioPath;
   bool _isPreparingSpeech = false;
   int _speechRequestId = 0;
+  String? _blockedSendWhileOfflineSessionId;
   StreamSubscription<AudioPlaybackEvent>? _audioPlaybackSubscription;
 
   @override
@@ -269,6 +270,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
     if (content.isEmpty && attachments.isEmpty) return false;
 
+    if (!ref.read(isOnlineProvider)) {
+      _blockedSendWhileOfflineSessionId = activeSessionId;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.fixed,
+            content: Text('当前网络不可用，已保留输入，联网后可重试'),
+          ),
+        );
+      return false;
+    }
+
     if (mounted) {
       setState(() => _isSubmitting = true);
     } else {
@@ -307,6 +321,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         return false;
       }
       _draftCache.remove(activeSessionId);
+      _blockedSendWhileOfflineSessionId = null;
       _inputController.clear();
       _hasTextNotifier.value = false;
       setState(() => _pendingModelId = null);
@@ -330,6 +345,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _isSubmitting = false;
       }
     }
+  }
+
+  void _showNetworkRestoredRetryPromptIfCurrentSession() {
+    final blockedSessionId = _blockedSendWhileOfflineSessionId;
+    if (blockedSessionId == null ||
+        ref.read(activeSessionIdProvider) != blockedSessionId) {
+      return;
+    }
+    if (_inputController.text.trim().isEmpty) {
+      _blockedSendWhileOfflineSessionId = null;
+      return;
+    }
+    _blockedSendWhileOfflineSessionId = null;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.fixed,
+          content: Text('网络已恢复，可发送保留的输入'),
+        ),
+      );
   }
 
   /// 重试最后一条 user 消息（从 DB 读取，不依赖内存状态）
@@ -466,6 +502,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Widget build(BuildContext context) {
     final activeSessionId = ref.watch(activeSessionIdProvider);
 
+    ref.listen<bool>(isOnlineProvider, (previous, next) {
+      if (previous != false || !next) return;
+      _showNetworkRestoredRetryPromptIfCurrentSession();
+    });
+
     // 会话切换时恢复草稿（listener 在 build 外执行，不会干扰 IME）
     ref.listen(activeSessionIdProvider, (prev, next) {
       if (prev != next) {
@@ -473,6 +514,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _inputController.text = draft ?? '';
         _hasTextNotifier.value = (_inputController.text.trim().isNotEmpty);
         _pendingModelId = null;
+        if (ref.read(isOnlineProvider)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || ref.read(activeSessionIdProvider) != next) return;
+            _showNetworkRestoredRetryPromptIfCurrentSession();
+          });
+        }
         if (next != null) {
           ref.read(sessionDaoProvider).getSession(next).then((session) {
             if (!mounted || ref.read(activeSessionIdProvider) != next) return;
