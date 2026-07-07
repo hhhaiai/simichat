@@ -93,6 +93,7 @@ class NotificationService {
   Future<void> showDreamingDigestComplete({
     required String dayKey,
     required int originalMessageCount,
+    int? totalOriginalMessageCount,
     required int memoryCandidateCount,
     int profileProposalCount = 0,
   }) async {
@@ -119,6 +120,7 @@ class NotificationService {
         'Dreaming 已完成',
         buildDreamingDigestNotificationBody(
           originalMessageCount: originalMessageCount,
+          totalOriginalMessageCount: totalOriginalMessageCount,
           memoryCandidateCount: memoryCandidateCount,
           profileProposalCount: profileProposalCount,
         ),
@@ -134,6 +136,43 @@ class NotificationService {
       // Dreaming 通知失败不能影响聊天主链路或整理结果持久化。
     }
   }
+
+  /// 显示 Dreaming 前台到期整理失败通知。
+  Future<void> showDreamingDigestFailed({required String dayKey}) async {
+    try {
+      if (!_initialized) await init();
+
+      const androidDetails = AndroidNotificationDetails(
+        kDreamingNotificationChannelId,
+        'Dreaming 夜间整理',
+        channelDescription: '当本地 Dreaming 整理完成或失败时通知你',
+        importance: Importance.defaultImportance,
+        priority: Priority.defaultPriority,
+      );
+      const darwinDetails = DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: false,
+        presentSound: false,
+      );
+      const linuxDetails = LinuxNotificationDetails();
+      const windowsDetails = WindowsNotificationDetails();
+
+      await _plugin.show(
+        buildStableNotificationId('dreaming_failed', dayKey),
+        'Dreaming 整理失败',
+        buildDreamingDigestFailedNotificationBody(dayKey: dayKey),
+        const NotificationDetails(
+          android: androidDetails,
+          iOS: darwinDetails,
+          macOS: darwinDetails,
+          linux: linuxDetails,
+          windows: windowsDetails,
+        ),
+      );
+    } catch (_) {
+      // Dreaming 失败通知不能影响聊天主链路或失败状态持久化。
+    }
+  }
 }
 
 String buildResponseNotificationBody(String? preview) {
@@ -147,11 +186,16 @@ String buildResponseNotificationBody(String? preview) {
 
 String buildDreamingDigestNotificationBody({
   required int originalMessageCount,
+  int? totalOriginalMessageCount,
   required int memoryCandidateCount,
   int profileProposalCount = 0,
 }) {
   if (originalMessageCount <= 0) return '今天暂无可整理对话';
-  final parts = <String>['已整理 $originalMessageCount 条消息'];
+  final total = totalOriginalMessageCount ?? originalMessageCount;
+  final messageText = total > originalMessageCount
+      ? '已整理 $originalMessageCount / $total 条消息'
+      : '已整理 $originalMessageCount 条消息';
+  final parts = <String>[messageText];
   if (memoryCandidateCount > 0) {
     parts.add('提取 $memoryCandidateCount 条记忆候选');
   }
@@ -159,6 +203,10 @@ String buildDreamingDigestNotificationBody({
     parts.add('生成 $profileProposalCount 个待确认画像变更');
   }
   return parts.join('，');
+}
+
+String buildDreamingDigestFailedNotificationBody({required String dayKey}) {
+  return '$dayKey 整理失败，可到设置页重试';
 }
 
 /// 生成跨运行稳定的正整数通知 ID，避免固定 ID 覆盖和 Dart hashCode 随运行漂移。

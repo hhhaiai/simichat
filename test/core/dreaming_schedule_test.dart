@@ -49,4 +49,34 @@ void main() {
       );
     },
   );
+
+  test('dreaming schedule formats next foreground run status', () {
+    const config = DreamingScheduleConfig(hour: 22, minute: 30);
+
+    expect(
+      formatNextDreamingForegroundRun(config, now: DateTime(2026, 6, 27, 21)),
+      '下次前台整理：今日 22:30',
+    );
+    expect(
+      formatNextDreamingForegroundRun(
+        config,
+        now: DateTime(2026, 6, 27, 22, 31),
+      ),
+      '下次前台整理：现在已到期',
+    );
+    expect(
+      formatNextDreamingForegroundRun(
+        config.copyWith(lastAutoRunDayKey: '2026-06-27'),
+        now: DateTime(2026, 6, 27, 22, 31),
+      ),
+      '下次前台整理：明日 22:30',
+    );
+    expect(
+      formatNextDreamingForegroundRun(
+        config.copyWith(enabled: false),
+        now: DateTime(2026, 6, 27, 21),
+      ),
+      '下次前台整理：已关闭',
+    );
+  });
 }

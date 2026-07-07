@@ -21,6 +21,8 @@ class LocalDatabaseSnapshotPreview {
     required this.mcpServerCount,
     required this.modelChannelCount,
     required this.channelModelCount,
+    required this.dreamingJobCount,
+    required this.dreamingReportCount,
     required this.existingSessionCount,
     required this.existingMessageCount,
     required this.existingAttachmentCount,
@@ -30,6 +32,8 @@ class LocalDatabaseSnapshotPreview {
     required this.existingMcpServerCount,
     required this.existingModelChannelCount,
     required this.existingChannelModelCount,
+    required this.existingDreamingJobCount,
+    required this.existingDreamingReportCount,
   });
 
   final int sessionCount;
@@ -41,6 +45,8 @@ class LocalDatabaseSnapshotPreview {
   final int mcpServerCount;
   final int modelChannelCount;
   final int channelModelCount;
+  final int dreamingJobCount;
+  final int dreamingReportCount;
   final int existingSessionCount;
   final int existingMessageCount;
   final int existingAttachmentCount;
@@ -50,6 +56,8 @@ class LocalDatabaseSnapshotPreview {
   final int existingMcpServerCount;
   final int existingModelChannelCount;
   final int existingChannelModelCount;
+  final int existingDreamingJobCount;
+  final int existingDreamingReportCount;
 
   int get configurationRecordCount =>
       folderCount +
@@ -57,7 +65,9 @@ class LocalDatabaseSnapshotPreview {
       skillCount +
       mcpServerCount +
       modelChannelCount +
-      channelModelCount;
+      channelModelCount +
+      dreamingJobCount +
+      dreamingReportCount;
 
   int get totalRecordCount =>
       sessionCount + messageCount + attachmentCount + configurationRecordCount;
@@ -68,7 +78,9 @@ class LocalDatabaseSnapshotPreview {
       existingSkillCount +
       existingMcpServerCount +
       existingModelChannelCount +
-      existingChannelModelCount;
+      existingChannelModelCount +
+      existingDreamingJobCount +
+      existingDreamingReportCount;
 
   int get existingRecordCount =>
       existingSessionCount +
@@ -88,6 +100,8 @@ class LocalDatabaseRestoreResult {
     required this.restoredMcpServers,
     required this.restoredModelChannels,
     required this.restoredChannelModels,
+    required this.restoredDreamingJobs,
+    required this.restoredDreamingReports,
     required this.skippedExistingSessions,
     required this.skippedExistingMessages,
     required this.skippedExistingAttachments,
@@ -97,6 +111,8 @@ class LocalDatabaseRestoreResult {
     required this.skippedExistingMcpServers,
     required this.skippedExistingModelChannels,
     required this.skippedExistingChannelModels,
+    required this.skippedExistingDreamingJobs,
+    required this.skippedExistingDreamingReports,
     required this.skippedInvalidMessages,
     required this.skippedInvalidAttachments,
     required this.skippedInvalidChannelModels,
@@ -111,6 +127,8 @@ class LocalDatabaseRestoreResult {
   final int restoredMcpServers;
   final int restoredModelChannels;
   final int restoredChannelModels;
+  final int restoredDreamingJobs;
+  final int restoredDreamingReports;
   final int skippedExistingSessions;
   final int skippedExistingMessages;
   final int skippedExistingAttachments;
@@ -120,6 +138,8 @@ class LocalDatabaseRestoreResult {
   final int skippedExistingMcpServers;
   final int skippedExistingModelChannels;
   final int skippedExistingChannelModels;
+  final int skippedExistingDreamingJobs;
+  final int skippedExistingDreamingReports;
   final int skippedInvalidMessages;
   final int skippedInvalidAttachments;
   final int skippedInvalidChannelModels;
@@ -130,7 +150,9 @@ class LocalDatabaseRestoreResult {
       restoredSkills +
       restoredMcpServers +
       restoredModelChannels +
-      restoredChannelModels;
+      restoredChannelModels +
+      restoredDreamingJobs +
+      restoredDreamingReports;
 
   int get restoredRecordCount =>
       restoredSessions +
@@ -144,7 +166,9 @@ class LocalDatabaseRestoreResult {
       skippedExistingSkills +
       skippedExistingMcpServers +
       skippedExistingModelChannels +
-      skippedExistingChannelModels;
+      skippedExistingChannelModels +
+      skippedExistingDreamingJobs +
+      skippedExistingDreamingReports;
 
   int get skippedExistingRecordCount =>
       skippedExistingSessions +
@@ -187,6 +211,12 @@ class LocalDatabaseSnapshotService {
     final channelModels = await (database.select(
       database.channelModels,
     )..orderBy([(t) => OrderingTerm.asc(t.id)])).get();
+    final dreamingJobs = await (database.select(
+      database.dreamingJobs,
+    )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
+    final dreamingReports = await (database.select(
+      database.dreamingReports,
+    )..orderBy([(t) => OrderingTerm.asc(t.generatedAt)])).get();
     final sessions = await (database.select(
       database.sessions,
     )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
@@ -203,6 +233,8 @@ class LocalDatabaseSnapshotService {
         mcpServers.isEmpty &&
         modelChannels.isEmpty &&
         channelModels.isEmpty &&
+        dreamingJobs.isEmpty &&
+        dreamingReports.isEmpty &&
         sessions.isEmpty &&
         messages.isEmpty &&
         attachments.isEmpty) {
@@ -320,6 +352,41 @@ class LocalDatabaseSnapshotService {
             },
           )
           .toList(growable: false),
+      'dreaming_jobs': dreamingJobs
+          .map(
+            (job) => {
+              'id': job.id,
+              'day_key': job.dayKey,
+              'scheduled_for': job.scheduledFor,
+              'status': job.status,
+              'trigger': job.trigger,
+              'message_limit': job.messageLimit,
+              'started_at': job.startedAt,
+              'finished_at': job.finishedAt,
+              'error': _safeDiagnosticString(job.error),
+              'created_at': job.createdAt,
+              'updated_at': job.updatedAt,
+            },
+          )
+          .toList(growable: false),
+      'dreaming_reports': dreamingReports
+          .map(
+            (report) => {
+              'id': report.id,
+              'day_key': report.dayKey,
+              'job_id': report.jobId,
+              'generated_at': report.generatedAt,
+              'markdown': report.markdown,
+              'digest_json': report.digestJson,
+              'session_count': report.sessionCount,
+              'original_message_count': report.originalMessageCount,
+              'total_original_message_count': report.totalOriginalMessageCount,
+              'memory_candidate_count': report.memoryCandidateCount,
+              'is_truncated': report.isTruncated,
+              'created_at': report.createdAt,
+            },
+          )
+          .toList(growable: false),
       'sessions': sessions
           .map(
             (session) => {
@@ -369,6 +436,8 @@ class LocalDatabaseSnapshotService {
       mcpServerCount: snapshot.mcpServers.length,
       modelChannelCount: snapshot.modelChannels.length,
       channelModelCount: snapshot.channelModels.length,
+      dreamingJobCount: snapshot.dreamingJobs.length,
+      dreamingReportCount: snapshot.dreamingReports.length,
       existingSessionCount: await _countExistingIds(
         'sessions',
         snapshot.sessions.map((row) => row.id),
@@ -405,6 +474,13 @@ class LocalDatabaseSnapshotService {
         'channel_models',
         snapshot.channelModels.map((row) => row.id),
       ),
+      existingDreamingJobCount: await _countExistingIds(
+        'dreaming_jobs',
+        snapshot.dreamingJobs.map((row) => row.id),
+      ),
+      existingDreamingReportCount: await _countExistingDreamingReports(
+        snapshot.dreamingReports,
+      ),
     );
   }
 
@@ -423,6 +499,8 @@ class LocalDatabaseSnapshotService {
     var restoredMcpServers = 0;
     var restoredModelChannels = 0;
     var restoredChannelModels = 0;
+    var restoredDreamingJobs = 0;
+    var restoredDreamingReports = 0;
     var skippedExistingSessions = 0;
     var skippedExistingMessages = 0;
     var skippedExistingAttachments = 0;
@@ -432,6 +510,8 @@ class LocalDatabaseSnapshotService {
     var skippedExistingMcpServers = 0;
     var skippedExistingModelChannels = 0;
     var skippedExistingChannelModels = 0;
+    var skippedExistingDreamingJobs = 0;
+    var skippedExistingDreamingReports = 0;
     var skippedInvalidMessages = 0;
     var skippedInvalidAttachments = 0;
     var skippedInvalidChannelModels = 0;
@@ -613,6 +693,78 @@ class LocalDatabaseSnapshotService {
         restoredChannelModels++;
       }
 
+      for (final row in snapshot.dreamingJobs) {
+        final exists = await _recordExists('dreaming_jobs', row.id);
+        if (exists && !overwriteExisting) {
+          skippedExistingDreamingJobs++;
+          continue;
+        }
+        final companion = DreamingJobsCompanion.insert(
+          id: row.id,
+          dayKey: row.dayKey,
+          scheduledFor: row.scheduledFor,
+          status: Value(row.status),
+          trigger: Value(row.trigger),
+          messageLimit: Value(row.messageLimit),
+          startedAt: Value(row.startedAt),
+          finishedAt: Value(row.finishedAt),
+          error: Value(_safeDiagnosticString(row.error)),
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        );
+        if (overwriteExisting) {
+          await database
+              .into(database.dreamingJobs)
+              .insertOnConflictUpdate(companion);
+        } else {
+          await database
+              .into(database.dreamingJobs)
+              .insert(companion, mode: InsertMode.insertOrIgnore);
+        }
+        restoredDreamingJobs++;
+      }
+
+      for (final row in snapshot.dreamingReports) {
+        final exists =
+            await _recordExists('dreaming_reports', row.id) ||
+            await _recordExistsByText(
+              'dreaming_reports',
+              'day_key',
+              row.dayKey,
+            );
+        if (exists && !overwriteExisting) {
+          skippedExistingDreamingReports++;
+          continue;
+        }
+        final jobId = await _existingReferenceOrNull(
+          'dreaming_jobs',
+          row.jobId,
+        );
+        final companion = DreamingReportsCompanion.insert(
+          id: row.id,
+          dayKey: row.dayKey,
+          jobId: Value(jobId),
+          generatedAt: row.generatedAt,
+          markdown: row.markdown,
+          digestJson: row.digestJson,
+          sessionCount: row.sessionCount,
+          originalMessageCount: row.originalMessageCount,
+          totalOriginalMessageCount: row.totalOriginalMessageCount,
+          memoryCandidateCount: row.memoryCandidateCount,
+          isTruncated: Value(row.isTruncated),
+          createdAt: row.createdAt,
+        );
+        await database
+            .into(database.dreamingReports)
+            .insert(
+              companion,
+              mode: overwriteExisting
+                  ? InsertMode.insertOrReplace
+                  : InsertMode.insertOrIgnore,
+            );
+        restoredDreamingReports++;
+      }
+
       for (final row in snapshot.sessions) {
         final exists = await _recordExists('sessions', row.id);
         if (exists && !overwriteExisting) {
@@ -731,6 +883,8 @@ class LocalDatabaseSnapshotService {
       restoredMcpServers: restoredMcpServers,
       restoredModelChannels: restoredModelChannels,
       restoredChannelModels: restoredChannelModels,
+      restoredDreamingJobs: restoredDreamingJobs,
+      restoredDreamingReports: restoredDreamingReports,
       skippedExistingSessions: skippedExistingSessions,
       skippedExistingMessages: skippedExistingMessages,
       skippedExistingAttachments: skippedExistingAttachments,
@@ -740,6 +894,8 @@ class LocalDatabaseSnapshotService {
       skippedExistingMcpServers: skippedExistingMcpServers,
       skippedExistingModelChannels: skippedExistingModelChannels,
       skippedExistingChannelModels: skippedExistingChannelModels,
+      skippedExistingDreamingJobs: skippedExistingDreamingJobs,
+      skippedExistingDreamingReports: skippedExistingDreamingReports,
       skippedInvalidMessages: skippedInvalidMessages,
       skippedInvalidAttachments: skippedInvalidAttachments,
       skippedInvalidChannelModels: skippedInvalidChannelModels,
@@ -822,6 +978,37 @@ class LocalDatabaseSnapshotService {
     return row != null;
   }
 
+  Future<bool> _recordExistsByText(
+    String table,
+    String column,
+    String value,
+  ) async {
+    final row = await database
+        .customSelect(
+          'SELECT 1 FROM $table WHERE $column = ? LIMIT 1',
+          variables: [Variable.withString(value)],
+        )
+        .getSingleOrNull();
+    return row != null;
+  }
+
+  Future<int> _countExistingDreamingReports(
+    Iterable<_SnapshotDreamingReport> reports,
+  ) async {
+    var count = 0;
+    for (final report in reports) {
+      if (await _recordExists('dreaming_reports', report.id) ||
+          await _recordExistsByText(
+            'dreaming_reports',
+            'day_key',
+            report.dayKey,
+          )) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   Future<String?> _existingReferenceOrNull(String table, String? id) async {
     if (id == null || id.isEmpty) return null;
     return await _recordExists(table, id) ? id : null;
@@ -853,6 +1040,12 @@ _LocalDatabaseSnapshot _parseSnapshot(List<int> bytes) {
     channelModels: _listOfMaps(
       json['channel_models'],
     ).map(_SnapshotChannelModel.fromJson).toList(growable: false),
+    dreamingJobs: _listOfMaps(
+      json['dreaming_jobs'],
+    ).map(_SnapshotDreamingJob.fromJson).toList(growable: false),
+    dreamingReports: _listOfMaps(
+      json['dreaming_reports'],
+    ).map(_SnapshotDreamingReport.fromJson).toList(growable: false),
     sessions: _listOfMaps(
       json['sessions'],
     ).map(_SnapshotSession.fromJson).toList(growable: false),
@@ -949,6 +1142,35 @@ String? _safeUrlString(String? value) {
   return safe;
 }
 
+String? _safeDiagnosticString(String? value) {
+  if (value == null) return null;
+  var sanitized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (sanitized.isEmpty) return sanitized;
+  sanitized = sanitized
+      .replaceAll(
+        RegExp(r'\bBearer\s+[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+        'Bearer ***',
+      )
+      .replaceAll(RegExp(r'sk-[A-Za-z0-9_-]{6,}'), 'sk-***')
+      .replaceAll(RegExp(r'AIza[0-9A-Za-z_-]{10,}'), 'AIza***')
+      .replaceAll(RegExp(r'xox[baprs]-[A-Za-z0-9-]+'), 'xox***')
+      .replaceAll(
+        RegExp(r'https?://[^\s，。；,;)]+', caseSensitive: false),
+        '[链接]',
+      )
+      .replaceAll(RegExp(r'(/Users/|/var/|/private/)[^\s，。；,;)]+'), '[本机路径]');
+  sanitized = sanitized.replaceAllMapped(
+    RegExp(
+      r'([?&]?)(authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|token)=([^&\s]+)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1) ?? ''}${match.group(2)}=***',
+  );
+  return sanitized.length <= 512
+      ? sanitized
+      : '${sanitized.substring(0, 512)}...';
+}
+
 bool _containsSensitiveConfigText(String value) {
   return _sensitiveAssignmentPattern.hasMatch(value) ||
       _sensitiveBearerPattern.hasMatch(value) ||
@@ -976,6 +1198,8 @@ class _LocalDatabaseSnapshot {
     required this.mcpServers,
     required this.modelChannels,
     required this.channelModels,
+    required this.dreamingJobs,
+    required this.dreamingReports,
     required this.sessions,
     required this.messages,
     required this.attachments,
@@ -987,6 +1211,8 @@ class _LocalDatabaseSnapshot {
   final List<_SnapshotMcpServer> mcpServers;
   final List<_SnapshotModelChannel> modelChannels;
   final List<_SnapshotChannelModel> channelModels;
+  final List<_SnapshotDreamingJob> dreamingJobs;
+  final List<_SnapshotDreamingReport> dreamingReports;
   final List<_SnapshotSession> sessions;
   final List<_SnapshotMessage> messages;
   final List<_SnapshotAttachment> attachments;
@@ -1194,6 +1420,104 @@ class _SnapshotChannelModel {
       modelName: _requiredString(json, 'model_name'),
       capability: _nullableString(json, 'capability') ?? 'chat',
       isDefault: _boolValue(json, 'is_default'),
+    );
+  }
+}
+
+class _SnapshotDreamingJob {
+  const _SnapshotDreamingJob({
+    required this.id,
+    required this.dayKey,
+    required this.scheduledFor,
+    required this.status,
+    required this.trigger,
+    required this.messageLimit,
+    required this.startedAt,
+    required this.finishedAt,
+    required this.error,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String dayKey;
+  final int scheduledFor;
+  final String status;
+  final String trigger;
+  final int messageLimit;
+  final int? startedAt;
+  final int? finishedAt;
+  final String? error;
+  final int createdAt;
+  final int updatedAt;
+
+  factory _SnapshotDreamingJob.fromJson(Map<String, Object?> json) {
+    return _SnapshotDreamingJob(
+      id: _requiredString(json, 'id'),
+      dayKey: _requiredString(json, 'day_key'),
+      scheduledFor: _intValue(json, 'scheduled_for'),
+      status: _nullableString(json, 'status') ?? 'pending',
+      trigger: _nullableString(json, 'trigger') ?? 'foreground',
+      messageLimit: _intValue(json, 'message_limit', defaultValue: 5000),
+      startedAt: json['started_at'] == null
+          ? null
+          : _intValue(json, 'started_at'),
+      finishedAt: json['finished_at'] == null
+          ? null
+          : _intValue(json, 'finished_at'),
+      error: _nullableString(json, 'error'),
+      createdAt: _intValue(json, 'created_at'),
+      updatedAt: _intValue(json, 'updated_at'),
+    );
+  }
+}
+
+class _SnapshotDreamingReport {
+  const _SnapshotDreamingReport({
+    required this.id,
+    required this.dayKey,
+    required this.jobId,
+    required this.generatedAt,
+    required this.markdown,
+    required this.digestJson,
+    required this.sessionCount,
+    required this.originalMessageCount,
+    required this.totalOriginalMessageCount,
+    required this.memoryCandidateCount,
+    required this.isTruncated,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String dayKey;
+  final String? jobId;
+  final int generatedAt;
+  final String markdown;
+  final String digestJson;
+  final int sessionCount;
+  final int originalMessageCount;
+  final int totalOriginalMessageCount;
+  final int memoryCandidateCount;
+  final bool isTruncated;
+  final int createdAt;
+
+  factory _SnapshotDreamingReport.fromJson(Map<String, Object?> json) {
+    return _SnapshotDreamingReport(
+      id: _requiredString(json, 'id'),
+      dayKey: _requiredString(json, 'day_key'),
+      jobId: _nullableString(json, 'job_id'),
+      generatedAt: _intValue(json, 'generated_at'),
+      markdown: _nullableString(json, 'markdown') ?? '',
+      digestJson: _nullableString(json, 'digest_json') ?? '{}',
+      sessionCount: _intValue(json, 'session_count'),
+      originalMessageCount: _intValue(json, 'original_message_count'),
+      totalOriginalMessageCount: _intValue(
+        json,
+        'total_original_message_count',
+      ),
+      memoryCandidateCount: _intValue(json, 'memory_candidate_count'),
+      isTruncated: _boolValue(json, 'is_truncated'),
+      createdAt: _intValue(json, 'created_at'),
     );
   }
 }

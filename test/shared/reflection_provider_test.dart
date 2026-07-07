@@ -102,6 +102,42 @@ void main() {
     },
   );
 
+  test(
+    'AssistantReflectionHistoryNotifier removes one report by day and source',
+    () async {
+      final notifier = AssistantReflectionHistoryNotifier();
+      await notifier.ready;
+
+      await notifier.record(
+        _report('2026-07-06', sourceDigestDayKey: '2026-07-05'),
+      );
+      await notifier.record(
+        _report('2026-07-06', sourceDigestDayKey: '2026-07-06'),
+      );
+      await notifier.record(_report('2026-07-05'));
+      await notifier.removeReport(
+        dayKey: '2026-07-06',
+        sourceDigestDayKey: '2026-07-06',
+      );
+
+      expect(
+        notifier.state.map(
+          (item) => '${item.dayKey}/${item.sourceDigestDayKey}',
+        ),
+        containsAll(['2026-07-06/2026-07-05', '2026-07-05/2026-07-05']),
+      );
+
+      final reloaded = AssistantReflectionHistoryNotifier();
+      await reloaded.ready;
+      expect(
+        reloaded.state.map(
+          (item) => '${item.dayKey}/${item.sourceDigestDayKey}',
+        ),
+        containsAll(['2026-07-06/2026-07-05', '2026-07-05/2026-07-05']),
+      );
+    },
+  );
+
   testWidgets('runAssistantReflection uses latest dreaming and profile', (
     tester,
   ) async {
@@ -178,12 +214,16 @@ void main() {
   });
 }
 
-ReflectionReport _report(String dayKey, {String action = '继续保持'}) {
+ReflectionReport _report(
+  String dayKey, {
+  String action = '继续保持',
+  String? sourceDigestDayKey,
+}) {
   final date = DateTime.parse('${dayKey}T22:00:00Z');
   return ReflectionReport(
     dayKey: dayKey,
     generatedAt: date,
-    sourceDigestDayKey: dayKey,
+    sourceDigestDayKey: sourceDigestDayKey ?? dayKey,
     sessionCount: 1,
     originalMessageCount: 2,
     userMessageCount: 1,

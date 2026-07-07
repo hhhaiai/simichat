@@ -63,5 +63,25 @@ void main() {
       expect(body, contains('提取 4 条记忆候选'));
       expect(body, contains('生成 2 个待确认画像变更'));
     });
+
+    test('截断整理时展示已整理数量和当天总量', () {
+      final body = buildDreamingDigestNotificationBody(
+        originalMessageCount: 2,
+        totalOriginalMessageCount: 5,
+        memoryCandidateCount: 1,
+      );
+
+      expect(body, contains('已整理 2 / 5 条消息'));
+      expect(body, contains('提取 1 条记忆候选'));
+    });
+  });
+
+  group('buildDreamingDigestFailedNotificationBody', () {
+    test('失败通知不暴露底层错误详情，只引导用户去设置页重试', () {
+      expect(
+        buildDreamingDigestFailedNotificationBody(dayKey: '2026-07-07'),
+        '2026-07-07 整理失败，可到设置页重试',
+      );
+    });
   });
 }

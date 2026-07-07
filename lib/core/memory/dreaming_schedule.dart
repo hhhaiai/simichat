@@ -61,6 +61,30 @@ String formatDreamingScheduleTime(DreamingScheduleConfig config) {
   return '${config.hour.toString().padLeft(2, '0')}:${config.minute.toString().padLeft(2, '0')}';
 }
 
+String formatNextDreamingForegroundRun(
+  DreamingScheduleConfig config, {
+  required DateTime now,
+}) {
+  if (!config.enabled) return '下次前台整理：已关闭';
+
+  final today = DateTime(now.year, now.month, now.day);
+  final scheduledAt = DateTime(
+    today.year,
+    today.month,
+    today.day,
+    config.hour,
+    config.minute,
+  );
+  final scheduleTime = formatDreamingScheduleTime(config);
+  if (config.lastAutoRunDayKey == formatDreamingDay(today)) {
+    return '下次前台整理：明日 $scheduleTime';
+  }
+  if (now.isBefore(scheduledAt)) {
+    return '下次前台整理：今日 $scheduleTime';
+  }
+  return '下次前台整理：现在已到期';
+}
+
 bool shouldRunDreamingSchedule(
   DreamingScheduleConfig config, {
   required DateTime now,

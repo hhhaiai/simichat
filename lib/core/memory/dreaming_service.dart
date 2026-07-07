@@ -13,12 +13,14 @@ class DreamingSessionDigest {
     required this.highlights,
     required this.firstMessageAt,
     required this.lastMessageAt,
+    this.lastMessageRole = '',
+    this.latestUserHighlight = '',
   });
 
   factory DreamingSessionDigest.fromJson(Map<String, dynamic> json) {
     return DreamingSessionDigest(
       sessionId: json['sessionId'] as String? ?? '',
-      title: json['title'] as String? ?? '新会话',
+      title: _safeTitle(json['title'] as String? ?? '新会话'),
       messageCount: json['messageCount'] as int? ?? 0,
       userMessageCount: json['userMessageCount'] as int? ?? 0,
       assistantMessageCount: json['assistantMessageCount'] as int? ?? 0,
@@ -31,6 +33,12 @@ class DreamingSessionDigest {
       lastMessageAt:
           DateTime.tryParse(json['lastMessageAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      lastMessageRole: _normalizeMessageRole(
+        json['lastMessageRole'] as String? ?? '',
+      ),
+      latestUserHighlight: _safeSnippet(
+        json['latestUserHighlight'] as String? ?? '',
+      ),
     );
   }
 
@@ -42,16 +50,21 @@ class DreamingSessionDigest {
   final List<String> highlights;
   final DateTime firstMessageAt;
   final DateTime lastMessageAt;
+  final String lastMessageRole;
+  final String latestUserHighlight;
 
   Map<String, dynamic> toJson() => {
     'sessionId': sessionId,
-    'title': title,
+    'title': _safeTitle(title),
     'messageCount': messageCount,
     'userMessageCount': userMessageCount,
     'assistantMessageCount': assistantMessageCount,
     'highlights': highlights,
     'firstMessageAt': firstMessageAt.toIso8601String(),
     'lastMessageAt': lastMessageAt.toIso8601String(),
+    if (lastMessageRole.isNotEmpty) 'lastMessageRole': lastMessageRole,
+    if (latestUserHighlight.isNotEmpty)
+      'latestUserHighlight': latestUserHighlight,
   };
 }
 
@@ -61,13 +74,17 @@ class DreamingDigest {
     required this.generatedAt,
     required this.sessionCount,
     required this.originalMessageCount,
+    int? totalOriginalMessageCount,
     required this.userMessageCount,
     required this.assistantMessageCount,
     required this.sessions,
     required this.memoryCandidates,
     required this.keywords,
     required this.elapsedMs,
-  });
+    this.isTruncated = false,
+    this.messageLimit = 0,
+  }) : totalOriginalMessageCount =
+           totalOriginalMessageCount ?? originalMessageCount;
 
   factory DreamingDigest.empty({
     required DateTime day,
@@ -98,6 +115,10 @@ class DreamingDigest {
           DateTime.fromMillisecondsSinceEpoch(0),
       sessionCount: json['sessionCount'] as int? ?? 0,
       originalMessageCount: json['originalMessageCount'] as int? ?? 0,
+      totalOriginalMessageCount:
+          json['totalOriginalMessageCount'] as int? ??
+          json['originalMessageCount'] as int? ??
+          0,
       userMessageCount: json['userMessageCount'] as int? ?? 0,
       assistantMessageCount: json['assistantMessageCount'] as int? ?? 0,
       sessions:
@@ -116,6 +137,8 @@ class DreamingDigest {
       keywords:
           (json['keywords'] as List?)?.whereType<String>().toList() ?? const [],
       elapsedMs: json['elapsedMs'] as int? ?? 0,
+      isTruncated: json['isTruncated'] as bool? ?? false,
+      messageLimit: json['messageLimit'] as int? ?? 0,
     );
   }
 
@@ -123,12 +146,15 @@ class DreamingDigest {
   final DateTime generatedAt;
   final int sessionCount;
   final int originalMessageCount;
+  final int totalOriginalMessageCount;
   final int userMessageCount;
   final int assistantMessageCount;
   final List<DreamingSessionDigest> sessions;
   final List<KeyPointMemoryItem> memoryCandidates;
   final List<String> keywords;
   final int elapsedMs;
+  final bool isTruncated;
+  final int messageLimit;
 
   bool get hasContent => originalMessageCount > 0;
 
@@ -139,12 +165,15 @@ class DreamingDigest {
     'generatedAt': generatedAt.toIso8601String(),
     'sessionCount': sessionCount,
     'originalMessageCount': originalMessageCount,
+    'totalOriginalMessageCount': totalOriginalMessageCount,
     'userMessageCount': userMessageCount,
     'assistantMessageCount': assistantMessageCount,
     'sessions': sessions.map((item) => item.toJson()).toList(),
     'memoryCandidates': memoryCandidates.map((item) => item.toJson()).toList(),
     'keywords': keywords,
     'elapsedMs': elapsedMs,
+    'isTruncated': isTruncated,
+    if (messageLimit > 0) 'messageLimit': messageLimit,
   };
 
   String toMarkdown() {
@@ -153,11 +182,20 @@ class DreamingDigest {
       ..writeln()
       ..writeln('- 生成时间：${generatedAt.toIso8601String()}')
       ..writeln('- 会话数：$sessionCount')
-      ..writeln('- 原始消息数：$originalMessageCount')
+      ..writeln('- 已整理原始消息数：$originalMessageCount')
+      ..writeln('- 当天原始消息总数：$totalOriginalMessageCount')
       ..writeln('- 用户消息：$userMessageCount')
       ..writeln('- 助手消息：$assistantMessageCount')
       ..writeln('- 耗时：$elapsedMs ms')
       ..writeln();
+
+    if (isTruncated) {
+      buffer
+        ..writeln(
+          '> 注意：当天共有 $totalOriginalMessageCount 条原始消息，超过本机整理上限；本日报只整理最近 $messageLimit 条原始消息。',
+        )
+        ..writeln();
+    }
 
     if (!hasContent) {
       buffer
@@ -178,8 +216,9 @@ class DreamingDigest {
       ..writeln();
 
     for (final session in sessions) {
+      final title = _safeTitle(session.title);
       buffer
-        ..writeln('### ${session.title}')
+        ..writeln('### $title')
         ..writeln()
         ..writeln('- session_id：${session.sessionId}')
         ..writeln(
@@ -190,6 +229,14 @@ class DreamingDigest {
         for (final highlight in session.highlights) {
           buffer.writeln('  - $highlight');
         }
+      }
+      if (session.lastMessageRole.isNotEmpty) {
+        buffer.writeln(
+          '- 最后一条消息角色：${_displayMessageRole(session.lastMessageRole)}',
+        );
+      }
+      if (session.latestUserHighlight.isNotEmpty) {
+        buffer.writeln('- 最新用户问题：${session.latestUserHighlight}');
       }
       buffer.writeln();
     }
@@ -233,12 +280,22 @@ class DreamingService {
     final targetDay = _dateOnly(day ?? (_now?.call() ?? DateTime.now()));
     final start = targetDay;
     final end = targetDay.add(const Duration(days: 1));
+    final effectiveMaxMessages = maxMessages < 1 ? 1 : maxMessages;
 
-    final messages = await _messageDao.getOriginalMessagesInTimeRange(
-      start: start,
-      end: end,
-      limit: maxMessages,
-    );
+    final totalOriginalMessageCount = await _messageDao
+        .countOriginalMessagesInTimeRange(start: start, end: end);
+    final isTruncated = totalOriginalMessageCount > effectiveMaxMessages;
+    final messages = isTruncated
+        ? (await _messageDao.getLatestOriginalMessagesInTimeRange(
+            start: start,
+            end: end,
+            limit: effectiveMaxMessages,
+          )).reversed.toList(growable: false)
+        : await _messageDao.getOriginalMessagesInTimeRange(
+            start: start,
+            end: end,
+            limit: effectiveMaxMessages,
+          );
     final generatedAt = _now?.call() ?? DateTime.now();
     if (messages.isEmpty) {
       stopwatch.stop();
@@ -293,7 +350,7 @@ class DreamingService {
       sessionDigests.add(
         DreamingSessionDigest(
           sessionId: entry.key,
-          title: session?.title ?? '新会话',
+          title: _safeTitle(session?.title ?? '新会话'),
           messageCount: sessionMessages.length,
           userMessageCount: userMessages.length,
           assistantMessageCount: assistantMessages.length,
@@ -304,6 +361,8 @@ class DreamingService {
           lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
             sessionMessages.last.createdAt,
           ),
+          lastMessageRole: _normalizeMessageRole(sessionMessages.last.role),
+          latestUserHighlight: _latestUserHighlight(userMessages),
         ),
       );
     }
@@ -315,6 +374,7 @@ class DreamingService {
       generatedAt: generatedAt,
       sessionCount: grouped.length,
       originalMessageCount: messages.length,
+      totalOriginalMessageCount: totalOriginalMessageCount,
       userMessageCount: userMessageCount,
       assistantMessageCount: assistantMessageCount,
       sessions: List.unmodifiable(sessionDigests),
@@ -323,6 +383,8 @@ class DreamingService {
       ),
       keywords: List.unmodifiable(_topKeywords(keywordCounts)),
       elapsedMs: stopwatch.elapsedMilliseconds,
+      isTruncated: isTruncated,
+      messageLimit: effectiveMaxMessages,
     );
   }
 }
@@ -339,6 +401,38 @@ String formatDreamingDay(DateTime day) {
 DateTime _dateOnly(DateTime value) =>
     DateTime(value.year, value.month, value.day);
 
+String _safeTitle(String value) {
+  final normalized = normalizeMemoryContent(value).trim();
+  if (normalized.isEmpty) return '新会话';
+  if (_looksSensitive(normalized)) return '敏感会话';
+  if (normalized.length > 80) return '${normalized.substring(0, 80)}...';
+  return normalized;
+}
+
+String _normalizeMessageRole(String role) {
+  switch (role.trim().toLowerCase()) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+      return role.trim().toLowerCase();
+    default:
+      return '';
+  }
+}
+
+String _displayMessageRole(String role) {
+  switch (_normalizeMessageRole(role)) {
+    case 'user':
+      return '用户';
+    case 'assistant':
+      return '助手';
+    case 'system':
+      return '系统';
+    default:
+      return role;
+  }
+}
+
 List<String> _buildHighlights(List<Message> userMessages) {
   final highlights = <String>[];
   final seen = <String>{};
@@ -350,6 +444,11 @@ List<String> _buildHighlights(List<Message> userMessages) {
     if (highlights.length >= 3) break;
   }
   return highlights;
+}
+
+String _latestUserHighlight(List<Message> userMessages) {
+  if (userMessages.isEmpty) return '';
+  return _safeSnippet(userMessages.last.content);
 }
 
 List<String> _topKeywords(Map<String, int> counts) {

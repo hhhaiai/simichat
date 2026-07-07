@@ -44,7 +44,11 @@ class ReflectionReport {
     required this.pendingProfileProposalCount,
     required this.insights,
     required this.actionItems,
-  });
+    this.sourceDigestIsTruncated = false,
+    this.sourceDigestMessageLimit = 0,
+    int? sourceDigestTotalOriginalMessageCount,
+  }) : sourceDigestTotalOriginalMessageCount =
+           sourceDigestTotalOriginalMessageCount ?? originalMessageCount;
 
   factory ReflectionReport.fromJson(Map<String, dynamic> json) {
     return ReflectionReport(
@@ -61,6 +65,13 @@ class ReflectionReport {
       assistantMessageCount: json['assistantMessageCount'] as int? ?? 0,
       pendingProfileProposalCount:
           json['pendingProfileProposalCount'] as int? ?? 0,
+      sourceDigestIsTruncated:
+          json['sourceDigestIsTruncated'] as bool? ?? false,
+      sourceDigestMessageLimit: json['sourceDigestMessageLimit'] as int? ?? 0,
+      sourceDigestTotalOriginalMessageCount:
+          json['sourceDigestTotalOriginalMessageCount'] as int? ??
+          json['originalMessageCount'] as int? ??
+          0,
       insights:
           (json['insights'] as List?)
               ?.whereType<Map>()
@@ -86,6 +97,9 @@ class ReflectionReport {
   final int userMessageCount;
   final int assistantMessageCount;
   final int pendingProfileProposalCount;
+  final bool sourceDigestIsTruncated;
+  final int sourceDigestMessageLimit;
+  final int sourceDigestTotalOriginalMessageCount;
   final List<ReflectionInsight> insights;
   final List<String> actionItems;
 
@@ -100,6 +114,11 @@ class ReflectionReport {
     'userMessageCount': userMessageCount,
     'assistantMessageCount': assistantMessageCount,
     'pendingProfileProposalCount': pendingProfileProposalCount,
+    'sourceDigestIsTruncated': sourceDigestIsTruncated,
+    if (sourceDigestMessageLimit > 0)
+      'sourceDigestMessageLimit': sourceDigestMessageLimit,
+    'sourceDigestTotalOriginalMessageCount':
+        sourceDigestTotalOriginalMessageCount,
     'insights': insights.map((item) => item.toJson()).toList(),
     'actionItems': actionItems,
   };
@@ -111,12 +130,21 @@ class ReflectionReport {
       ..writeln('- 生成时间：${generatedAt.toIso8601String()}')
       ..writeln('- 来源 Dreaming：$sourceDigestDayKey')
       ..writeln('- 会话数：$sessionCount')
-      ..writeln('- 原始消息数：$originalMessageCount')
+      ..writeln('- 已反思原始消息数：$originalMessageCount')
+      ..writeln('- 来源 Dreaming 原始消息总数：$sourceDigestTotalOriginalMessageCount')
       ..writeln('- 用户 / 助手消息：$userMessageCount / $assistantMessageCount')
       ..writeln('- 待确认画像变更：$pendingProfileProposalCount')
       ..writeln()
       ..writeln('## 反思结论')
       ..writeln();
+
+    if (sourceDigestIsTruncated) {
+      buffer
+        ..writeln(
+          '> 注意：来源 Dreaming 只整理了最近 $sourceDigestMessageLimit / $sourceDigestTotalOriginalMessageCount 条原始消息，本反思不代表当天全部对话。',
+        )
+        ..writeln();
+    }
 
     if (insights.isEmpty) {
       buffer.writeln('- 暂无可反思内容');
@@ -186,9 +214,16 @@ class ReflectionService {
       addInsight('节奏', '今天暂无可整理对话，暂不生成质量判断。');
       addAction('继续积累对话，下一次 Dreaming 后再运行反思。');
     } else {
+      _reflectSourceFreshness(digest, generatedAt, addInsight, addAction);
+      _reflectDigestCompleteness(digest, addInsight, addAction);
+      _reflectUnansweredSessions(digest, addInsight, addAction);
+      _reflectRepeatedUserIntent(digest, addInsight, addAction);
+      _reflectSessionFollowUpPressure(digest, addInsight, addAction);
+      _reflectLastUserMessageSessions(digest, addInsight, addAction);
+      _reflectLatestUserTask(digest, addInsight, addAction);
+      _reflectNextBestFollowUp(profile, digest, addInsight, addAction);
       _reflectConversationBalance(digest, addInsight, addAction);
       _reflectLongSessions(digest, addInsight, addAction);
-      _reflectNextBestFollowUp(profile, digest, addInsight, addAction);
       _reflectMemoryAndProfile(
         digest,
         profile,
@@ -207,6 +242,9 @@ class ReflectionService {
       userMessageCount: digest.userMessageCount,
       assistantMessageCount: digest.assistantMessageCount,
       pendingProfileProposalCount: pendingProfileProposalCount,
+      sourceDigestIsTruncated: digest.isTruncated,
+      sourceDigestMessageLimit: digest.messageLimit,
+      sourceDigestTotalOriginalMessageCount: digest.totalOriginalMessageCount,
       insights: List.unmodifiable(insights.take(8)),
       actionItems: List.unmodifiable(actionItems.take(8)),
     );
@@ -288,6 +326,175 @@ String? buildAssistantReflectionSystemPrompt(
   return buffer.toString().trim();
 }
 
+void _reflectSourceFreshness(
+  DreamingDigest digest,
+  DateTime generatedAt,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final reflectionDayKey = formatDreamingDay(generatedAt);
+  if (digest.dayKey == reflectionDayKey) return;
+  addInsight(
+    '来源新鲜度',
+    '当前反思日期是 $reflectionDayKey，但来源 Dreaming 是 ${digest.dayKey}，可能不是今日最新上下文。',
+    priority: 'high',
+  );
+  addAction('先运行今日 Dreaming，再基于最新日报确认反思和长期画像。');
+}
+
+void _reflectUnansweredSessions(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final unanswered =
+      digest.sessions
+          .where(
+            (session) =>
+                session.userMessageCount > 0 &&
+                session.assistantMessageCount == 0,
+          )
+          .toList(growable: false)
+        ..sort((a, b) => b.userMessageCount.compareTo(a.userMessageCount));
+  if (unanswered.isEmpty) return;
+
+  final session = unanswered.first;
+  final title = _safeBody(session.title).isNotEmpty
+      ? _safeBody(session.title)
+      : '未命名会话';
+  addInsight(
+    '未回复会话',
+    '会话「$title」有 ${session.userMessageCount} 条用户消息但没有助手回复，可能存在局部未收口问题。',
+    priority: 'high',
+  );
+  addAction('下次打开「$title」时，先补一个简短回应和未完成问题清单。');
+}
+
+void _reflectLastUserMessageSessions(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final pending =
+      digest.sessions
+          .where(
+            (session) =>
+                session.lastMessageRole == 'user' &&
+                session.assistantMessageCount > 0,
+          )
+          .toList(growable: false)
+        ..sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
+  if (pending.isEmpty) return;
+
+  final session = pending.first;
+  final title = _safeBody(session.title).isNotEmpty
+      ? _safeBody(session.title)
+      : '未命名会话';
+  addInsight(
+    '最后一问未答',
+    _lastUserMessageInsightText(title, session.latestUserHighlight),
+    priority: 'high',
+  );
+  addAction('下次打开「$title」时，先回应最新追问，再总结未完成问题。');
+}
+
+String _lastUserMessageInsightText(String title, String latestUserHighlight) {
+  final latest = _safeBody(latestUserHighlight);
+  if (latest.isEmpty) {
+    return '会话「$title」最后一条消息来自用户，说明已有回复后仍有新的追问待收口。';
+  }
+  return '会话「$title」最后一条消息来自用户，最新追问是：$latest';
+}
+
+void _reflectRepeatedUserIntent(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final repeated =
+      digest.sessions
+          .where((session) => session.userMessageCount >= 3)
+          .map((session) => _RepeatedIntentCandidate.fromSession(session))
+          .whereType<_RepeatedIntentCandidate>()
+          .toList(growable: false)
+        ..sort((a, b) {
+          final byUserMessages = b.session.userMessageCount.compareTo(
+            a.session.userMessageCount,
+          );
+          if (byUserMessages != 0) return byUserMessages;
+          return b.session.lastMessageAt.compareTo(a.session.lastMessageAt);
+        });
+  if (repeated.isEmpty) return;
+
+  final candidate = repeated.first;
+  final title = _safeBody(candidate.session.title).isNotEmpty
+      ? _safeBody(candidate.session.title)
+      : '未命名会话';
+  addInsight(
+    '重复追问',
+    '会话「$title」多次出现相近追问：${candidate.highlight}，说明同一问题可能反复未解。',
+    priority: 'high',
+  );
+  addAction('下次打开「$title」时，先明确状态、阻塞点和下一步，再继续展开细节。');
+}
+
+void _reflectSessionFollowUpPressure(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final pressured =
+      digest.sessions
+          .where(
+            (session) =>
+                session.assistantMessageCount > 0 &&
+                session.userMessageCount >= session.assistantMessageCount + 2,
+          )
+          .toList(growable: false)
+        ..sort((a, b) {
+          final byGap = (b.userMessageCount - b.assistantMessageCount)
+              .compareTo(a.userMessageCount - a.assistantMessageCount);
+          if (byGap != 0) return byGap;
+          return b.messageCount.compareTo(a.messageCount);
+        });
+  if (pressured.isEmpty) return;
+
+  final session = pressured.first;
+  final title = _safeBody(session.title).isNotEmpty
+      ? _safeBody(session.title)
+      : '未命名会话';
+  final gap = session.userMessageCount - session.assistantMessageCount;
+  addInsight(
+    '会话追问压力',
+    '会话「$title」用户消息比助手回复多 $gap 条，可能存在多轮追问没有充分收束。',
+    priority: 'high',
+  );
+  addAction('下次打开「$title」时，先给出阶段性总结，再逐项回应仍未解决的问题。');
+}
+
+void _reflectLatestUserTask(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  final sessions =
+      digest.sessions
+          .where(
+            (session) =>
+                session.lastMessageRole == 'user' &&
+                _safeBody(session.latestUserHighlight).isNotEmpty,
+          )
+          .toList(growable: false)
+        ..sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
+  for (final session in sessions) {
+    final latest = _safeBody(session.latestUserHighlight);
+    if (!_looksLikeActionableUserTask(latest)) continue;
+    addInsight('最新任务推进', '用户最新明确任务：$latest', priority: 'high');
+    addAction('下次对话优先推进这个最新任务：$latest');
+    return;
+  }
+}
+
 void _reflectConversationBalance(
   DreamingDigest digest,
   void Function(String category, String text, {String priority}) addInsight,
@@ -304,6 +511,26 @@ void _reflectConversationBalance(
     return;
   }
   addInsight('回应质量', '今日用户与助手轮次基本均衡，主聊天链路有连续回应。');
+}
+
+void _reflectDigestCompleteness(
+  DreamingDigest digest,
+  void Function(String category, String text, {String priority}) addInsight,
+  void Function(String text) addAction,
+) {
+  if (!digest.isTruncated) return;
+  final limit = digest.messageLimit > 0
+      ? digest.messageLimit
+      : digest.originalMessageCount;
+  final total = digest.totalOriginalMessageCount > 0
+      ? digest.totalOriginalMessageCount
+      : digest.originalMessageCount;
+  addInsight(
+    '整理完整性',
+    '来源 Dreaming 已达到本机整理上限，只覆盖最近 $limit / $total 条原始消息，后续画像和反思可能缺少当天较早线索。',
+    priority: 'high',
+  );
+  addAction('先不要把本次 Dreaming 当作当天完整画像；需要继续分段整理或补跑更高上限后再确认长期记忆。');
 }
 
 void _reflectLongSessions(
@@ -402,6 +629,78 @@ String? _firstSafe(List<String> values) {
     if (safe.isNotEmpty) return safe;
   }
   return null;
+}
+
+class _RepeatedIntentCandidate {
+  const _RepeatedIntentCandidate({
+    required this.session,
+    required this.highlight,
+  });
+
+  final DreamingSessionDigest session;
+  final String highlight;
+
+  static _RepeatedIntentCandidate? fromSession(DreamingSessionDigest session) {
+    final snippets = <String>[];
+    for (final value in [...session.highlights, session.latestUserHighlight]) {
+      final safe = _safeBody(value);
+      if (safe.isEmpty || snippets.contains(safe)) continue;
+      snippets.add(safe);
+    }
+    if (snippets.length < 2) return null;
+
+    for (var i = 0; i < snippets.length; i++) {
+      for (var j = i + 1; j < snippets.length; j++) {
+        if (_looksLikeRepeatedIntent(snippets[i], snippets[j])) {
+          return _RepeatedIntentCandidate(
+            session: session,
+            highlight: snippets[j],
+          );
+        }
+      }
+    }
+    return null;
+  }
+}
+
+bool _looksLikeRepeatedIntent(String left, String right) {
+  final a = _normalizeIntentText(left);
+  final b = _normalizeIntentText(right);
+  if (a.length < 8 || b.length < 8) return false;
+  if (a == b || a.contains(b) || b.contains(a)) return true;
+
+  final aSet = a.runes.toSet();
+  final bSet = b.runes.toSet();
+  final intersection = aSet.intersection(bSet).length;
+  final union = aSet.union(bSet).length;
+  return union > 0 && intersection / union >= 0.72;
+}
+
+bool _looksLikeActionableUserTask(String value) {
+  final normalized = _normalizeIntentText(value);
+  if (normalized.length < 6) return false;
+  const taskMarkers = [
+    '继续推进',
+    '请继续',
+    '请帮',
+    '帮我',
+    '现在帮我',
+    '修复',
+    '验证',
+    '复跑',
+    '补',
+    '实现',
+    '看下',
+    '检查',
+  ];
+  return taskMarkers.any((marker) => normalized.contains(marker));
+}
+
+String _normalizeIntentText(String value) {
+  return value.toLowerCase().replaceAll(
+    RegExp(r"[\s，。！？,.!?；;：:“”‘’'（）()\[\]【】、]+"),
+    '',
+  );
 }
 
 String _safeLabel(String value) {

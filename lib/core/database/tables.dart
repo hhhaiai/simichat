@@ -103,6 +103,50 @@ class Attachments extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class DreamingJobs extends Table {
+  TextColumn get id => text()();
+  TextColumn get dayKey => text()();
+  IntColumn get scheduledFor => integer()();
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get trigger => text().withDefault(const Constant('foreground'))();
+  IntColumn get messageLimit => integer().withDefault(const Constant(5000))();
+  IntColumn get startedAt => integer().nullable()();
+  IntColumn get finishedAt => integer().nullable()();
+  TextColumn get error => text().nullable()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class DreamingReports extends Table {
+  TextColumn get id => text()();
+  TextColumn get dayKey => text()();
+  TextColumn get jobId => text().nullable().references(
+    DreamingJobs,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
+  IntColumn get generatedAt => integer()();
+  TextColumn get markdown => text()();
+  TextColumn get digestJson => text()();
+  IntColumn get sessionCount => integer()();
+  IntColumn get originalMessageCount => integer()();
+  IntColumn get totalOriginalMessageCount => integer()();
+  IntColumn get memoryCandidateCount => integer()();
+  BoolColumn get isTruncated => boolean().withDefault(const Constant(false))();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {dayKey},
+  ];
+}
+
 class Prompts extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();

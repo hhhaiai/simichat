@@ -21,7 +21,7 @@
   - 明确说明不包含模型 API Key / 渠道密钥、不自动上传，分享前需确认目标应用可信。
   - 当前会同时导出白名单结构化本地数据：Key Points、Dreaming 报告与调度、用户画像与控制记录、外观 / 上下文 / 本地语义搜索开关、系统提示词。
   - 当前会导出 SQLite 附件表中仍可访问的非语音附件原文件，统一放入压缩包 `attachments/`，压缩包路径会脱敏和净化。
-  - 当前会导出本地数据库快照 `structured_data/local_database.json`，覆盖 sessions / messages / attachments，并扩展到文件夹、提示词、Skills、MCP、模型渠道与渠道模型等非密钥配置；不包含模型密钥、MCP headers 或本机绝对路径。
+  - 当前会导出本地数据库快照 `structured_data/local_database.json`，覆盖 sessions / messages / attachments，并扩展到文件夹、提示词、Skills、MCP、模型渠道、渠道模型、Dreaming jobs 与 Dreaming reports 等非密钥配置；不包含模型密钥、MCP headers 或本机绝对路径。
   - 可选择是否包含原始语音文件；关闭后只导出语音转文字稿件，不导出 `audio_files/`，同时数据库快照也不恢复 audio 附件记录；非语音附件仍随包导出。语音转写稿件会明确记录 `pending` / `ready` / `empty` / `failed` 状态，失败原因已脱敏。
   - 可生成 Obsidian Markdown Vault 目录，包含会话 Markdown、语音转写 Markdown、附件、索引和 Manifest，便于复制到 Obsidian。
   - 可选择已有 Obsidian Vault 并同步到 `SimiChat/` 子目录，附件会写入 `Attachments/`，会话 Markdown 附件列表会重写为 Obsidian wiki 链接。
@@ -39,7 +39,7 @@
 - `lib/core/archive/data_export_service.dart`：本地导出服务、manifest 结构、非语音附件收集 / 路径净化、自实现 ustar tar writer、gzip 压缩。
 - `lib/core/media/audio_transcript_archive.dart`：语音转写 Markdown sidecar 生成与脱敏，导出 / Obsidian 同步会直接复制这些 Markdown；状态覆盖 `pending` / `ready` / `empty` / `failed`，失败说明不包含本机绝对路径、密钥、令牌或 URL。
 - `lib/core/archive/structured_data_backup.dart`：SharedPreferences 白名单结构化数据导出 / 恢复服务，只处理允许键，不读取模型渠道密钥。
-- `lib/core/archive/local_database_snapshot.dart`：本地数据库快照导出 / 预览 / 恢复服务，覆盖 sessions / messages / attachments / folders / prompts / skills / mcp_servers / model_channels / channel_models；模型渠道密钥与 MCP headers 不导出，恢复后的模型渠道与 MCP 默认禁用。
+- `lib/core/archive/local_database_snapshot.dart`：本地数据库快照导出 / 预览 / 恢复服务，覆盖 sessions / messages / attachments / folders / prompts / skills / mcp_servers / model_channels / channel_models / dreaming_jobs / dreaming_reports；模型渠道密钥与 MCP headers 不导出，恢复后的模型渠道与 MCP 默认禁用。
 - `lib/core/archive/archive_attachment_path.dart`：附件归档相对路径净化工具。
 - `lib/core/archive/data_export_share_service.dart`：Dart 侧系统分享服务，限制只分享 `simichat-export-*.tar.gz`。
 - `lib/core/archive/local_transfer_server.dart`：电脑端本地传输服务，使用临时 `HttpServer`、一次性随机令牌、过期时间和单次下载限制。
@@ -161,6 +161,8 @@ Obsidian Vault v1 输出目录：
   - `mcp_servers`：MCP 服务非密钥元数据；不导出 `headers`，疑似含 token 的 `args` / `url` 会置空。
   - `model_channels`：模型渠道非密钥元数据；不导出 `apiKeyEncrypted`，疑似含 token 的 `base_url` 会置空。
   - `channel_models`：渠道模型名称、能力与默认标记。
+  - `dreaming_jobs`：Dreaming 整理任务状态、触发来源和运行时间。
+  - `dreaming_reports`：Dreaming 报告 Markdown、digest JSON、消息统计、记忆候选数和截断状态。
 
 当前 v1 暂不包含：
 
@@ -330,7 +332,7 @@ Obsidian Vault v1 输出目录：
 - 旧 `exports/` 文件不进入新导出包。
 - `includeAudioFiles=false` 排除原始音频测试。
 - 非语音附件原文件导出测试：复制到 `attachments/`，净化 `../` 与空格等不安全片段，跳过 audio / 缺失附件，manifest 不泄露源目录。
-- 本地数据库快照导出测试：`structured_data/local_database.json` 包含 sessions / messages / attachments / folders / prompts / skills / mcp_servers / model_channels / channel_models，附件只记录 archive_path，不记录本机绝对路径，模型密钥与 MCP headers 不入包。
+- 本地数据库快照导出测试：`structured_data/local_database.json` 包含 sessions / messages / attachments / folders / prompts / skills / mcp_servers / model_channels / channel_models / dreaming_jobs / dreaming_reports，附件只记录 archive_path，不记录本机绝对路径，模型密钥与 MCP headers 不入包。
 - manifest 不包含本机绝对路径。
 - 不包含 API Key 的 manifest 标记测试。
 - 导出确认弹窗、包含原始语音文件开关、「仅生成压缩包」「生成并系统分享」入口测试。

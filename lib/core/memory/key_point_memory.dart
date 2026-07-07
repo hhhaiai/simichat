@@ -174,6 +174,7 @@ class KeyPointExtractor {
         value.contains('计划') ||
         value.contains('打算') ||
         value.contains('希望') ||
+        _looksLikeActionableMemoryTask(value) ||
         lower.contains('todo');
   }
 
@@ -255,10 +256,36 @@ String classifyMemoryCategory(String value) {
       value.contains('希望')) {
     return 'goal';
   }
-  if (lower.contains('todo') || value.contains('任务') || value.contains('提醒')) {
+  if (lower.contains('todo') ||
+      value.contains('任务') ||
+      value.contains('提醒') ||
+      _looksLikeActionableMemoryTask(value)) {
     return 'task';
   }
   return 'note';
+}
+
+bool _looksLikeActionableMemoryTask(String value) {
+  final normalized = value.toLowerCase().replaceAll(
+    RegExp(r"[\s，。！？,.!?；;：:“”‘’'（）()\[\]【】、]+"),
+    '',
+  );
+  if (normalized.length < 6) return false;
+  const taskMarkers = [
+    '继续推进',
+    '请继续',
+    '请帮',
+    '帮我',
+    '现在帮我',
+    '修复',
+    '验证',
+    '复跑',
+    '补',
+    '实现',
+    '看下',
+    '检查',
+  ];
+  return taskMarkers.any((marker) => normalized.contains(marker));
 }
 
 List<String> extractMemoryKeywords(String value) {

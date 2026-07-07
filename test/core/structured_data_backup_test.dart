@@ -14,6 +14,10 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('key_point_memory_v1', '[{"id":"m1"}]');
       await prefs.setString('dreaming_digest_v1', '{"summary":"夜间整理"}');
+      await prefs.setString(
+        'dreaming_digest_history_v1',
+        '[{"dayKey":"2026-07-06"}]',
+      );
       await prefs.setString('user_profile_v1', '{"summary":"用户画像"}');
       await prefs.setString('assistant_reflection_v1', '{"summary":"本地反思"}');
       await prefs.setString(
@@ -38,6 +42,10 @@ void main() {
         containsPair('key_point_memory_v1', isA<Map>()),
       );
       expect(payload['values'], containsPair('dreaming_digest_v1', isA<Map>()));
+      expect(
+        payload['values'],
+        containsPair('dreaming_digest_history_v1', isA<Map>()),
+      );
       expect(payload['values'], containsPair('user_profile_v1', isA<Map>()));
       expect(
         payload['values'],
@@ -91,6 +99,10 @@ void main() {
               'type': 'string',
               'value': '[{"dayKey":"2026-07-06"}]',
             },
+            'dreaming_digest_history_v1': {
+              'type': 'string',
+              'value': '[{"dayKey":"2026-07-06"}]',
+            },
             'system_prompts': {'type': 'string', 'value': '{"s1":"prompt"}'},
             'not_allowed_key': {'type': 'string', 'value': 'skip'},
           },
@@ -99,11 +111,11 @@ void main() {
 
       final service = const StructuredDataBackupService();
       final preview = service.previewSharedPreferences(bytes);
-      expect(preview.supportedKeys, 6);
+      expect(preview.supportedKeys, 7);
       expect(preview.unsupportedKeys, 1);
 
       final first = await service.restoreSharedPreferences(bytes);
-      expect(first.restoredKeys, 5);
+      expect(first.restoredKeys, 6);
       expect(first.skippedExistingKeys, 1);
       expect(first.skippedUnsupportedKeys, 1);
       expect(prefs.getString('key_point_memory_v1'), '旧记忆');
@@ -114,6 +126,10 @@ void main() {
         prefs.getString('assistant_reflection_history_v1'),
         '[{"dayKey":"2026-07-06"}]',
       );
+      expect(
+        prefs.getString('dreaming_digest_history_v1'),
+        '[{"dayKey":"2026-07-06"}]',
+      );
       expect(prefs.getString('system_prompts'), '{"s1":"prompt"}');
       expect(prefs.containsKey('not_allowed_key'), isFalse);
 
@@ -121,7 +137,7 @@ void main() {
         bytes,
         overwriteExisting: true,
       );
-      expect(second.restoredKeys, 6);
+      expect(second.restoredKeys, 7);
       expect(second.skippedExistingKeys, 0);
       expect(second.skippedUnsupportedKeys, 1);
       expect(prefs.getString('key_point_memory_v1'), '新记忆');

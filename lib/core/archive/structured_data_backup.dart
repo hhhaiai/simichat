@@ -8,6 +8,7 @@ const kStructuredDataFormat = 'simichat.structured_preferences.v1';
 const kStructuredPreferenceKeys = <String>{
   'key_point_memory_v1',
   'dreaming_digest_v1',
+  'dreaming_digest_history_v1',
   'dreaming_schedule_v1',
   'user_profile_v1',
   'user_profile_controls_v1',

@@ -107,6 +107,31 @@ class AssistantReflectionHistoryNotifier
     await prefs.remove(kAssistantReflectionHistoryStorageKey);
   }
 
+  Future<void> removeDay(String dayKey) async {
+    await removeWhere((report) => report.dayKey == dayKey);
+  }
+
+  Future<void> removeReport({
+    required String dayKey,
+    required String sourceDigestDayKey,
+  }) async {
+    await removeWhere(
+      (report) =>
+          report.dayKey == dayKey &&
+          report.sourceDigestDayKey == sourceDigestDayKey,
+    );
+  }
+
+  Future<void> removeWhere(bool Function(ReflectionReport report) test) async {
+    await ready;
+    final updated = state
+        .where((report) => !test(report))
+        .toList(growable: false);
+    if (updated.length == state.length) return;
+    state = List.unmodifiable(updated);
+    await _save();
+  }
+
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
     if (state.isEmpty) {

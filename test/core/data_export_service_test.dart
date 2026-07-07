@@ -455,6 +455,173 @@ void main() {
         expect(snapshotText, isNot(contains(tempDir.path)));
       },
     );
+
+    test('exports and restores dreaming jobs and reports', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      const now = 1760000000000;
+      await db.dreamingDao.createJob(
+        id: 'dreaming-job-export',
+        dayKey: '2026-07-07',
+        scheduledFor: now,
+        trigger: 'foreground_due',
+        messageLimit: 5000,
+        createdAt: now - 100,
+      );
+      await db.dreamingDao.markJobCompleted(
+        'dreaming-job-export',
+        finishedAt: now + 100,
+      );
+      await db.dreamingDao.upsertReport(
+        id: 'dreaming-report-export',
+        dayKey: '2026-07-07',
+        jobId: 'dreaming-job-export',
+        generatedAt: now + 50,
+        markdown: '# Dreaming 日报 2026-07-07',
+        digestJson: '{"dayKey":"2026-07-07","hasContent":true}',
+        sessionCount: 2,
+        originalMessageCount: 12,
+        totalOriginalMessageCount: 12,
+        memoryCandidateCount: 4,
+        createdAt: now + 50,
+      );
+
+      final bytes = await LocalDatabaseSnapshotService(
+        database: db,
+        rootDirectory: tempDir,
+        now: () => DateTime.utc(2026, 7, 7),
+      ).exportSnapshot();
+
+      expect(bytes, isNotNull);
+      final snapshot = jsonDecode(utf8.decode(bytes!));
+      expect(snapshot['dreaming_jobs'], hasLength(1));
+      expect(snapshot['dreaming_reports'], hasLength(1));
+      expect(
+        snapshot['dreaming_reports'][0]['markdown'],
+        '# Dreaming 日报 2026-07-07',
+      );
+
+      await db.close();
+      final restoredDb = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(restoredDb.close);
+      await LocalDatabaseSnapshotService(
+        database: restoredDb,
+        rootDirectory: tempDir,
+      ).restoreSnapshot(bytes);
+
+      final restoredJob = await restoredDb.dreamingDao.getJob(
+        'dreaming-job-export',
+      );
+      final restoredReport = await restoredDb.dreamingDao.getReportByDay(
+        '2026-07-07',
+      );
+      expect(restoredJob, isNotNull);
+      expect(restoredJob!.status, 'completed');
+      expect(restoredReport, isNotNull);
+      expect(restoredReport!.jobId, 'dreaming-job-export');
+      expect(restoredReport.memoryCandidateCount, 4);
+    });
+
+    test(
+      'exports dreaming failed job errors without leaking secrets or paths',
+      () async {
+        final db = AppDatabase.forTesting(NativeDatabase.memory());
+        addTearDown(db.close);
+        const now = 1760000000000;
+        await db.dreamingDao.createJob(
+          id: 'dreaming-job-failed-export',
+          dayKey: '2026-07-08',
+          scheduledFor: now,
+          trigger: 'foreground_due',
+          createdAt: now - 100,
+        );
+        await db.dreamingDao.markJobFailed(
+          'dreaming-job-failed-export',
+          error:
+              'Dreaming failed Bearer raw-bearer-token sk-secret-token at /Users/sanbo/private/dreaming.log https://example.test/run?token=raw&api_key=raw-key token=loose api_key=loose-key',
+          finishedAt: now + 100,
+        );
+
+        final bytes = await LocalDatabaseSnapshotService(
+          database: db,
+          rootDirectory: tempDir,
+          now: () => DateTime.utc(2026, 7, 8),
+        ).exportSnapshot();
+
+        expect(bytes, isNotNull);
+        final snapshot = jsonDecode(utf8.decode(bytes!));
+        final job = (snapshot['dreaming_jobs'] as List).single as Map;
+        expect(job['status'], 'failed');
+        expect(job['error'], contains('Bearer ***'));
+        expect(job['error'], contains('sk-***'));
+        expect(job['error'], contains('[本机路径]'));
+        expect(job['error'], contains('[链接]'));
+        expect(job['error'], contains('token=***'));
+        expect(job['error'], contains('api_key=***'));
+
+        final snapshotText = jsonEncode(snapshot);
+        expect(snapshotText, isNot(contains('raw-bearer-token')));
+        expect(snapshotText, isNot(contains('sk-secret-token')));
+        expect(snapshotText, isNot(contains('/Users/sanbo')));
+        expect(snapshotText, isNot(contains('https://example.test')));
+        expect(snapshotText, isNot(contains('token=raw')));
+        expect(snapshotText, isNot(contains('token=loose')));
+        expect(snapshotText, isNot(contains('api_key=raw-key')));
+        expect(snapshotText, isNot(contains('api_key=loose-key')));
+      },
+    );
+
+    test(
+      'restores dreaming failed job errors as sanitized diagnostics',
+      () async {
+        final db = AppDatabase.forTesting(NativeDatabase.memory());
+        addTearDown(db.close);
+        const now = 1760000000000;
+        final snapshot = <String, Object?>{
+          'format': kLocalDatabaseSnapshotFormat,
+          'dreaming_jobs': [
+            {
+              'id': 'dreaming-job-imported-failed',
+              'day_key': '2026-07-09',
+              'scheduled_for': now,
+              'status': 'failed',
+              'trigger': 'foreground_due',
+              'message_limit': 5000,
+              'started_at': now + 1,
+              'finished_at': now + 2,
+              'error':
+                  'Imported failure Bearer raw-bearer-token sk-secret-token at /Users/sanbo/private/dreaming.log https://example.test/run?token=raw&api_key=raw-key token=loose api_key=loose-key',
+              'created_at': now,
+              'updated_at': now + 3,
+            },
+          ],
+        };
+
+        await LocalDatabaseSnapshotService(
+          database: db,
+          rootDirectory: tempDir,
+        ).restoreSnapshot(utf8.encode(jsonEncode(snapshot)));
+
+        final restored = await db.dreamingDao.getJob(
+          'dreaming-job-imported-failed',
+        );
+        expect(restored, isNotNull);
+        expect(restored!.error, contains('Bearer ***'));
+        expect(restored.error, contains('sk-***'));
+        expect(restored.error, contains('[本机路径]'));
+        expect(restored.error, contains('[链接]'));
+        expect(restored.error, contains('token=***'));
+        expect(restored.error, contains('api_key=***'));
+        expect(restored.error, isNot(contains('raw-bearer-token')));
+        expect(restored.error, isNot(contains('sk-secret-token')));
+        expect(restored.error, isNot(contains('/Users/sanbo')));
+        expect(restored.error, isNot(contains('https://example.test')));
+        expect(restored.error, isNot(contains('token=raw')));
+        expect(restored.error, isNot(contains('token=loose')));
+        expect(restored.error, isNot(contains('api_key=raw-key')));
+        expect(restored.error, isNot(contains('api_key=loose-key')));
+      },
+    );
   });
 }
 

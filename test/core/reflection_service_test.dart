@@ -68,6 +68,370 @@ void main() {
     expect(history.single.sourceDigestDayKey, '2026-07-06');
   });
 
+  test(
+    'reflection detects unanswered sessions despite balanced total turns',
+    () {
+      final now = DateTime.utc(2026, 7, 7, 22);
+      final digest = DreamingDigest(
+        day: now,
+        generatedAt: now,
+        sessionCount: 2,
+        originalMessageCount: 8,
+        userMessageCount: 4,
+        assistantMessageCount: 4,
+        sessions: [
+          DreamingSessionDigest(
+            sessionId: 'blocked-session',
+            title: '未回复的任务会话',
+            messageCount: 3,
+            userMessageCount: 3,
+            assistantMessageCount: 0,
+            highlights: const ['用户追问导出同步是否完成'],
+            firstMessageAt: now.subtract(const Duration(hours: 3)),
+            lastMessageAt: now.subtract(const Duration(hours: 2)),
+          ),
+          DreamingSessionDigest(
+            sessionId: 'answered-session',
+            title: '已回复会话',
+            messageCount: 5,
+            userMessageCount: 1,
+            assistantMessageCount: 4,
+            highlights: const ['助手已回复其他问题'],
+            firstMessageAt: now.subtract(const Duration(hours: 1)),
+            lastMessageAt: now,
+          ),
+        ],
+        memoryCandidates: const [],
+        keywords: const ['导出同步'],
+        elapsedMs: 6,
+      );
+
+      final report = ReflectionService(
+        now: () => now,
+      ).buildDailyReflection(digest: digest);
+
+      expect(report.insights.map((item) => item.category), contains('未回复会话'));
+      final unanswered = report.insights
+          .where((item) => item.category == '未回复会话')
+          .single;
+      expect(unanswered.priority, 'high');
+      expect(unanswered.text, contains('未回复的任务会话'));
+      expect(unanswered.text, contains('3 条用户消息'));
+      expect(report.actionItems.join('\n'), contains('未回复的任务会话'));
+
+      final prompt = buildAssistantReflectionSystemPrompt(report);
+      expect(prompt, isNotNull);
+      expect(prompt, contains('未回复会话'));
+      expect(prompt, contains('未回复的任务会话'));
+    },
+  );
+
+  test(
+    'reflection detects latest user message even when session has assistant replies',
+    () {
+      final now = DateTime.utc(2026, 7, 7, 22);
+      final session = DreamingSessionDigest.fromJson({
+        'sessionId': 'last-user-session',
+        'title': '最后一问待回复',
+        'messageCount': 3,
+        'userMessageCount': 2,
+        'assistantMessageCount': 1,
+        'highlights': ['用户最后追问后台调度什么时候做'],
+        'firstMessageAt': now
+            .subtract(const Duration(hours: 2))
+            .toIso8601String(),
+        'lastMessageAt': now.toIso8601String(),
+        'lastMessageRole': 'user',
+        'latestUserHighlight': '用户最后追问后台调度什么时候做',
+      });
+      final digest = DreamingDigest(
+        day: now,
+        generatedAt: now,
+        sessionCount: 1,
+        originalMessageCount: 3,
+        userMessageCount: 2,
+        assistantMessageCount: 1,
+        sessions: [session],
+        memoryCandidates: const [],
+        keywords: const ['后台调度'],
+        elapsedMs: 5,
+      );
+
+      final report = ReflectionService(
+        now: () => now,
+      ).buildDailyReflection(digest: digest);
+
+      expect(report.insights.map((item) => item.category), contains('最后一问未答'));
+      final pending = report.insights
+          .where((item) => item.category == '最后一问未答')
+          .single;
+      expect(pending.priority, 'high');
+      expect(pending.text, contains('最后一问待回复'));
+      expect(pending.text, contains('最后一条消息来自用户'));
+      expect(pending.text, contains('后台调度什么时候做'));
+      expect(report.actionItems.join('\n'), contains('最后一问待回复'));
+
+      final prompt = buildAssistantReflectionSystemPrompt(report);
+      expect(prompt, isNotNull);
+      expect(prompt, contains('最后一问未答'));
+      expect(prompt, contains('最后一问待回复'));
+    },
+  );
+
+  test(
+    'reflection detects session follow-up pressure despite balanced totals',
+    () {
+      final now = DateTime.utc(2026, 7, 7, 22);
+      final digest = DreamingDigest(
+        day: now,
+        generatedAt: now,
+        sessionCount: 2,
+        originalMessageCount: 10,
+        userMessageCount: 5,
+        assistantMessageCount: 5,
+        sessions: [
+          DreamingSessionDigest(
+            sessionId: 'follow-up-heavy',
+            title: '连续追问会话',
+            messageCount: 6,
+            userMessageCount: 4,
+            assistantMessageCount: 2,
+            highlights: const ['用户连续追问后台调度方案'],
+            firstMessageAt: now.subtract(const Duration(hours: 2)),
+            lastMessageAt: now.subtract(const Duration(minutes: 30)),
+            lastMessageRole: 'assistant',
+          ),
+          DreamingSessionDigest(
+            sessionId: 'balanced-by-other-session',
+            title: '其他已收口会话',
+            messageCount: 4,
+            userMessageCount: 1,
+            assistantMessageCount: 3,
+            highlights: const ['助手回复了其他问题'],
+            firstMessageAt: now.subtract(const Duration(hours: 1)),
+            lastMessageAt: now,
+            lastMessageRole: 'assistant',
+          ),
+        ],
+        memoryCandidates: const [],
+        keywords: const ['后台调度'],
+        elapsedMs: 5,
+      );
+
+      final report = ReflectionService(
+        now: () => now,
+      ).buildDailyReflection(digest: digest);
+
+      expect(report.insights.map((item) => item.category), contains('会话追问压力'));
+      final pressure = report.insights
+          .where((item) => item.category == '会话追问压力')
+          .single;
+      expect(pressure.priority, 'high');
+      expect(pressure.text, contains('连续追问会话'));
+      expect(pressure.text, contains('多 2 条'));
+      expect(report.actionItems.join('\n'), contains('连续追问会话'));
+
+      final prompt = buildAssistantReflectionSystemPrompt(report);
+      expect(prompt, isNotNull);
+      expect(prompt, contains('会话追问压力'));
+    },
+  );
+
+  test('reflection detects repeated unresolved user intent in one session', () {
+    final now = DateTime.utc(2026, 7, 7, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 6,
+      userMessageCount: 4,
+      assistantMessageCount: 2,
+      sessions: [
+        DreamingSessionDigest(
+          sessionId: 'repeated-question',
+          title: '后台调度追问',
+          messageCount: 6,
+          userMessageCount: 4,
+          assistantMessageCount: 2,
+          highlights: const [
+            'Dreaming 后台调度什么时候做',
+            '请明确后台调度到底什么时候做',
+            '后台调度现在是否已经有效',
+          ],
+          firstMessageAt: now.subtract(const Duration(hours: 2)),
+          lastMessageAt: now,
+          lastMessageRole: 'user',
+          latestUserHighlight: '后台调度到底什么时候做',
+        ),
+      ],
+      memoryCandidates: const [],
+      keywords: const ['后台调度'],
+      elapsedMs: 5,
+    );
+
+    final report = ReflectionService(
+      now: () => now,
+    ).buildDailyReflection(digest: digest);
+
+    expect(report.insights.map((item) => item.category), contains('重复追问'));
+    final repeated = report.insights
+        .where((item) => item.category == '重复追问')
+        .single;
+    expect(repeated.priority, 'high');
+    expect(repeated.text, contains('后台调度追问'));
+    expect(repeated.text, contains('后台调度'));
+    expect(report.actionItems.join('\n'), contains('后台调度追问'));
+    expect(report.actionItems.join('\n'), contains('明确状态'));
+
+    final prompt = buildAssistantReflectionSystemPrompt(report);
+    expect(prompt, isNotNull);
+    expect(prompt, contains('重复追问'));
+    expect(prompt, contains('后台调度'));
+  });
+
+  test('reflection promotes latest user task when profile has no task', () {
+    final now = DateTime.utc(2026, 7, 7, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 5,
+      userMessageCount: 3,
+      assistantMessageCount: 2,
+      sessions: [
+        DreamingSessionDigest(
+          sessionId: 'latest-task',
+          title: 'iOS 网络切换',
+          messageCount: 5,
+          userMessageCount: 3,
+          assistantMessageCount: 2,
+          highlights: const ['用户要求继续推进移动端真机稳定性'],
+          firstMessageAt: now.subtract(const Duration(hours: 2)),
+          lastMessageAt: now,
+          lastMessageRole: 'user',
+          latestUserHighlight: '现在继续推进 iOS 网络切换真机复跑',
+        ),
+      ],
+      memoryCandidates: const [],
+      keywords: const ['网络切换'],
+      elapsedMs: 5,
+    );
+
+    final report = ReflectionService(
+      now: () => now,
+    ).buildDailyReflection(digest: digest);
+
+    expect(report.insights.map((item) => item.category), contains('最新任务推进'));
+    final task = report.insights
+        .where((item) => item.category == '最新任务推进')
+        .single;
+    expect(task.priority, 'high');
+    expect(task.text, contains('iOS 网络切换真机复跑'));
+    expect(report.actionItems.join('\n'), contains('iOS 网络切换真机复跑'));
+
+    final prompt = buildAssistantReflectionSystemPrompt(report);
+    expect(prompt, isNotNull);
+    expect(prompt, contains('最新任务推进'));
+    expect(prompt, contains('iOS 网络切换真机复跑'));
+  });
+
+  test(
+    'reflection does not promote generic polite question as latest task',
+    () {
+      final now = DateTime.utc(2026, 7, 7, 22);
+      final digest = DreamingDigest(
+        day: now,
+        generatedAt: now,
+        sessionCount: 1,
+        originalMessageCount: 3,
+        userMessageCount: 2,
+        assistantMessageCount: 1,
+        sessions: [
+          DreamingSessionDigest(
+            sessionId: 'generic-question',
+            title: '设置说明',
+            messageCount: 3,
+            userMessageCount: 2,
+            assistantMessageCount: 1,
+            highlights: const ['用户询问设置含义'],
+            firstMessageAt: now.subtract(const Duration(hours: 1)),
+            lastMessageAt: now,
+            lastMessageRole: 'user',
+            latestUserHighlight: '请问这个设置是什么意思',
+          ),
+        ],
+        memoryCandidates: const [],
+        keywords: const ['设置'],
+        elapsedMs: 4,
+      );
+
+      final report = ReflectionService(
+        now: () => now,
+      ).buildDailyReflection(digest: digest);
+
+      expect(
+        report.insights.map((item) => item.category),
+        isNot(contains('最新任务推进')),
+      );
+      expect(report.actionItems.join('\n'), isNot(contains('请问这个设置是什么意思')));
+
+      final prompt = buildAssistantReflectionSystemPrompt(report);
+      expect(prompt, anyOf(isNull, isNot(contains('最新任务推进'))));
+    },
+  );
+
+  test(
+    'reflection warns when source dreaming is older than reflection day',
+    () {
+      final digestDay = DateTime.utc(2026, 7, 5, 22);
+      final now = DateTime.utc(2026, 7, 7, 9);
+      final digest = DreamingDigest(
+        day: digestDay,
+        generatedAt: digestDay,
+        sessionCount: 1,
+        originalMessageCount: 4,
+        userMessageCount: 2,
+        assistantMessageCount: 2,
+        sessions: [
+          DreamingSessionDigest(
+            sessionId: 's1',
+            title: '旧日报',
+            messageCount: 4,
+            userMessageCount: 2,
+            assistantMessageCount: 2,
+            highlights: const ['用户继续推进项目'],
+            firstMessageAt: digestDay.subtract(const Duration(hours: 1)),
+            lastMessageAt: digestDay,
+          ),
+        ],
+        memoryCandidates: const [],
+        keywords: const ['项目'],
+        elapsedMs: 4,
+      );
+
+      final report = ReflectionService(
+        now: () => now,
+      ).buildDailyReflection(digest: digest);
+
+      expect(report.dayKey, '2026-07-07');
+      expect(report.sourceDigestDayKey, '2026-07-05');
+      expect(report.insights.map((item) => item.category), contains('来源新鲜度'));
+      final freshness = report.insights
+          .where((item) => item.category == '来源新鲜度')
+          .single;
+      expect(freshness.priority, 'high');
+      expect(freshness.text, contains('2026-07-05'));
+      expect(freshness.text, contains('2026-07-07'));
+      expect(report.actionItems.join('\n'), contains('先运行今日 Dreaming'));
+      expect(report.toMarkdown(), contains('来源新鲜度'));
+
+      final prompt = buildAssistantReflectionSystemPrompt(report);
+      expect(prompt, isNotNull);
+      expect(prompt, contains('来源新鲜度'));
+      expect(prompt, contains('先运行今日 Dreaming'));
+    },
+  );
+
   test('reflection report skips secret-like profile signals', () {
     final now = DateTime.utc(2026, 7, 6, 22);
     final digest = DreamingDigest(
@@ -113,6 +477,64 @@ void main() {
     final markdown = report.toMarkdown();
     expect(markdown, isNot(contains('sk-test-secret')));
     expect(markdown, isNot(contains('API Key')));
+  });
+
+  test('reflection carries truncated dreaming digest into short prompt', () {
+    final now = DateTime.utc(2026, 7, 6, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 2,
+      totalOriginalMessageCount: 5,
+      userMessageCount: 2,
+      assistantMessageCount: 0,
+      sessions: [
+        DreamingSessionDigest(
+          sessionId: 's1',
+          title: '超长会话',
+          messageCount: 2,
+          userMessageCount: 2,
+          assistantMessageCount: 0,
+          highlights: const ['用户持续追加长会话稳定性要求'],
+          firstMessageAt: now.subtract(const Duration(hours: 1)),
+          lastMessageAt: now,
+        ),
+      ],
+      memoryCandidates: const [],
+      keywords: const ['长会话'],
+      elapsedMs: 5,
+      isTruncated: true,
+      messageLimit: 2,
+    );
+
+    final report = ReflectionService(
+      now: () => now,
+    ).buildDailyReflection(digest: digest);
+
+    expect(report.sourceDigestIsTruncated, isTrue);
+    expect(report.sourceDigestMessageLimit, 2);
+    expect(report.sourceDigestTotalOriginalMessageCount, 5);
+    expect(report.insights.map((item) => item.category), contains('整理完整性'));
+    expect(
+      report.insights.where((item) => item.category == '整理完整性').single.priority,
+      'high',
+    );
+    expect(report.actionItems.join('\n'), contains('不要把本次 Dreaming 当作当天完整画像'));
+    expect(report.toMarkdown(), contains('不代表当天全部对话'));
+    expect(report.toMarkdown(), contains('2 / 5'));
+
+    final reloaded = decodeReflectionReport(encodeReflectionReport(report));
+    expect(reloaded, isNotNull);
+    expect(reloaded!.sourceDigestIsTruncated, isTrue);
+    expect(reloaded.sourceDigestMessageLimit, 2);
+    expect(reloaded.sourceDigestTotalOriginalMessageCount, 5);
+
+    final prompt = buildAssistantReflectionSystemPrompt(report);
+    expect(prompt, isNotNull);
+    expect(prompt, contains('整理完整性'));
+    expect(prompt, contains('2 / 5'));
+    expect(prompt, contains('不要把本次 Dreaming 当作当天完整画像'));
   });
 
   test('reflection system prompt is bounded and redacted', () {

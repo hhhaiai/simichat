@@ -10,6 +10,7 @@ import 'dao/message_dao.dart';
 import 'dao/channel_dao.dart';
 import 'dao/folder_dao.dart';
 import 'dao/attachment_dao.dart';
+import 'dao/dreaming_dao.dart';
 import 'dao/prompt_dao.dart';
 import 'dao/mcp_dao.dart';
 import 'dao/skill_dao.dart';
@@ -24,6 +25,8 @@ part 'app_database.g.dart';
     Sessions,
     Messages,
     Attachments,
+    DreamingJobs,
+    DreamingReports,
     Prompts,
     McpServers,
     Skills,
@@ -34,6 +37,7 @@ part 'app_database.g.dart';
     ChannelDao,
     FolderDao,
     AttachmentDao,
+    DreamingDao,
     PromptDao,
     McpDao,
     SkillDao,
@@ -44,7 +48,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -85,6 +89,10 @@ class AppDatabase extends _$AppDatabase {
 
         await customStatement('PRAGMA foreign_keys = ON');
       }
+      if (from < 7) {
+        await m.createTable(dreamingJobs);
+        await m.createTable(dreamingReports);
+      }
     },
   );
 }
@@ -94,8 +102,11 @@ LazyDatabase _openConnection() {
     final dir = await getApplicationDocumentsDirectory();
     final file = File(p.join(dir.path, 'ai_chat', 'db.sqlite'));
     file.parent.createSync(recursive: true);
-    return NativeDatabase.createInBackground(file, setup: (db) {
-      db.execute('PRAGMA foreign_keys = ON');
-    });
+    return NativeDatabase.createInBackground(
+      file,
+      setup: (db) {
+        db.execute('PRAGMA foreign_keys = ON');
+      },
+    );
   });
 }
