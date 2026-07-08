@@ -61,6 +61,114 @@
 
 ---
 
+## 2026-07-08 已落地切片：App 内建 MCP Runtime v1
+
+本轮先把移动端必须可直接运行的 MCP 基线落到代码里：
+
+- 新增 `app_native` 传输：`lib/core/mcp/mcp_client.dart` 内的 `AppNativeMcpTransport` 直接在 App 进程内响应 MCP JSON-RPC，不启动 `Process.start(...)`，不依赖宿主机 `node` / `npx` / `python`。
+- 内建工具：`simichat.now`、`simichat.runtime_info`；内建资源：`simichat://runtime/info`。
+- `McpManager` 已支持 `app_native`，并提供 `ready` Future 便于测试和后续启动门禁。
+- MCP 市场首位新增 `SimiChat 内建工具`，安装后会自动连接；设置页新增并默认选择 `App 内建（移动端/PC 直接运行）`。
+- 传统 `stdio` / `SSE` 仍保留为 PC 高级连接，但不再是移动端可运行 MCP 的默认路径；Node MCP 生态后续应走桌面 Runtime/容器侧车，而不是让移动端或 GUI 直接依赖宿主机环境。
+
+验证：
+
+```bash
+flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_app_native_transport_test.dart -r expanded
+flutter --no-version-check analyze --no-pub
+flutter --no-version-check test --no-pub --no-test-assets -r expanded
+```
+
+覆盖内容：内建传输初始化、工具调用、时区参数、市场首项为移动端可运行内建 MCP、`McpManager` 无 stdio command 连接内建 MCP；随后 analyzer 无问题，全量 Flutter 测试 461 项通过。
+
+---
+
+
+
+
+## 2026-07-09 已落地切片：容器内建工具与权限边界 v1
+
+本轮继续把 PC Node 容器 Runtime 从“状态 / echo 验证”推进到可用工具：
+
+- 新增容器内建工具：`simichat.fs_list`、`simichat.fs_read_text`、`simichat.fetch_text`。
+- 文件工具只允许访问 `MCP_RUNTIME_WORKSPACE_ROOT` 内的相对路径，拒绝绝对路径和越界路径；文本读取受 `MCP_RUNTIME_MAX_TEXT_BYTES` 限制。
+- Fetch 工具只允许 HTTP(S) GET，返回文本摘要并受同一最大字节限制。
+- 这些能力在容器内由 Node 直接提供，替代默认路径里对宿主机 `npx` filesystem/fetch 类 MCP 的依赖；旧 stdio / npx 条目仍作为高级手动配置保留，但默认不自动启用。
+- `scripts/mcp_runtime_container.sh smoke` 已扩展验证 `tools/list`、`simichat.echo`、`simichat.fs_list` 和 `simichat.fetch_text`。
+
+真实容器验证：
+
+```bash
+SIMICHAT_MCP_RUNTIME_BASE_IMAGE=ghcr.io/basketikun/infinite-canvas:latest \
+SIMICHAT_MCP_RUNTIME_IMAGE=simichat-mcp-runtime:smoke \
+scripts/mcp_runtime_container.sh smoke
+# SMOKE_HEALTH_OK
+# SMOKE_TOOL_LIST_OK
+# SMOKE_TOOL_CALL_OK
+# SMOKE_FS_TOOL_OK
+# SMOKE_FETCH_TOOL_OK
+```
+
+复查 `scripts/mcp_runtime_container.sh status` 显示未留下运行容器，临时 smoke 镜像已清理。
+
+## 2026-07-09 已落地切片：App 侧 MCP Runtime 管理入口 v1
+
+本轮把 PC 容器 Runtime 从“只有脚本和市场 SSE 条目”继续推进到 App 可见 / 可操作的管理入口：
+
+- 新增 `lib/shared/providers/mcp_runtime_provider.dart`：`McpRuntimeController` 管理 PC Node 容器 Runtime 的 `status/start/stop/smoke`，并在移动端明确返回 unsupported 状态，提示移动端使用 App 内建 MCP Runtime；桌面打包时会从 Flutter assets 把 Runtime 脚本 / Dockerfile / Node server 写入应用支持目录后再执行，避免依赖源码仓库路径。
+- 设置页 MCP 区新增“MCP Runtime（内建 / PC 容器）”入口：移动端展示 App 内建边界；PC 端可刷新状态、启动容器、停止容器和运行 smoke。
+- 该入口优先调用开发仓库中的 `scripts/mcp_runtime_container.sh`；打包后使用随 App 资产释放到本机应用支持目录的同一套脚本与容器文件。脚本仍不调用宿主机 `node/npm/npx`；Node MCP 继续走容器侧车 SSE。
+- 新增 `test/core/mcp_runtime_provider_test.dart` 与 `test/shared/settings_page_mcp_runtime_test.dart` 覆盖移动端边界、PC lifecycle 输出解析、失败诊断和设置页可见入口。
+
+验证：
+
+```bash
+flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_runtime_provider_test.dart test/shared/settings_page_mcp_runtime_test.dart -r expanded
+flutter --no-version-check test --no-pub test/core/mcp_runtime_container_manifest_test.dart -r expanded
+flutter --no-version-check analyze --no-pub
+flutter --no-version-check test --no-pub --no-test-assets -r expanded
+```
+
+## 2026-07-08 已落地切片：PC Node MCP 容器侧车 v1
+
+本轮继续补 PC 端 Node MCP 的自依赖路径：
+
+- 新增 `tools/mcp_runtime/container/Dockerfile`，默认基于 `node:22-alpine`，并支持 `SIMICHAT_MCP_RUNTIME_BASE_IMAGE` 切换到企业镜像源 / 预拉取 Node 镜像；Node 随容器分发，不读取宿主机 `node` / `npm` / `npx`。
+- 新增 `tools/mcp_runtime/container/runtime-server.mjs`，提供 MCP SSE 兼容端点：`/mcp/sse/:serverId` 与 `/mcp/messages/:connectionId`。
+- 新增内建容器工具：`simichat.node_runtime_info`、`simichat.echo`；健康检查：`/health`。
+- 新增 `scripts/mcp_runtime_container.sh`，支持 `build/start/stop/restart/status/logs/smoke`，自动选择 Docker / Podman，但脚本本身不调用宿主机 Node/npm/npx；`smoke` 会启动容器并验证 `/health`、MCP SSE `tools/list` 和 `simichat.echo` 调用链路。
+- 新增 `docs/runtime-manifest.example.json`，同时记录移动端 `app_native` 和 PC `node-container` 两条自依赖路径。
+- MCP 市场新增 `SimiChat Node 容器 Runtime`，默认连接 `http://127.0.0.1:37651/mcp/sse/simichat-node`。
+- MCP 市场旧 `stdio` / `npx` 条目安装后默认禁用，不再自动连接或弹出直接连接动作，避免移动端 / 普通 PC 路径继续依赖宿主机命令；需要旧 stdio 的用户只能作为高级手动配置处理，默认推荐容器 Runtime。
+
+验证：
+
+```bash
+flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_runtime_container_manifest_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_sse_transport_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_app_native_transport_test.dart test/core/mcp_runtime_container_manifest_test.dart test/core/mcp_sse_transport_test.dart -r expanded
+flutter --no-version-check analyze --no-pub
+scripts/mcp_runtime_container.sh smoke
+```
+
+覆盖内容：Dockerfile 自带 Node、runtime server 暴露 MCP SSE / message / tools 调用入口、容器脚本 `bash -n` 通过且不调用宿主机 Node/npm/npx、市场项和 manifest 均指向 PC 容器侧车；同时补 `SseTransport` 相对 `/mcp/messages/...` endpoint 回归，确保容器 SSE 返回相对地址时客户端会按 SSE 源地址解析为 `http://127.0.0.1:37651/mcp/messages/...` 后再 POST。
+
+本轮已启动 OrbStack / Docker daemon，并新增 `scripts/mcp_runtime_container.sh smoke` 作为真实容器闭环自检入口。默认 Docker Hub 拉取 `node:22-alpine` 在当前网络下仍遇到 `Bad Gateway`，因此脚本新增 `SIMICHAT_MCP_RUNTIME_BASE_IMAGE` 镜像源 / 预拉取基镜像覆盖；使用本机已存在且自带 Node 22 的镜像验证通过：
+
+```bash
+SIMICHAT_MCP_RUNTIME_BASE_IMAGE=ghcr.io/basketikun/infinite-canvas:latest \
+SIMICHAT_MCP_RUNTIME_IMAGE=simichat-mcp-runtime:smoke \
+scripts/mcp_runtime_container.sh smoke
+# SimiChat MCP runtime started: http://127.0.0.1:37651/mcp/sse/simichat-node
+# SMOKE_HEALTH_OK
+# SMOKE_TOOL_LIST_OK
+# SMOKE_TOOL_CALL_OK
+```
+
+验证后复查 `scripts/mcp_runtime_container.sh status`，未留下运行容器；临时 `simichat-mcp-runtime:smoke` 镜像已清理。
+
+---
+
 ## 总体架构
 
 ```text
@@ -425,8 +533,9 @@ Runtime 需要独立日志：
    - 可保留为“客户端视角状态层”
 
 2. `lib/core/mcp/mcp_client.dart`
-   - 已有 stdio / SSE 协议桥接雏形
-   - 可下沉到 Runtime 端使用
+   - 已有 `app_native` / stdio / SSE 协议桥接
+   - `app_native` 是移动端与 PC 端共同可用的自依赖基线
+   - stdio 后续可下沉到 Runtime/容器侧车端使用
 
 3. `lib/shared/providers/chat_provider.dart`
    - 已有 tool call 解析与调用闭环
@@ -436,13 +545,13 @@ Runtime 需要独立日志：
    - 已有 `mcp_servers`
    - 后续建议增加 runtime 状态/日志/任务表
 
-### 当前必须重构的部分
+### 当前必须继续重构的部分
 
-1. **UI 直接管理 MCP 生命周期**
-   - 应改为调用 Runtime API
+1. **外部型 MCP 的生命周期仍在客户端侧**
+   - `app_native` 已经是 App 内建自依赖路径；外部 stdio/SSE 仍应继续改为调用 Runtime API
 
-2. **桌面端直接 `Process.start(...)`**
-   - 应改为 Runtime 统一管理
+2. **桌面端 stdio 仍可直接 `Process.start(...)`**
+   - 短期保留为 PC 高级连接兼容；Node/Python 生态后续应改为 Runtime/容器侧车统一管理
 
 3. **连接状态与安装状态耦合**
    - 需要拆成：installed / running / healthy / failed
@@ -563,16 +672,17 @@ Runtime 需要独立日志：
 
 不是再继续补零碎兼容，而是开始一个明确实现切片：
 
-### 推荐第一实现切片
+### 推荐下一实现切片
 
-> **MCP Runtime Manifest + Runtime 状态表 + Runtime API 抽象**
+> **Runtime 状态表 + App 自动管理容器生命周期 + 第三方 MCP 包接入**
 
-最小交付包括：
+当前 `app_native` 已满足移动端直接运行的最低基线，`simichat-node-container` 已提供 PC 端 Node 容器侧车基线。下一刀应把“手动脚本启动容器”推进为 App 可观察 / 可管理的 Runtime：
 
-1. `docs/runtime-manifest.example.json`
-2. `mcp_runtime_instances` 表
-3. Runtime 状态 Provider
-4. 当前 `mcp_provider.dart` 改成“调用 runtime client”
+1. `mcp_runtime_instances` 表
+2. Runtime 状态 Provider
+3. 设置页 Runtime 状态 / 启动 / 停止 / 日志入口
+4. 第三方 Node MCP 包白名单安装到容器镜像或容器 volume 中，不读取宿主机 `npx`
+5. 当前 `mcp_provider.dart` 对外部型 MCP 改成“调用 runtime client / runtime-managed SSE”
 
 这会是 `simichat` 从“高级客户端”迈向“团队级内部 AI 调度工具”的第一道真正分水岭。
 

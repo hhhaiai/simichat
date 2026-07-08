@@ -180,7 +180,7 @@ class Skills extends Table {
 class McpServers extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
-  TextColumn get transport => text()(); // 'stdio' | 'sse'
+  TextColumn get transport => text()(); // 'app_native' | 'stdio' | 'sse'
   TextColumn get command => text().nullable()();
   TextColumn get args => text().nullable()(); // JSON array string
   TextColumn get url => text().nullable()();

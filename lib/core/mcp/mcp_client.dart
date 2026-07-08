@@ -4,8 +4,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+const kMcpTransportAppNative = 'app_native';
+const kMcpTransportStdio = 'stdio';
+const kMcpTransportSse = 'sse';
+
+const kAppNativeMcpServerId = 'simichat-local';
+
 /// MCP (Model Context Protocol) 客户端
-/// 支持 stdio 和 SSE 两种传输方式
+/// 支持 App 内建、stdio 和 SSE 传输方式
 class McpClient {
   final String name;
   final McpTransport _transport;
@@ -26,7 +32,7 @@ class McpClient {
   bool get isInitialized => _initialized;
 
   McpClient({required this.name, required McpTransport transport})
-      : _transport = transport;
+    : _transport = transport;
 
   /// 初始化连接
   Future<void> initialize() async {
@@ -35,14 +41,8 @@ class McpClient {
     // 发送 initialize 请求
     await _sendRequest('initialize', {
       'protocolVersion': '2024-11-05',
-      'capabilities': {
-        'tools': {},
-        'resources': {},
-      },
-      'clientInfo': {
-        'name': 'ai_chat_app',
-        'version': '1.0.0',
-      },
+      'capabilities': {'tools': {}, 'resources': {}},
+      'clientInfo': {'name': 'ai_chat_app', 'version': '1.0.0'},
     });
 
     _initialized = true;
@@ -78,7 +78,10 @@ class McpClient {
   }
 
   /// 调用工具
-  Future<McpToolResult> callTool(String name, Map<String, dynamic> arguments) async {
+  Future<McpToolResult> callTool(
+    String name,
+    Map<String, dynamic> arguments,
+  ) async {
     final result = await _sendRequest('tools/call', {
       'name': name,
       'arguments': arguments,
@@ -90,7 +93,9 @@ class McpClient {
   Future<McpResourceContent> readResource(String uri) async {
     final result = await _sendRequest('resources/read', {'uri': uri});
     final contents = result['contents'] as List? ?? [];
-    if (contents.isEmpty) return McpResourceContent(text: '', mimeType: 'text/plain');
+    if (contents.isEmpty) {
+      return McpResourceContent(text: '', mimeType: 'text/plain');
+    }
     return McpResourceContent.fromJson(contents.first);
   }
 
@@ -112,24 +117,27 @@ class McpClient {
 
     await _transport.send(message);
 
-    return completer.future.timeout(timeout, onTimeout: () {
-      _pendingRequests.remove(id);
-      throw TimeoutException('MCP request timed out: $method');
-    });
+    return completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        _pendingRequests.remove(id);
+        throw TimeoutException('MCP request timed out: $method');
+      },
+    );
   }
 
   void _sendNotification(String method, Map<String, dynamic> params) {
-    unawaited(_transport.send({
-      'jsonrpc': '2.0',
-      'method': method,
-      'params': params,
-    }));
+    unawaited(
+      _transport.send({'jsonrpc': '2.0', 'method': method, 'params': params}),
+    );
   }
 
   void _onMessage(Map<String, dynamic> message) {
     // JSON-RPC 2.0: id 可以是 int 或 String
     final rawId = message['id'];
-    final id = rawId is int ? rawId : (rawId is String ? int.tryParse(rawId) : null);
+    final id = rawId is int
+        ? rawId
+        : (rawId is String ? int.tryParse(rawId) : null);
     if (id != null && _pendingRequests.containsKey(id)) {
       final error = message['error'];
       if (error != null) {
@@ -137,7 +145,9 @@ class McpClient {
           Exception('MCP error: ${error['message']}'),
         );
       } else {
-        _pendingRequests[id]!.complete(message['result'] as Map<String, dynamic>? ?? {});
+        _pendingRequests[id]!.complete(
+          message['result'] as Map<String, dynamic>? ?? {},
+        );
       }
       _pendingRequests.remove(id);
     }
@@ -164,6 +174,209 @@ abstract class McpTransport {
   Future<void> send(Map<String, dynamic> message);
 }
 
+/// App 内建传输：不启动外部进程，不依赖宿主机 node / npx / python。
+///
+/// 这是移动端默认可用的 MCP Runtime 基线；PC 端也可用同一套能力。
+class AppNativeMcpTransport implements McpTransport {
+  AppNativeMcpTransport({this.serverId = kAppNativeMcpServerId});
+
+  final String serverId;
+  void Function(Map<String, dynamic>)? _onMessage;
+  bool _connected = false;
+
+  @override
+  Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
+    _onMessage = onMessage;
+    _connected = true;
+  }
+
+  @override
+  Future<void> disconnect() async {
+    _connected = false;
+    _onMessage = null;
+  }
+
+  @override
+  Future<void> send(Map<String, dynamic> message) async {
+    if (!_connected || _onMessage == null) return;
+
+    final id = message['id'];
+    if (id == null) return; // notifications/initialized 等通知无需响应
+
+    final method = message['method'] as String?;
+    final params =
+        (message['params'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+
+    try {
+      final result = await _handleRequest(method, params);
+      _onMessage!({'jsonrpc': '2.0', 'id': id, 'result': result});
+    } catch (e) {
+      _onMessage!({
+        'jsonrpc': '2.0',
+        'id': id,
+        'error': {'code': -32603, 'message': e.toString()},
+      });
+    }
+  }
+
+  Future<Map<String, dynamic>> _handleRequest(
+    String? method,
+    Map<String, dynamic> params,
+  ) async {
+    switch (method) {
+      case 'initialize':
+        return {
+          'protocolVersion': '2024-11-05',
+          'capabilities': {'tools': {}, 'resources': {}},
+          'serverInfo': {'name': 'SimiChat App Native MCP', 'version': '1.0.0'},
+        };
+      case 'tools/list':
+        return {'tools': _tools()};
+      case 'tools/call':
+        return _callTool(params);
+      case 'resources/list':
+        return {'resources': _resources()};
+      case 'resources/read':
+        return _readResource(params);
+      default:
+        throw UnsupportedError('Unsupported app-native MCP method: $method');
+    }
+  }
+
+  List<Map<String, dynamic>> _tools() {
+    return [
+      {
+        'name': 'simichat.now',
+        'description': '返回当前设备时间。无需 Node、npx 或外部 MCP 进程。',
+        'inputSchema': {
+          'type': 'object',
+          'properties': {
+            'timezoneOffsetMinutes': {
+              'type': 'integer',
+              'description': '可选。按指定 UTC 偏移分钟数换算时间。',
+            },
+          },
+        },
+      },
+      {
+        'name': 'simichat.runtime_info',
+        'description': '返回当前 SimiChat 内建 MCP Runtime 状态。',
+        'inputSchema': {'type': 'object', 'properties': {}},
+      },
+    ];
+  }
+
+  List<Map<String, dynamic>> _resources() {
+    return [
+      {
+        'uri': 'simichat://runtime/info',
+        'name': 'SimiChat 内建 MCP Runtime',
+        'description': 'App 内建、自依赖 MCP Runtime 基线说明。',
+        'mimeType': 'application/json',
+      },
+    ];
+  }
+
+  Map<String, dynamic> _callTool(Map<String, dynamic> params) {
+    final name = params['name'] as String?;
+    final arguments =
+        (params['arguments'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+
+    switch (name) {
+      case 'simichat.now':
+        final now = DateTime.now();
+        final offset = arguments['timezoneOffsetMinutes'];
+        final converted = offset is int
+            ? now.toUtc().add(Duration(minutes: offset))
+            : now;
+        final iso8601 = offset is int
+            ? '${converted.toIso8601String().replaceFirst(RegExp(r'Z$'), '')}${_formatOffset(offset)}'
+            : converted.toIso8601String();
+        return _textResult({
+          'iso8601': iso8601,
+          'timezoneName': offset is int
+              ? 'UTC${_formatOffset(offset)}'
+              : now.timeZoneName,
+          'timezoneOffsetMinutes': offset is int
+              ? offset
+              : now.timeZoneOffset.inMinutes,
+          'runtime': kMcpTransportAppNative,
+        });
+      case 'simichat.runtime_info':
+        return _textResult(_runtimeInfo());
+      default:
+        return {
+          'content': [
+            {'type': 'text', 'text': '未知内建 MCP 工具: $name'},
+          ],
+          'isError': true,
+        };
+    }
+  }
+
+  Map<String, dynamic> _readResource(Map<String, dynamic> params) {
+    final uri = params['uri'] as String?;
+    if (uri != 'simichat://runtime/info') {
+      return {
+        'contents': [
+          {
+            'uri': uri ?? '',
+            'mimeType': 'text/plain',
+            'text': '未知内建 MCP 资源: $uri',
+          },
+        ],
+      };
+    }
+
+    return {
+      'contents': [
+        {
+          'uri': uri,
+          'mimeType': 'application/json',
+          'text': const JsonEncoder.withIndent('  ').convert(_runtimeInfo()),
+        },
+      ],
+    };
+  }
+
+  Map<String, dynamic> _runtimeInfo() {
+    return {
+      'serverId': serverId,
+      'transport': kMcpTransportAppNative,
+      'dependencyMode': 'in_app',
+      'externalProcess': false,
+      'requiresNode': false,
+      'requiresNpx': false,
+      'requiresPython': false,
+      'mobileReady': true,
+      'desktopReady': true,
+      'tools': _tools().map((tool) => tool['name']).toList(),
+    };
+  }
+
+  Map<String, dynamic> _textResult(Object payload) {
+    return {
+      'content': [
+        {
+          'type': 'text',
+          'text': const JsonEncoder.withIndent('  ').convert(payload),
+        },
+      ],
+      'isError': false,
+    };
+  }
+
+  String _formatOffset(int minutes) {
+    final sign = minutes >= 0 ? '+' : '-';
+    final absMinutes = minutes.abs();
+    final hours = (absMinutes ~/ 60).toString().padLeft(2, '0');
+    final mins = (absMinutes % 60).toString().padLeft(2, '0');
+    return '$sign$hours:$mins';
+  }
+}
+
 /// stdio 传输（本地进程）
 class StdioTransport implements McpTransport {
   final String command;
@@ -188,22 +401,22 @@ class StdioTransport implements McpTransport {
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      if (line.trim().isEmpty) return;
-      try {
-        final message = jsonDecode(line) as Map<String, dynamic>;
-        onMessage(message);
-      } catch (e) {
-        debugPrint('[MCP Stdio] Parse error: $e');
-      }
-    });
+          if (line.trim().isEmpty) return;
+          try {
+            final message = jsonDecode(line) as Map<String, dynamic>;
+            onMessage(message);
+          } catch (e) {
+            debugPrint('[MCP Stdio] Parse error: $e');
+          }
+        });
     _stderrSub = _process!.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
-      if (line.trim().isNotEmpty) {
-        debugPrint('[MCP Stdio stderr] $line');
-      }
-    });
+          if (line.trim().isNotEmpty) {
+            debugPrint('[MCP Stdio stderr] $line');
+          }
+        });
   }
 
   @override
@@ -245,9 +458,7 @@ class StdioTransport implements McpTransport {
 
     final merged = {
       ..._candidateSearchDirs(),
-      ...existing
-          .split(separator)
-          .where((entry) => entry.trim().isNotEmpty),
+      ...existing.split(separator).where((entry) => entry.trim().isNotEmpty),
     }.join(separator);
 
     env[pathKey] = merged;
@@ -256,7 +467,8 @@ class StdioTransport implements McpTransport {
 
   List<String> _candidateSearchDirs() {
     final separator = Platform.isWindows ? ';' : ':';
-    final pathEnv = Platform.environment[Platform.isWindows ? 'Path' : 'PATH'] ?? '';
+    final pathEnv =
+        Platform.environment[Platform.isWindows ? 'Path' : 'PATH'] ?? '';
     final searchDirs = <String>{
       ...pathEnv.split(separator).where((p) => p.trim().isNotEmpty),
     };
@@ -360,7 +572,9 @@ class SseTransport implements McpTransport {
       onDone: () {
         debugPrint('[MCP SSE] Stream closed');
         if (!endpointCompleter.isCompleted) {
-          endpointCompleter.completeError(Exception('SSE stream closed before endpoint received'));
+          endpointCompleter.completeError(
+            Exception('SSE stream closed before endpoint received'),
+          );
         }
       },
     );
@@ -387,12 +601,14 @@ class SseTransport implements McpTransport {
     final body = jsonEncode(message);
     try {
       final response = await _client!.post(
-        Uri.parse(_messageEndpoint!),
+        Uri.parse(url).resolve(_messageEndpoint!),
         headers: {'Content-Type': 'application/json', ...headers},
         body: body,
       );
       if (response.statusCode >= 400) {
-        debugPrint('[MCP SSE] POST failed: ${response.statusCode} ${response.body}');
+        debugPrint(
+          '[MCP SSE] POST failed: ${response.statusCode} ${response.body}',
+        );
       }
     } catch (e) {
       debugPrint('[MCP SSE] POST error: $e');
@@ -424,7 +640,12 @@ class McpResource {
   final String? description;
   final String? mimeType;
 
-  const McpResource({required this.uri, this.name, this.description, this.mimeType});
+  const McpResource({
+    required this.uri,
+    this.name,
+    this.description,
+    this.mimeType,
+  });
 
   factory McpResource.fromJson(Map<String, dynamic> json) {
     return McpResource(
@@ -458,7 +679,12 @@ class McpToolContent {
   final String? mimeType;
   final String? data;
 
-  const McpToolContent({required this.type, this.text, this.mimeType, this.data});
+  const McpToolContent({
+    required this.type,
+    this.text,
+    this.mimeType,
+    this.data,
+  });
 
   factory McpToolContent.fromJson(Map<String, dynamic> json) {
     return McpToolContent(

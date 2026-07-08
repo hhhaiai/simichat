@@ -30,6 +30,7 @@ import '../../core/memory/dreaming_schedule.dart';
 import '../../core/memory/reflection_service.dart';
 import '../../core/memory/user_profile.dart';
 import '../../core/media/speech_provider_preset.dart';
+import '../../core/mcp/mcp_client.dart';
 import '../../core/relay/openai_compatible_relay_server.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/audio_transcription_provider.dart';
@@ -38,6 +39,7 @@ import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/conversation_archive_provider.dart';
 import '../../shared/providers/dreaming_provider.dart';
 import '../../shared/providers/mcp_provider.dart';
+import '../../shared/providers/mcp_runtime_provider.dart';
 import '../../shared/providers/model_test_history_provider.dart';
 import '../../shared/providers/openai_relay_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
@@ -5154,6 +5156,147 @@ class SettingsPage extends ConsumerWidget {
 
   // ====== MCP 服务器 ======
 
+  Widget _buildMcpRuntimeTile(BuildContext context, WidgetRef ref) {
+    final runtime = ref.watch(mcpRuntimeControllerProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final running = runtime.isRunning;
+    final subtitle = runtime.supportsContainerRuntime
+        ? '${runtime.message}\nPC Node MCP 通过本地容器侧车运行；移动端继续使用 App 内建 Runtime。'
+        : '${runtime.message}\nApp 内建 MCP 可直接在移动端运行。';
+
+    return ListTile(
+      leading: Icon(
+        running ? Icons.developer_board : Icons.developer_board_outlined,
+        color: running ? Colors.green[700] : scheme.primary,
+      ),
+      title: const Text('MCP Runtime（内建 / PC 容器）'),
+      subtitle: Text(
+        subtitle,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 12),
+      ),
+      isThreeLine: true,
+      trailing: runtime.isBusy
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.chevron_right),
+      onTap: () => _showMcpRuntimeDialog(context, ref),
+    );
+  }
+
+  void _showMcpRuntimeDialog(BuildContext context, WidgetRef ref) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Consumer(
+        builder: (ctx, dialogRef, _) {
+          final runtime = dialogRef.watch(mcpRuntimeControllerProvider);
+          final controller = dialogRef.read(
+            mcpRuntimeControllerProvider.notifier,
+          );
+          final output = runtime.lastOutput.trim();
+          return AlertDialog(
+            title: const Text('MCP Runtime'),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      runtime.message,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: runtime.status == McpRuntimeStatus.error
+                            ? Theme.of(ctx).colorScheme.error
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '移动端默认使用 App 内建 MCP Runtime，不启动外部进程；PC 端需要 Node MCP 时使用容器侧车，通过本地 SSE 接入。',
+                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      'Health: ${runtime.healthUrl}\nMCP SSE: ${runtime.sseUrl}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (!runtime.supportsContainerRuntime) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        '当前平台无需也不支持启动 Docker / Podman 容器；请安装并启用「SimiChat 内建工具」。',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
+                    if (output.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        '最近输出',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            ctx,
+                          ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SelectableText(
+                          output,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: runtime.isBusy ? null : () => Navigator.pop(ctx),
+                child: const Text('关闭'),
+              ),
+              TextButton(
+                onPressed: runtime.isBusy
+                    ? null
+                    : () => controller.refreshStatus(),
+                child: const Text('刷新'),
+              ),
+              if (runtime.supportsContainerRuntime) ...[
+                TextButton(
+                  onPressed: runtime.isBusy ? null : () => controller.stop(),
+                  child: const Text('停止'),
+                ),
+                TextButton(
+                  onPressed: runtime.isBusy ? null : () => controller.smoke(),
+                  child: const Text('自检'),
+                ),
+                FilledButton(
+                  onPressed: runtime.isBusy ? null : () => controller.start(),
+                  child: const Text('启动容器'),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildMcpSection(BuildContext context, WidgetRef ref) {
     final mcpServers = ref.watch(mcpManagerProvider);
     final manager = ref.read(mcpManagerProvider.notifier);
@@ -5161,16 +5304,23 @@ class SettingsPage extends ConsumerWidget {
 
     return Column(
       children: [
+        _buildMcpRuntimeTile(context, ref),
         for (final server in mcpServers)
           ListTile(
             leading: Icon(
-              server.transport == 'stdio' ? Icons.terminal : Icons.cloud,
+              server.transport == kMcpTransportAppNative
+                  ? Icons.phone_iphone
+                  : server.transport == kMcpTransportStdio
+                  ? Icons.terminal
+                  : Icons.cloud,
               size: 20,
             ),
             title: Text(server.name),
             subtitle: Text(
               [
-                server.transport == 'stdio'
+                server.transport == kMcpTransportAppNative
+                    ? 'App 内建 · 无需 Node/npx/Python · 移动端/PC 直接运行'
+                    : server.transport == kMcpTransportStdio
                     ? '${server.command} ${(server.args ?? []).join(' ')}'
                     : server.url ?? '',
                 if (manager.isConnected(server.id))
@@ -5244,7 +5394,7 @@ class SettingsPage extends ConsumerWidget {
     final commandCtrl = TextEditingController();
     final argsCtrl = TextEditingController();
     final urlCtrl = TextEditingController();
-    String transport = 'stdio';
+    String transport = kMcpTransportAppNative;
 
     showDialog(
       context: context,
@@ -5268,15 +5418,28 @@ class SettingsPage extends ConsumerWidget {
                   decoration: const InputDecoration(labelText: '传输方式'),
                   items: const [
                     DropdownMenuItem(
-                      value: 'stdio',
-                      child: Text('Stdio（本地进程）'),
+                      value: kMcpTransportAppNative,
+                      child: Text('App 内建（移动端/PC 直接运行）'),
                     ),
-                    DropdownMenuItem(value: 'sse', child: Text('SSE（远程服务）')),
+                    DropdownMenuItem(
+                      value: kMcpTransportStdio,
+                      child: Text('Stdio（PC 高级 / Runtime）'),
+                    ),
+                    DropdownMenuItem(
+                      value: kMcpTransportSse,
+                      child: Text('SSE（远程服务）'),
+                    ),
                   ],
                   onChanged: (v) => setDialogState(() => transport = v!),
                 ),
                 const SizedBox(height: 12),
-                if (transport == 'stdio') ...[
+                if (transport == kMcpTransportAppNative) ...[
+                  const Text(
+                    '使用 SimiChat 内建 MCP Runtime，不启动外部进程，'
+                    '移动端无需安装 Node / npx / Python 即可连接。',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ] else if (transport == kMcpTransportStdio) ...[
                   TextField(
                     controller: commandCtrl,
                     decoration: const InputDecoration(
@@ -5317,14 +5480,18 @@ class SettingsPage extends ConsumerWidget {
                   id: const Uuid().v4(),
                   name: nameCtrl.text,
                   transport: transport,
-                  command: transport == 'stdio' ? commandCtrl.text : null,
-                  args: transport == 'stdio' && argsCtrl.text.isNotEmpty
+                  command: transport == kMcpTransportStdio
+                      ? commandCtrl.text
+                      : null,
+                  args:
+                      transport == kMcpTransportStdio &&
+                          argsCtrl.text.isNotEmpty
                       ? argsCtrl.text.split(' ')
                       : null,
-                  url: transport == 'sse' ? urlCtrl.text : null,
+                  url: transport == kMcpTransportSse ? urlCtrl.text : null,
                 );
                 final manager = ref.read(mcpManagerProvider.notifier);
-                manager.addServer(config);
+                await manager.addServer(config);
                 try {
                   await manager.connectServer(config);
                 } catch (e) {
@@ -5558,7 +5725,9 @@ class _ProviderPresetHint extends StatelessWidget {
                 ),
                 TextButton.icon(
                   onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: preset.docsUrl));
+                    await Clipboard.setData(
+                      ClipboardData(text: preset.docsUrl),
+                    );
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context)
                       ..clearSnackBars()

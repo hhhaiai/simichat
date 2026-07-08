@@ -76,3 +76,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   generate: true
+  assets:
+    - scripts/mcp_runtime_container.sh
+    - tools/mcp_runtime/container/Dockerfile
+    - tools/mcp_runtime/container/package.json
+    - tools/mcp_runtime/container/runtime-server.mjs

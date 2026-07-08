@@ -20,7 +20,7 @@ class MarketplaceItem {
   final String name;
   final String description;
   final String category;
-  final String transport; // 'stdio' | 'sse'
+  final String transport; // 'app_native' | 'stdio' | 'sse'
   final String? command;
   final List<String> args;
   final String? url;
@@ -32,10 +32,32 @@ class MarketplaceItem {
 
   bool get isStdio => transport == 'stdio';
   bool get isSse => transport == 'sse';
+  bool get isAppNative => transport == 'app_native';
 }
 
 /// 内置热门 MCP 服务器列表
 const builtinMcpServers = <MarketplaceItem>[
+  MarketplaceItem(
+    id: 'simichat-local',
+    name: 'SimiChat 内建工具',
+    description: 'App 内建 MCP Runtime，移动端和 PC 端都可直接运行，不依赖 Node / npx / Python。',
+    category: '工具',
+    transport: 'app_native',
+    author: 'SimiChat',
+    tags: ['内建', '移动端', 'PC', '无需 Node'],
+    installCount: 100000,
+  ),
+  MarketplaceItem(
+    id: 'simichat-node-container',
+    name: 'SimiChat Node 容器 Runtime',
+    description: 'PC 端 Node MCP 容器侧车，容器内自带 Node，通过本地 SSE 连接，不依赖宿主机 npx。',
+    category: '工具',
+    transport: 'sse',
+    url: 'http://127.0.0.1:37651/mcp/sse/simichat-node',
+    author: 'SimiChat',
+    tags: ['PC', '容器', 'Node', 'SSE', '无需 npx'],
+    installCount: 90000,
+  ),
   MarketplaceItem(
     id: 'filesystem',
     name: 'Filesystem',

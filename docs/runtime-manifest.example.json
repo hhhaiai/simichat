@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "id": "simichat-local",
+      "name": "SimiChat 内建工具",
+      "runtime": "app_native",
+      "transport": "app_native",
+      "mobileReady": true,
+      "desktopReady": true,
+      "requiresHostNode": false,
+      "requiresHostNpx": false,
+      "tools": [
+        "simichat.now",
+        "simichat.runtime_info"
+      ]
+    },
+    {
+      "id": "simichat-node-container",
+      "name": "SimiChat Node 容器 Runtime",
+      "runtime": "node-container",
+      "transport": "sse",
+      "url": "http://127.0.0.1:37651/mcp/sse/simichat-node",
+      "mobileReady": false,
+      "desktopReady": true,
+      "requiresHostNode": false,
+      "requiresHostNpx": false,
+      "container": {
+        "image": "simichat-mcp-runtime:local",
+        "dockerfile": "tools/mcp_runtime/container/Dockerfile",
+        "startScript": "scripts/mcp_runtime_container.sh start",
+        "healthUrl": "http://127.0.0.1:37651/health",
+        "baseImage": "node:22-alpine",
+        "baseImageOverrideEnv": "SIMICHAT_MCP_RUNTIME_BASE_IMAGE",
+        "smokeScript": "scripts/mcp_runtime_container.sh smoke"
+      },
+      "tools": [
+        "simichat.node_runtime_info",
+        "simichat.echo",
+        "simichat.fs_list",
+        "simichat.fs_read_text",
+        "simichat.fetch_text"
+      ],
+      "permissions": {
+        "filesystemRootEnv": "MCP_RUNTIME_WORKSPACE_ROOT",
+        "defaultFilesystemRoot": "/opt/simichat-mcp-runtime",
+        "maxTextBytesEnv": "MCP_RUNTIME_MAX_TEXT_BYTES",
+        "network": "http_get_only"
+      }
+    }
+  ]
+}

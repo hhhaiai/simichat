@@ -100,7 +100,11 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.search_off, size: 48, color: scheme.onSurfaceVariant),
+                        Icon(
+                          Icons.search_off,
+                          size: 48,
+                          color: scheme.onSurfaceVariant,
+                        ),
                         const SizedBox(height: 12),
                         Text(
                           '未找到匹配的 MCP 服务器',
@@ -110,9 +114,13 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                     ),
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     itemCount: state.items.length,
-                    itemBuilder: (_, i) => _buildItemCard(state.items[i], scheme),
+                    itemBuilder: (_, i) =>
+                        _buildItemCard(state.items[i], scheme),
                   ),
           ),
         ],
@@ -135,7 +143,11 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
             Row(
               children: [
                 Icon(
-                  item.isStdio ? Icons.terminal : Icons.cloud_outlined,
+                  item.isAppNative
+                      ? Icons.phone_iphone
+                      : item.isStdio
+                      ? Icons.terminal
+                      : Icons.cloud_outlined,
                   size: 20,
                   color: scheme.primary,
                 ),
@@ -163,7 +175,10 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.secondaryContainer,
                     borderRadius: BorderRadius.circular(6),
@@ -199,14 +214,22 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
               runSpacing: 4,
               children: item.tags.map((tag) {
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    color: scheme.surfaceContainerHighest.withValues(
+                      alpha: 0.5,
+                    ),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     tag,
-                    style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 );
               }).toList(),
@@ -219,13 +242,20 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
               children: [
                 Expanded(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                      color: scheme.surfaceContainerHighest.withValues(
+                        alpha: 0.3,
+                      ),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      item.isStdio
+                      item.isAppNative
+                          ? 'App 内建 · 移动端/PC 直接运行'
+                          : item.isStdio
                           ? '${item.command} ${(item.args).join(" ")}'
                           : item.url ?? '',
                       style: TextStyle(
@@ -242,7 +272,10 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                 installed
                     ? FilledButton.tonal(
                         onPressed: null,
-                        child: const Text('已安装', style: TextStyle(fontSize: 12)),
+                        child: const Text(
+                          '已安装',
+                          style: TextStyle(fontSize: 12),
+                        ),
                       )
                     : FilledButton.icon(
                         onPressed: () => _installItem(item),
@@ -259,6 +292,7 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
 
   Future<void> _installItem(MarketplaceItem item) async {
     final manager = ref.read(mcpManagerProvider.notifier);
+    final usesExternalRuntime = item.isStdio;
 
     final config = McpServerConfig(
       id: const Uuid().v4(),
@@ -267,21 +301,42 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
       command: item.command,
       args: item.args.isEmpty ? null : item.args,
       url: item.url,
-      isEnabled: true,
+      isEnabled: !usesExternalRuntime,
       source: 'marketplace',
       marketplaceId: item.id,
     );
 
-    manager.addServer(config);
+    await manager.addServer(config);
+
+    var connected = false;
+    Object? connectError;
+    if (!usesExternalRuntime && (item.isAppNative || item.isSse)) {
+      try {
+        await manager.connectServer(config);
+        connected = true;
+      } catch (e) {
+        connectError = e;
+      }
+    }
 
     if (!mounted) return;
+    final message = usesExternalRuntime
+        ? '已安装为禁用: ${item.name}。旧 stdio MCP 依赖宿主机命令，优先使用 SimiChat Node 容器 Runtime。'
+        : connectError != null
+        ? '已安装但连接失败: $connectError'
+        : connected
+        ? '已安装并连接: ${item.name}'
+        : '已安装: ${item.name}';
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('已安装: ${item.name}'),
-        action: SnackBarAction(
-          label: '连接',
-          onPressed: () => manager.connectServer(config),
-        ),
+        content: Text(message),
+        action: connected || usesExternalRuntime
+            ? null
+            : SnackBarAction(
+                label: '连接',
+                onPressed: () => manager.connectServer(config),
+              ),
         duration: const Duration(seconds: 4),
       ),
     );
@@ -295,8 +350,10 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
         content: const Text(
           'MCP (Model Context Protocol) 服务器可以扩展 AI 的能力，'
           '如文件访问、数据库查询、网页搜索等。\n\n'
-          '选择一个服务器安装后，需要在设置中手动连接。'
-          '部分服务器需要额外的环境变量（如 API Key）。',
+          '优先选择“App 内建”类型：移动端和 PC 端可直接运行，'
+          '不依赖宿主机 Node / npx / Python。\n\n'
+          '传统 stdio / SSE 服务器属于 PC 高级连接，'
+          '可能需要后续 Runtime/容器层和额外密钥。',
         ),
         actions: [
           FilledButton(

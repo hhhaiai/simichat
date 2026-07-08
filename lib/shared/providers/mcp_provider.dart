@@ -9,7 +9,7 @@ import 'database_provider.dart';
 class McpServerConfig {
   final String id;
   final String name;
-  final String transport; // 'stdio' | 'sse'
+  final String transport; // 'app_native' | 'stdio' | 'sse'
   final String? command;
   final List<String>? args;
   final String? url;
@@ -74,9 +74,10 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   final Map<String, McpClient> _clients = {};
   final Set<String> _connectedIds = <String>{};
   final Map<String, String> _connectionErrors = <String, String>{};
+  late final Future<void> ready;
 
   McpManager(this._dao) : super([]) {
-    _loadFromDb();
+    ready = _loadFromDb();
   }
 
   Map<String, McpClient> get clients => _clients;
@@ -85,18 +86,22 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
 
   Future<void> _loadFromDb() async {
     final rows = await _dao.getAllServers();
-    final configs = rows.map((r) => McpServerConfig(
-      id: r.id,
-      name: r.name,
-      transport: r.transport,
-      command: r.command,
-      args: _listFromJson(r.args),
-      url: r.url,
-      headers: _mapFromJson(r.headers),
-      isEnabled: r.isEnabled,
-      source: r.source,
-      marketplaceId: r.marketplaceId,
-    )).toList();
+    final configs = rows
+        .map(
+          (r) => McpServerConfig(
+            id: r.id,
+            name: r.name,
+            transport: r.transport,
+            command: r.command,
+            args: _listFromJson(r.args),
+            url: r.url,
+            headers: _mapFromJson(r.headers),
+            isEnabled: r.isEnabled,
+            source: r.source,
+            marketplaceId: r.marketplaceId,
+          ),
+        )
+        .toList();
     state = configs;
 
     // 自动连接已启用的服务器
@@ -159,7 +164,11 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
     await disconnectServer(config.id);
 
     McpTransport transport;
-    if (config.transport == 'stdio') {
+    if (config.transport == kMcpTransportAppNative) {
+      transport = AppNativeMcpTransport(
+        serverId: config.marketplaceId ?? config.id,
+      );
+    } else if (config.transport == kMcpTransportStdio) {
       if (config.command == null || config.command!.isEmpty) {
         throw Exception('MCP stdio server requires a command');
       }
@@ -167,14 +176,13 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
         command: config.command!,
         args: config.args ?? [],
       );
-    } else {
+    } else if (config.transport == kMcpTransportSse) {
       if (config.url == null || config.url!.isEmpty) {
         throw Exception('MCP SSE server requires a URL');
       }
-      transport = SseTransport(
-        url: config.url!,
-        headers: config.headers ?? {},
-      );
+      transport = SseTransport(url: config.url!, headers: config.headers ?? {});
+    } else {
+      throw Exception('Unsupported MCP transport: ${config.transport}');
     }
 
     final client = McpClient(name: config.name, transport: transport);
@@ -211,11 +219,13 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
       if (matching.isEmpty) continue;
       final serverName = matching.first.name;
       for (final tool in client.tools) {
-        result.add(McpToolWithServer(
-          serverId: serverId,
-          serverName: serverName,
-          tool: tool,
-        ));
+        result.add(
+          McpToolWithServer(
+            serverId: serverId,
+            serverName: serverName,
+            tool: tool,
+          ),
+        );
       }
     }
     return result;
@@ -256,6 +266,6 @@ class McpToolWithServer {
 
 final mcpManagerProvider =
     StateNotifierProvider<McpManager, List<McpServerConfig>>((ref) {
-  final dao = ref.watch(mcpDaoProvider);
-  return McpManager(dao);
-});
+      final dao = ref.watch(mcpDaoProvider);
+      return McpManager(dao);
+    });

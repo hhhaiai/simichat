@@ -1,0 +1,11 @@
+{
+  "name": "simichat-mcp-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained SimiChat Node MCP runtime sidecar served over MCP SSE.",
+  "scripts": {
+    "start": "node runtime-server.mjs"
+  },
+  "dependencies": {}
+}
