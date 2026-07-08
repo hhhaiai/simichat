@@ -40,6 +40,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // 滚动监听：距底部超过一屏时显示 FAB
   bool _showScrollFab = false;
   bool _shouldAutoScroll = true;
+  bool _isProgrammaticScroll = false;
 
   // 会话内临时模型覆盖
   String? _pendingModelId;
@@ -119,22 +120,54 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final offset = _scrollController.offset;
     final max = _scrollController.position.maxScrollExtent;
     final threshold = MediaQuery.of(context).size.height;
-    final nearBottom = max <= 0 || (max - offset) < 200;
     final shouldShow = max > 0 && (max - offset) > threshold;
     if (shouldShow != _showScrollFab) {
       setState(() => _showScrollFab = shouldShow);
     }
-    _shouldAutoScroll = nearBottom;
+  }
+
+  bool _isNearBottom(ScrollMetrics metrics) {
+    return metrics.maxScrollExtent <= 0 || metrics.extentAfter < 200;
+  }
+
+  bool _handleMessageListScrollNotification(ScrollNotification notification) {
+    if (_isProgrammaticScroll || notification.depth != 0) return false;
+    if (notification is ScrollUpdateNotification &&
+        notification.dragDetails != null) {
+      _shouldAutoScroll = _isNearBottom(notification.metrics);
+    } else if (notification is ScrollEndNotification &&
+        notification.dragDetails != null) {
+      _shouldAutoScroll = _isNearBottom(notification.metrics);
+    }
+    return false;
+  }
+
+  void _scheduleScrollToBottom() {
+    _shouldAutoScroll = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToBottom();
+    });
+    Future<void>.delayed(const Duration(milliseconds: 250), () {
+      if (!mounted || !_shouldAutoScroll) return;
+      _scrollToBottom();
+    });
   }
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _shouldAutoScroll = true;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
-      );
+      _isProgrammaticScroll = true;
+      _scrollController
+          .animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          )
+          .whenComplete(() {
+            if (!mounted) return;
+            _isProgrammaticScroll = false;
+          });
     }
   }
 
@@ -326,6 +359,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _hasTextNotifier.value = false;
       setState(() => _pendingModelId = null);
       _focusNode.requestFocus();
+      _scheduleScrollToBottom();
       return true;
     } catch (e) {
       if (!mounted) return false;
@@ -567,120 +601,126 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       );
                     }
 
-                    return ListView.builder(
-                      controller: _scrollController,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.manual,
-                      padding: const EdgeInsets.only(top: 8, bottom: 12),
-                      itemCount:
-                          messages.length + (streamState.isStreaming ? 1 : 0),
-                      itemBuilder: (_, index) {
-                        if (index < messages.length) {
-                          final msg = messages[index];
-                          if (msg.messageType == kModelSwitchMessageType) {
-                            return ModelSwitchNotice(content: msg.content);
-                          }
-                          final isUser = msg.role == 'user';
-                          final attachments = ref
-                              .watch(messageAttachmentsProvider(msg.id))
-                              .valueOrNull
-                              ?.map((attachment) {
-                                final transcriptStatus =
-                                    attachment.fileType == 'audio'
-                                    ? ref
-                                          .watch(
-                                            audioTranscriptStatusProvider(
-                                              AudioTranscriptStatusRequest(
-                                                messageId: msg.id,
-                                                attachmentId: attachment.id,
-                                              ),
-                                            ),
-                                          )
-                                          .valueOrNull
-                                    : null;
-                                return MessageAttachmentView(
-                                  fileName: attachment.fileName,
-                                  fileType: attachment.fileType,
-                                  fileSize: attachment.fileSize,
-                                  localPath: attachment.localPath,
-                                  audioTranscriptStatus: transcriptStatus,
-                                  onOpenAudioTranscript:
+                    return NotificationListener<ScrollNotification>(
+                      onNotification: _handleMessageListScrollNotification,
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.manual,
+                        padding: const EdgeInsets.only(top: 8, bottom: 12),
+                        itemCount:
+                            messages.length + (streamState.isStreaming ? 1 : 0),
+                        itemBuilder: (_, index) {
+                          if (index < messages.length) {
+                            final msg = messages[index];
+                            if (msg.messageType == kModelSwitchMessageType) {
+                              return ModelSwitchNotice(content: msg.content);
+                            }
+                            final isUser = msg.role == 'user';
+                            final attachments = ref
+                                .watch(messageAttachmentsProvider(msg.id))
+                                .valueOrNull
+                                ?.map((attachment) {
+                                  final transcriptStatus =
                                       attachment.fileType == 'audio'
-                                      ? () => _showAudioTranscriptDetails(
-                                          context: context,
-                                          messageId: msg.id,
-                                          attachmentId: attachment.id,
-                                          fileName: attachment.fileName,
-                                        )
-                                      : null,
-                                );
-                              })
-                              .toList();
-                          // 解析模型名
+                                      ? ref
+                                            .watch(
+                                              audioTranscriptStatusProvider(
+                                                AudioTranscriptStatusRequest(
+                                                  messageId: msg.id,
+                                                  attachmentId: attachment.id,
+                                                ),
+                                              ),
+                                            )
+                                            .valueOrNull
+                                      : null;
+                                  return MessageAttachmentView(
+                                    fileName: attachment.fileName,
+                                    fileType: attachment.fileType,
+                                    fileSize: attachment.fileSize,
+                                    localPath: attachment.localPath,
+                                    audioTranscriptStatus: transcriptStatus,
+                                    onOpenAudioTranscript:
+                                        attachment.fileType == 'audio'
+                                        ? () => _showAudioTranscriptDetails(
+                                            context: context,
+                                            messageId: msg.id,
+                                            attachmentId: attachment.id,
+                                            fileName: attachment.fileName,
+                                          )
+                                        : null,
+                                  );
+                                })
+                                .toList();
+                            // 解析模型名
+                            final modelsAsync = ref.watch(allModelsProvider);
+                            final modelName = modelsAsync.whenOrNull(
+                              data: (models) {
+                                if (msg.channelModelId != null) {
+                                  return models
+                                      .where(
+                                        (m) =>
+                                            m.channelModel.id ==
+                                            msg.channelModelId,
+                                      )
+                                      .firstOrNull
+                                      ?.displayLabel;
+                                }
+                                return null;
+                              },
+                            );
+                            return MessageBubble(
+                              role: msg.role,
+                              content: msg.content,
+                              thinkingContent: msg.thinkingContent,
+                              tokens: msg.tokens,
+                              responseMs: msg.responseMs,
+                              isUser: isUser,
+                              modelName: modelName,
+                              onRetry: isUser ? null : _handleRetry,
+                              onSpeak: isUser
+                                  ? null
+                                  : () => _handleSpeak(msg.id, msg.content),
+                              onStopSpeaking: isUser
+                                  ? null
+                                  : _handleStopSpeaking,
+                              isSpeaking:
+                                  !isUser && _speakingMessageId == msg.id,
+                              isPreparingSpeech:
+                                  !isUser &&
+                                  _speakingMessageId == msg.id &&
+                                  _isPreparingSpeech,
+                              onFork: () => _handleFork(msg.id),
+                              attachments: attachments ?? const [],
+                            );
+                          }
+                          // 流式输出中的气泡
                           final modelsAsync = ref.watch(allModelsProvider);
-                          final modelName = modelsAsync.whenOrNull(
+                          final streamingModelName = modelsAsync.whenOrNull(
                             data: (models) {
-                              if (msg.channelModelId != null) {
-                                return models
-                                    .where(
-                                      (m) =>
-                                          m.channelModel.id ==
-                                          msg.channelModelId,
-                                    )
-                                    .firstOrNull
-                                    ?.displayLabel;
+                              final id =
+                                  _pendingModelId ??
+                                  ref.read(selectedModelIdProvider);
+                              if (id != null) {
+                                final match = models
+                                    .where((m) => m.channelModel.id == id)
+                                    .firstOrNull;
+                                if (match != null) return match.displayLabel;
                               }
-                              return null;
+                              return models.isNotEmpty
+                                  ? models.first.displayLabel
+                                  : null;
                             },
                           );
-                          return MessageBubble(
-                            role: msg.role,
-                            content: msg.content,
-                            thinkingContent: msg.thinkingContent,
-                            tokens: msg.tokens,
-                            responseMs: msg.responseMs,
-                            isUser: isUser,
-                            modelName: modelName,
-                            onRetry: isUser ? null : _handleRetry,
-                            onSpeak: isUser
-                                ? null
-                                : () => _handleSpeak(msg.id, msg.content),
-                            onStopSpeaking: isUser ? null : _handleStopSpeaking,
-                            isSpeaking: !isUser && _speakingMessageId == msg.id,
-                            isPreparingSpeech:
-                                !isUser &&
-                                _speakingMessageId == msg.id &&
-                                _isPreparingSpeech,
-                            onFork: () => _handleFork(msg.id),
-                            attachments: attachments ?? const [],
+                          return RepaintBoundary(
+                            child: StreamingBubble(
+                              content: streamState.currentContent,
+                              thinking: streamState.currentThinking,
+                              modelName: streamingModelName,
+                            ),
                           );
-                        }
-                        // 流式输出中的气泡
-                        final modelsAsync = ref.watch(allModelsProvider);
-                        final streamingModelName = modelsAsync.whenOrNull(
-                          data: (models) {
-                            final id =
-                                _pendingModelId ??
-                                ref.read(selectedModelIdProvider);
-                            if (id != null) {
-                              final match = models
-                                  .where((m) => m.channelModel.id == id)
-                                  .firstOrNull;
-                              if (match != null) return match.displayLabel;
-                            }
-                            return models.isNotEmpty
-                                ? models.first.displayLabel
-                                : null;
-                          },
-                        );
-                        return RepaintBoundary(
-                          child: StreamingBubble(
-                            content: streamState.currentContent,
-                            thinking: streamState.currentThinking,
-                            modelName: streamingModelName,
-                          ),
-                        );
-                      },
+                        },
+                      ),
                     );
                   },
                 ),
