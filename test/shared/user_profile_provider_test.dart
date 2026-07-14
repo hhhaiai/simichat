@@ -1,5 +1,9 @@
+import 'dart:convert';
+
+import 'package:ai_chat_app/core/memory/dreaming_service.dart';
 import 'package:ai_chat_app/core/memory/key_point_memory.dart';
 import 'package:ai_chat_app/core/memory/user_profile.dart';
+import 'package:ai_chat_app/shared/providers/dreaming_provider.dart';
 import 'package:ai_chat_app/shared/providers/key_point_memory_provider.dart';
 import 'package:ai_chat_app/shared/providers/user_profile_provider.dart';
 import 'package:flutter/widgets.dart';
@@ -154,6 +158,126 @@ void main() {
       expect(prefs.getString(kUserProfileChangeProposalsStorageKey), isNull);
     },
   );
+
+  testWidgets('model profile enhancement is independent and opt-in', (
+    tester,
+  ) async {
+    final now = DateTime.utc(2026, 7, 14, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 2,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      sessions: const [],
+      memoryCandidates: [_memory('preference', '我喜欢待确认画像变更', now)],
+      keywords: const ['画像'],
+      elapsedMs: 1,
+    );
+    SharedPreferences.setMockInitialValues({
+      kKeyPointMemoryStorageKey: encodeKeyPointMemoryItems([
+        _memory('preference', '我喜欢待确认画像变更', now),
+      ]),
+      kDreamingDigestStorageKey: jsonEncode(digest.toJson()),
+      kUserProfileModelEnabledStorageKey: true,
+    });
+    var modelCalls = 0;
+    late WidgetRef capturedRef;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          userProfileModelEnhancerProvider.overrideWithValue(({
+            required digest,
+            required localCandidate,
+            required controls,
+          }) async {
+            modelCalls += 1;
+            return localCandidate.copyWith(
+              styleSignals: [...localCandidate.styleSignals, '偏好逐项确认画像候选'],
+            );
+          }),
+        ],
+        child: Consumer(
+          builder: (context, ref, _) {
+            capturedRef = ref;
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    final proposal = await proposeUserProfileChanges(
+      capturedRef,
+      now: now,
+      reason: 'profile_proposal',
+    );
+
+    expect(modelCalls, 1);
+    expect(proposal?.generationMode, kUserProfileProposalGenerationModeModel);
+    expect(proposal?.candidateProfile.styleSignals, contains('偏好逐项确认画像候选'));
+    expect(capturedRef.read(userProfileProvider), isNull);
+  });
+
+  testWidgets('model profile failure falls back to local candidate', (
+    tester,
+  ) async {
+    final now = DateTime.utc(2026, 7, 14, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 2,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      sessions: const [],
+      memoryCandidates: [_memory('preference', '我喜欢本地规则候选', now)],
+      keywords: const ['画像'],
+      elapsedMs: 1,
+    );
+    SharedPreferences.setMockInitialValues({
+      kKeyPointMemoryStorageKey: encodeKeyPointMemoryItems([
+        _memory('preference', '我喜欢本地规则候选', now),
+      ]),
+      kDreamingDigestStorageKey: jsonEncode(digest.toJson()),
+      kUserProfileModelEnabledStorageKey: true,
+    });
+    late WidgetRef capturedRef;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          userProfileModelEnhancerProvider.overrideWithValue(
+            ({
+              required digest,
+              required localCandidate,
+              required controls,
+            }) async => throw StateError('simulated model profile failure'),
+          ),
+        ],
+        child: Consumer(
+          builder: (context, ref, _) {
+            capturedRef = ref;
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    final proposal = await proposeUserProfileChanges(
+      capturedRef,
+      now: now,
+      reason: 'profile_proposal',
+    );
+
+    expect(
+      proposal?.generationMode,
+      kUserProfileProposalGenerationModeModelFallback,
+    );
+    expect(proposal?.candidateProfile.preferences, contains('我喜欢本地规则候选'));
+    expect(capturedRef.read(userProfileProvider), isNull);
+  });
 
   testWidgets('profile change proposal items can be accepted and rejected', (
     tester,

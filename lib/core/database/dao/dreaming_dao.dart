@@ -5,10 +5,77 @@ import '../tables.dart';
 
 part 'dreaming_dao.g.dart';
 
+enum DreamingAutomaticJobClaim { claimed, inFlight, completed, dismissed }
+
 @DriftAccessor(tables: [DreamingJobs, DreamingReports])
 class DreamingDao extends DatabaseAccessor<AppDatabase>
     with _$DreamingDaoMixin {
   DreamingDao(super.db);
+
+  Future<DreamingAutomaticJobClaim> claimAutomaticJob({
+    required String id,
+    required String dayKey,
+    required int scheduledFor,
+    required String trigger,
+    required int claimedAt,
+    required int staleBefore,
+    int messageLimit = 5000,
+  }) {
+    return transaction(() async {
+      final inserted = await into(dreamingJobs).insertReturningOrNull(
+        DreamingJobsCompanion.insert(
+          id: id,
+          dayKey: dayKey,
+          scheduledFor: scheduledFor,
+          trigger: Value(trigger),
+          messageLimit: Value(messageLimit),
+          createdAt: claimedAt,
+          updatedAt: claimedAt,
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      if (inserted != null) return DreamingAutomaticJobClaim.claimed;
+
+      final existing = await getJob(id);
+      if (existing == null) return DreamingAutomaticJobClaim.inFlight;
+      if (existing.status == 'completed') {
+        return DreamingAutomaticJobClaim.completed;
+      }
+      if (existing.status == 'dismissed') {
+        return DreamingAutomaticJobClaim.dismissed;
+      }
+      final canReclaim =
+          existing.status == 'failed' ||
+          ((existing.status == 'pending' || existing.status == 'running') &&
+              existing.updatedAt <= staleBefore);
+      if (!canReclaim) return DreamingAutomaticJobClaim.inFlight;
+
+      final reclaimed =
+          await (update(dreamingJobs)..where(
+                (t) =>
+                    t.id.equals(id) &
+                    (t.status.equals('failed') |
+                        ((t.status.equals('pending') |
+                                t.status.equals('running')) &
+                            t.updatedAt.isSmallerOrEqualValue(staleBefore))),
+              ))
+              .write(
+                DreamingJobsCompanion(
+                  scheduledFor: Value(scheduledFor),
+                  status: const Value('pending'),
+                  trigger: Value(trigger),
+                  messageLimit: Value(messageLimit),
+                  startedAt: const Value(null),
+                  finishedAt: const Value(null),
+                  error: const Value(null),
+                  updatedAt: Value(claimedAt),
+                ),
+              );
+      return reclaimed == 1
+          ? DreamingAutomaticJobClaim.claimed
+          : DreamingAutomaticJobClaim.inFlight;
+    });
+  }
 
   Future<int> createJob({
     required String id,

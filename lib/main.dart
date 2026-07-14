@@ -11,6 +11,7 @@ import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/marketplace/marketplace_page.dart';
 import 'features/search/search_sheet.dart';
+import 'core/background/dreaming_background_workmanager.dart';
 import 'core/deep_link/deep_link_service.dart';
 import 'core/database/app_database.dart';
 import 'core/skills/skill.dart' show builtInSkills;
@@ -19,6 +20,9 @@ import 'core/smoke/release_background_smoke_harness.dart';
 import 'core/smoke/release_deep_link_smoke_harness.dart';
 import 'core/smoke/release_network_smoke_harness.dart';
 import 'core/smoke/release_send_smoke_harness.dart';
+import 'core/smoke/dreaming_reflection_smoke_harness.dart';
+import 'core/smoke/android_background_dreaming_smoke_harness.dart';
+import 'core/smoke/ios_background_dreaming_smoke_harness.dart';
 import 'core/database/dao/channel_dao.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
@@ -33,6 +37,27 @@ import 'shared/providers/user_profile_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (iosBackgroundDreamingSmokeEnabled) {
+    await runIosBackgroundDreamingSmokeApp();
+    return;
+  }
+  if (androidBackgroundDreamingSmokeEnabled) {
+    await runAndroidBackgroundDreamingSmokeApp();
+    return;
+  }
+  if (dreamingReflectionSmokeEnabled) {
+    dreamingDigestCompleteNotifier =
+        ({
+          required String dayKey,
+          required int originalMessageCount,
+          int? totalOriginalMessageCount,
+          required int memoryCandidateCount,
+          int profileProposalCount = 0,
+        }) async {};
+    dreamingDigestFailedNotifier = ({required String dayKey}) async {};
+    await runDreamingReflectionSmokeApp(child: const AiChatApp());
+    return;
+  }
   if (releaseSendSmokeEnabled) {
     await runReleaseSendSmokeApp(child: const AiChatApp());
     return;
@@ -50,6 +75,12 @@ void main() async {
       buildApp: (observers) => AiChatApp(navigatorObservers: observers),
     );
     return;
+  }
+
+  try {
+    await syncDreamingBackgroundScheduleFromStorage();
+  } catch (e) {
+    debugPrint('Background Dreaming schedule failed: $e');
   }
 
   try {
@@ -716,6 +747,12 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
   }
 
   Future<void> _runDueDreamingIfNeeded() async {
+    try {
+      await retryPendingAssistantReflection(ref);
+    } catch (_) {
+      // 待处理反思重试失败不能影响新的 Dreaming 检查；pending 会保留供下次恢复。
+    }
+    if (!mounted) return;
     try {
       final digest = await maybeRunDueDreaming(ref);
       if (!mounted) return;

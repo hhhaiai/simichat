@@ -17,10 +17,10 @@ const _cacheExpiry = Duration(hours: 1);
 /// 获取或创建 Dio 实例
 Dio getDio(String baseUrl) {
   final normalized = baseUrl.replaceAll(RegExp(r'/+$'), '');
-  
+
   // 清理过期缓存
   _cleanupCache();
-  
+
   _dioLastUsed[normalized] = DateTime.now();
   return _dioCache.putIfAbsent(normalized, () {
     final dio = Dio(
@@ -38,23 +38,23 @@ Dio getDio(String baseUrl) {
 /// 清理过期和超量的 Dio 缓存
 void _cleanupCache() {
   final now = DateTime.now();
-  
+
   // 移除过期的实例
   final expiredKeys = _dioLastUsed.entries
       .where((e) => now.difference(e.value) > _cacheExpiry)
       .map((e) => e.key)
       .toList();
-  
+
   for (final key in expiredKeys) {
     _dioCache.remove(key)?.close();
     _dioLastUsed.remove(key);
   }
-  
+
   // 如果仍然超过最大数量，移除最旧的
   if (_dioCache.length > _maxCacheSize) {
     final sortedEntries = _dioLastUsed.entries.toList()
       ..sort((a, b) => a.value.compareTo(b.value));
-    
+
     final toRemove = sortedEntries.take(_dioCache.length - _maxCacheSize);
     for (final entry in toRemove) {
       _dioCache.remove(entry.key)?.close();
@@ -122,19 +122,24 @@ String _formatConnectionError(DioException e) {
     } catch (_) {}
   }
 
-  if (detail.contains('SocketException') || detail.contains('Connection refused')) {
+  if (detail.contains('SocketException') ||
+      detail.contains('Connection refused')) {
     return '连接被拒绝，请检查 Base URL 和端口是否正确';
   }
   if (detail.contains('HandshakeException') || detail.contains('CERTIFICATE')) {
     return 'SSL/TLS 证书验证失败，请检查 Base URL 是否正确或证书是否有效';
   }
-  if (detail.contains('FormatException') || detail.contains('Invalid argument')) {
+  if (detail.contains('FormatException') ||
+      detail.contains('Invalid argument')) {
     return 'Base URL 格式错误，请检查是否包含 http:// 或 https://';
   }
-  if (detail.contains('No address associated') || detail.contains('nodename nor servname') || detail.contains('getaddrinfo')) {
+  if (detail.contains('No address associated') ||
+      detail.contains('nodename nor servname') ||
+      detail.contains('getaddrinfo')) {
     return 'DNS 解析失败，无法找到服务器地址，请检查 Base URL';
   }
-  if (detail.contains('Network is unreachable') || detail.contains('No route to host')) {
+  if (detail.contains('Network is unreachable') ||
+      detail.contains('No route to host')) {
     return '网络不可达，请检查网络连接';
   }
   if (detail.contains('Connection timed out')) {

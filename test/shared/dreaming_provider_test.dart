@@ -146,6 +146,59 @@ void main() {
     );
   });
 
+  testWidgets(
+    'maybeRunDueDreaming adopts completed automatic job without rerunning',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        kDreamingScheduleStorageKey: jsonEncode({
+          'enabled': true,
+          'hour': 8,
+          'minute': 0,
+        }),
+      });
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      await db.dreamingDao.createJob(
+        id: 'dreaming-auto-2026-06-27',
+        dayKey: '2026-06-27',
+        scheduledFor: DateTime(2026, 6, 27, 8).millisecondsSinceEpoch,
+        trigger: 'android_background',
+      );
+      await db.dreamingDao.markJobCompleted('dreaming-auto-2026-06-27');
+
+      DreamingDigest? result;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) => ElevatedButton(
+                onPressed: () async {
+                  result = await maybeRunDueDreaming(
+                    ref,
+                    now: DateTime(2026, 6, 27, 9),
+                  );
+                },
+                child: const Text('adopt completed'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('adopt completed'));
+      await tester.pumpAndSettle();
+
+      expect(result, isNull);
+      expect(await db.dreamingDao.getJobsByDay('2026-06-27'), hasLength(1));
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(kDreamingScheduleStorageKey),
+        contains('2026-06-27'),
+      );
+    },
+  );
+
   testWidgets('dreaming digest history keeps latest 20 reports by day', (
     tester,
   ) async {
@@ -462,6 +515,59 @@ void main() {
     },
   );
 
+  testWidgets(
+    'runDreamingDigest does not complete job before provider state is durable',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      const sessionId = 'provider-failure-dreaming-session';
+      const messageId = 'provider-failure-dreaming-message';
+      final day = DateTime(2026, 7, 14, 22);
+      await db.sessionDao.createSession(id: sessionId);
+      await db.messageDao.insertMessage(
+        id: messageId,
+        sessionId: sessionId,
+        role: 'user',
+        content: '验证 Dreaming 在发布本地状态失败时不会留下静默 completed job。',
+      );
+      await db.customStatement(
+        "UPDATE messages SET created_at = ${day.millisecondsSinceEpoch} WHERE id = '$messageId'",
+      );
+
+      late WidgetRef capturedRef;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            dreamingDigestProvider.overrideWith(
+              (ref) => _FailingSaveDreamingDigestNotifier(),
+            ),
+          ],
+          child: Consumer(
+            builder: (context, ref, _) {
+              capturedRef = ref;
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+
+      await expectLater(
+        runDreamingDigest(capturedRef, day: day),
+        throwsA(isA<StateError>()),
+      );
+
+      final jobs = await db.dreamingDao.getJobsByDay('2026-07-14');
+      expect(jobs, hasLength(1));
+      expect(jobs.single.status, 'failed');
+      expect(jobs.single.error, contains('simulated digest persistence'));
+      expect(await db.dreamingDao.getReportByDay('2026-07-14'), isNotNull);
+      expect(capturedRef.read(dreamingDigestHistoryProvider), isEmpty);
+    },
+  );
+
   testWidgets('syncs dreaming provider state from sqlite reports', (
     tester,
   ) async {
@@ -627,5 +733,12 @@ class _FailingRememberAllKeyPointMemoryNotifier extends KeyPointMemoryNotifier {
     List<KeyPointMemoryItem> items,
   ) async {
     throw StateError('simulated key point persistence failure');
+  }
+}
+
+class _FailingSaveDreamingDigestNotifier extends DreamingDigestNotifier {
+  @override
+  Future<void> save(DreamingDigest digest) async {
+    throw StateError('simulated digest persistence failure');
   }
 }

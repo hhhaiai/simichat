@@ -32,6 +32,7 @@ class AiService {
     required List<AiMessage> messages,
     String? systemPrompt,
     CancelToken? cancelToken,
+    bool jsonResponse = false,
   }) {
     return getProtocol(protocol).sendStream(
       baseUrl: baseUrl,
@@ -40,6 +41,7 @@ class AiService {
       messages: messages,
       systemPrompt: systemPrompt,
       cancelToken: cancelToken,
+      jsonResponse: jsonResponse,
     );
   }
 }

@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/database/app_database.dart';
+import '../../core/database/dao/dreaming_dao.dart';
 import '../../core/memory/dreaming_service.dart';
 import '../../core/memory/dreaming_schedule.dart';
 import 'database_provider.dart';
 import 'key_point_memory_provider.dart';
+import 'provider_access.dart';
 
 const kDreamingDigestStorageKey = 'dreaming_digest_v1';
 const kDreamingDigestHistoryStorageKey = 'dreaming_digest_history_v1';
@@ -219,6 +221,18 @@ class DreamingScheduleNotifier extends StateNotifier<DreamingScheduleConfig> {
     await _save();
   }
 
+  Future<void> setRequiresCharging(bool value) async {
+    await ready;
+    state = state.copyWith(requiresCharging: value);
+    await _save();
+  }
+
+  Future<void> setRequiresUnmeteredNetwork(bool value) async {
+    await ready;
+    state = state.copyWith(requiresUnmeteredNetwork: value);
+    await _save();
+  }
+
   Future<void> markAutoRun(DateTime day) async {
     await ready;
     state = state.copyWith(lastAutoRunDayKey: formatDreamingDay(day));
@@ -240,6 +254,18 @@ Future<DreamingDigest> runDreamingDigest(
   WidgetRef ref, {
   DateTime? day,
   String trigger = 'manual',
+}) {
+  return runDreamingDigestWithAccess(
+    WidgetRefProviderAccess(ref),
+    day: day,
+    trigger: trigger,
+  );
+}
+
+Future<DreamingDigest> runDreamingDigestWithAccess(
+  ProviderAccess access, {
+  DateTime? day,
+  String trigger = 'manual',
 }) async {
   final targetDay = day ?? DateTime.now();
   final dayKey = formatDreamingDay(targetDay);
@@ -247,7 +273,7 @@ Future<DreamingDigest> runDreamingDigest(
   if (inFlight != null) return inFlight;
 
   final run = _runDreamingDigest(
-    ref,
+    access,
     targetDay: targetDay,
     dayKey: dayKey,
     serviceDay: day,
@@ -264,31 +290,36 @@ Future<DreamingDigest> runDreamingDigest(
 }
 
 Future<DreamingDigest> _runDreamingDigest(
-  WidgetRef ref, {
+  ProviderAccess access, {
   required DateTime targetDay,
   required String dayKey,
   required DateTime? serviceDay,
   required String trigger,
+  String? claimedJobId,
 }) async {
-  final service = ref.read(dreamingServiceProvider);
-  final dreamingDao = ref.read(dreamingDaoProvider);
-  final digestNotifier = ref.read(dreamingDigestProvider.notifier);
-  final historyNotifier = ref.read(dreamingDigestHistoryProvider.notifier);
-  final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
+  final service = access.read(dreamingServiceProvider);
+  final dreamingDao = access.read(dreamingDaoProvider);
+  final digestNotifier = access.read(dreamingDigestProvider.notifier);
+  final historyNotifier = access.read(dreamingDigestHistoryProvider.notifier);
+  final memoryNotifier = access.read(keyPointMemoryProvider.notifier);
   final createdAt = DateTime.now().millisecondsSinceEpoch;
-  final jobId = 'dreaming-job-$dayKey-${DateTime.now().microsecondsSinceEpoch}';
-  await dreamingDao.failUnfinishedJobsByDay(
-    dayKey,
-    error: 'superseded by a newer Dreaming run',
-    finishedAt: createdAt,
-  );
-  await dreamingDao.createJob(
-    id: jobId,
-    dayKey: dayKey,
-    scheduledFor: targetDay.millisecondsSinceEpoch,
-    trigger: trigger,
-    createdAt: createdAt,
-  );
+  final jobId =
+      claimedJobId ??
+      'dreaming-job-$dayKey-${DateTime.now().microsecondsSinceEpoch}';
+  if (claimedJobId == null) {
+    await dreamingDao.failUnfinishedJobsByDay(
+      dayKey,
+      error: 'superseded by a newer Dreaming run',
+      finishedAt: createdAt,
+    );
+    await dreamingDao.createJob(
+      id: jobId,
+      dayKey: dayKey,
+      scheduledFor: targetDay.millisecondsSinceEpoch,
+      trigger: trigger,
+      createdAt: createdAt,
+    );
+  }
   await dreamingDao.markJobRunning(jobId);
   var durableCompleted = false;
   try {
@@ -310,11 +341,11 @@ Future<DreamingDigest> _runDreamingDigest(
       isTruncated: digest.isTruncated,
       createdAt: digest.generatedAt.millisecondsSinceEpoch,
     );
-    await dreamingDao.markJobCompleted(jobId);
-    durableCompleted = true;
     await digestNotifier.save(digest);
     await historyNotifier.record(digest);
-    ref.invalidate(latestFailedDreamingJobProvider);
+    await dreamingDao.markJobCompleted(jobId);
+    durableCompleted = true;
+    access.invalidate(latestFailedDreamingJobProvider);
     return digest;
   } catch (error) {
     if (!durableCompleted) {
@@ -324,7 +355,7 @@ Future<DreamingDigest> _runDreamingDigest(
         // 保留原始错误，避免 job 状态写入失败掩盖 Dreaming 主错误。
       }
     }
-    ref.invalidate(latestFailedDreamingJobProvider);
+    access.invalidate(latestFailedDreamingJobProvider);
     rethrow;
   }
 }
@@ -358,12 +389,17 @@ void resetDreamingAutoRunStateForTesting() {
   _dreamingDigestInFlightByDayKey.clear();
 }
 
-Future<DreamingDigest?> maybeRunDueDreaming(
-  WidgetRef ref, {
+Future<DreamingDigest?> maybeRunDueDreaming(WidgetRef ref, {DateTime? now}) {
+  return maybeRunDueDreamingWithAccess(WidgetRefProviderAccess(ref), now: now);
+}
+
+Future<DreamingDigest?> maybeRunDueDreamingWithAccess(
+  ProviderAccess access, {
   DateTime? now,
+  String trigger = 'foreground_due',
 }) async {
   if (_dueDreamingAutoRunInFlight != null) return null;
-  final run = _maybeRunDueDreaming(ref, now: now);
+  final run = _maybeRunDueDreaming(access, now: now, trigger: trigger);
   _dueDreamingAutoRunInFlight = run;
   try {
     return await run;
@@ -375,25 +411,66 @@ Future<DreamingDigest?> maybeRunDueDreaming(
 }
 
 Future<DreamingDigest?> _maybeRunDueDreaming(
-  WidgetRef ref, {
+  ProviderAccess access, {
   DateTime? now,
+  required String trigger,
 }) async {
-  final scheduleNotifier = ref.read(dreamingScheduleProvider.notifier);
+  final scheduleNotifier = access.read(dreamingScheduleProvider.notifier);
   await scheduleNotifier.ready;
   final current = now ?? DateTime.now();
   final dayKey = formatDreamingDay(current);
   if (_locallyCompletedDueDreamingDayKeys.contains(dayKey)) return null;
-  final config = ref.read(dreamingScheduleProvider);
+  final config = access.read(dreamingScheduleProvider);
   if (!shouldRunDreamingSchedule(config, now: current)) return null;
-  final digest = await runDreamingDigest(
-    ref,
+  final automaticRun = await _runAutomaticDreamingDigestWithAccess(
+    access,
     day: current,
-    trigger: 'foreground_due',
+    trigger: trigger,
   );
+  if (automaticRun == null) return null;
   try {
     await scheduleNotifier.markAutoRun(current);
   } catch (_) {
     _locallyCompletedDueDreamingDayKeys.add(dayKey);
   }
-  return digest;
+  return automaticRun.digest;
+}
+
+typedef _AutomaticDreamingRun = ({DreamingDigest? digest});
+
+Future<_AutomaticDreamingRun?> _runAutomaticDreamingDigestWithAccess(
+  ProviderAccess access, {
+  required DateTime day,
+  required String trigger,
+}) async {
+  final dayKey = formatDreamingDay(day);
+  final claimedAt = DateTime.now().millisecondsSinceEpoch;
+  final claim = await access
+      .read(dreamingDaoProvider)
+      .claimAutomaticJob(
+        id: 'dreaming-auto-$dayKey',
+        dayKey: dayKey,
+        scheduledFor: day.millisecondsSinceEpoch,
+        trigger: trigger,
+        claimedAt: claimedAt,
+        staleBefore: claimedAt - const Duration(minutes: 15).inMilliseconds,
+      );
+  switch (claim) {
+    case DreamingAutomaticJobClaim.claimed:
+      return (
+        digest: await _runDreamingDigest(
+          access,
+          targetDay: day,
+          dayKey: dayKey,
+          serviceDay: day,
+          trigger: trigger,
+          claimedJobId: 'dreaming-auto-$dayKey',
+        ),
+      );
+    case DreamingAutomaticJobClaim.completed:
+    case DreamingAutomaticJobClaim.dismissed:
+      return (digest: null);
+    case DreamingAutomaticJobClaim.inFlight:
+      return null;
+  }
 }

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:ai_chat_app/core/database/app_database.dart';
+import 'package:ai_chat_app/core/background/ios_background_refresh_status.dart';
+import 'package:ai_chat_app/core/memory/dreaming_schedule.dart';
 import 'package:ai_chat_app/core/memory/dreaming_service.dart';
 import 'package:ai_chat_app/core/memory/reflection_service.dart';
 import 'package:ai_chat_app/core/memory/user_profile.dart';
@@ -17,7 +19,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('dreaming tile explains foreground-only schedule boundary', (
+  testWidgets('dreaming tile warns when iOS background refresh is disabled', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          iosBackgroundRefreshStatusProvider.overrideWith(
+            (ref) async => IosBackgroundRefreshStatus.denied,
+          ),
+        ],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Dreaming 夜间整理'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('iOS 后台 App 刷新已关闭'), findsOneWidget);
+    await tester.tap(find.text('Dreaming 夜间整理'));
+    await tester.pumpAndSettle();
+    expect(find.text('打开系统设置'), findsOneWidget);
+    expect(find.text('重新检查'), findsOneWidget);
+  });
+
+  testWidgets('dreaming tile explains mobile background schedule boundary', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -40,9 +76,62 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Dreaming 夜间整理'), findsOneWidget);
-    expect(find.textContaining('前台到期'), findsOneWidget);
-    expect(find.textContaining('非系统后台'), findsOneWidget);
+    expect(
+      find.textContaining('Android WorkManager / iOS BGTaskScheduler'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('前台到期兜底'), findsOneWidget);
     expect(find.textContaining('下次前台整理'), findsOneWidget);
+  });
+
+  testWidgets('dreaming dialog persists charging and network conditions', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Dreaming 夜间整理'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Dreaming 夜间整理'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('仅充电时执行'), findsOneWidget);
+    expect(find.text('仅非计费网络执行'), findsOneWidget);
+
+    await tester.tap(find.text('仅充电时执行'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('仅非计费网络执行'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('仅非计费网络执行'));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    final schedule = DreamingScheduleConfig.fromJson(
+      (jsonDecode(prefs.getString(kDreamingScheduleStorageKey)!) as Map)
+          .cast<String, dynamic>(),
+    );
+    expect(schedule.requiresCharging, isTrue);
+    expect(schedule.requiresUnmeteredNetwork, isTrue);
+    expect(find.textContaining('Android 通常对应 Wi-Fi'), findsOneWidget);
   });
 
   testWidgets('settings page can run local dreaming digest', (tester) async {
@@ -81,7 +170,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('运行今日整理'), findsOneWidget);
-    expect(find.text('前台到期自动整理'), findsOneWidget);
+    expect(find.text('自动 Dreaming'), findsOneWidget);
     expect(find.text('整理时间'), findsOneWidget);
     expect(find.text('22:00'), findsWidgets);
 
@@ -221,7 +310,10 @@ void main() {
     expect(find.textContaining('2026-07-05 · 4 条消息'), findsOneWidget);
     expect(find.textContaining('Dreaming 日报 2026-07-06'), findsNothing);
 
-    await tester.tap(find.text('2026-07-06 · 8 条消息'));
+    final latestHistory = find.text('2026-07-06 · 8 条消息');
+    await tester.ensureVisible(latestHistory);
+    await tester.pumpAndSettle();
+    await tester.tap(latestHistory);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Dreaming 日报 2026-07-06'), findsOneWidget);
@@ -237,6 +329,11 @@ void main() {
         latest.toJson(),
         previous.toJson(),
       ]),
+      kAssistantReflectionPendingStorageKey: jsonEncode({
+        'sourceDigestDayKey': latest.dayKey,
+        'updatedAt': latest.generatedAt.toIso8601String(),
+        'attemptCount': 1,
+      }),
     });
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
@@ -274,6 +371,7 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString(kDreamingDigestStorageKey), isNull);
     expect(prefs.getString(kDreamingDigestHistoryStorageKey), isNull);
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNull);
     expect(await db.dreamingDao.getRecentReports(), isEmpty);
   });
 
@@ -286,6 +384,11 @@ void main() {
         latest.toJson(),
         previous.toJson(),
       ]),
+      kAssistantReflectionPendingStorageKey: jsonEncode({
+        'sourceDigestDayKey': latest.dayKey,
+        'updatedAt': latest.generatedAt.toIso8601String(),
+        'attemptCount': 1,
+      }),
     });
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
@@ -331,6 +434,7 @@ void main() {
     expect(rawHistory, isNotNull);
     expect(rawHistory, contains('2026-07-05'));
     expect(rawHistory, isNot(contains('2026-07-06')));
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNull);
     expect(await db.dreamingDao.getReportByDay('2026-07-06'), isNull);
     expect(await db.dreamingDao.getReportByDay('2026-07-05'), isNotNull);
   });
@@ -394,6 +498,8 @@ void main() {
     expect(find.textContaining('最近 Dreaming 失败：2026-07-06'), findsOneWidget);
     expect(find.textContaining('simulated retryable failure'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('重试最近失败'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('重试最近失败'));
     await tester.pumpAndSettle();
 
@@ -600,6 +706,90 @@ void main() {
     expect(find.textContaining('先运行今日 Dreaming'), findsOneWidget);
   });
 
+  testWidgets('reflection tile surfaces and clears pending retry', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      kAssistantReflectionPendingStorageKey: jsonEncode({
+        'sourceDigestDayKey': '2026-07-06',
+        'updatedAt': '2026-07-07T08:00:00Z',
+        'attemptCount': 2,
+      }),
+    });
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('本地反思 / 自我优化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('反思待重试 2026-07-06'), findsOneWidget);
+    await tester.tap(find.text('本地反思 / 自我优化'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Reflection 待重试：来源 Dreaming 2026-07-06'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('清除待重试'));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNull);
+    expect(find.textContaining('Reflection 待重试：'), findsNothing);
+  });
+
+  testWidgets('manual reflection failure is visible and remains retryable', (
+    tester,
+  ) async {
+    final digest = _digestForDay(day: DateTime(2026, 7, 6), messageCount: 4);
+    SharedPreferences.setMockInitialValues({
+      kDreamingDigestStorageKey: jsonEncode(digest.toJson()),
+    });
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          reflectionServiceProvider.overrideWithValue(
+            const _FailingReflectionService(),
+          ),
+        ],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('本地反思 / 自我优化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('本地反思 / 自我优化'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('运行反思'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('反思失败，已标记待重试'), findsOneWidget);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('reflection dialog previews short prompt injection', (
     tester,
   ) async {
@@ -648,6 +838,71 @@ void main() {
 
     expect(find.text('下一轮短期提示预览'), findsOneWidget);
     expect(find.textContaining('下次先推进长会话质量基线'), findsWidgets);
+  });
+
+  testWidgets('reflection dialog exposes optional model enhancement boundary', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('本地反思 / 自我优化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('本地反思 / 自我优化'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('使用模型增强反思'), findsOneWidget);
+    expect(find.textContaining('可能发送给默认聊天模型'), findsOneWidget);
+    expect(find.textContaining('失败会自动回退本地反思'), findsOneWidget);
+  });
+
+  testWidgets('reflection UI exposes the latest model fallback', (
+    tester,
+  ) async {
+    final fallback = _reflectionReport(
+      '2026-07-14',
+      generationMode: kReflectionGenerationModeModelFallback,
+    );
+    SharedPreferences.setMockInitialValues({
+      kAssistantReflectionStorageKey: encodeReflectionReport(fallback),
+      kAssistantReflectionHistoryStorageKey: encodeReflectionReportHistory([
+        fallback,
+      ]),
+      kAssistantReflectionModelEnabledStorageKey: true,
+    });
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('本地反思 / 自我优化'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.textContaining('模型失败回退'), findsOneWidget);
+
+    await tester.tap(find.text('本地反思 / 自我优化'));
+    await tester.pumpAndSettle();
+    expect(find.text('最近一次模型增强失败，已安全回退本地反思'), findsOneWidget);
   });
 
   testWidgets('reflection dialog can clear local report and history', (
@@ -877,6 +1132,7 @@ ReflectionReport _reflectionReport(
   String dayKey, {
   String? sourceDigestDayKey,
   String actionItem = '继续推进本地反思可控管理。',
+  String generationMode = kReflectionGenerationModeLocal,
 }) {
   final generatedAt = DateTime.parse('${dayKey}T22:00:00Z');
   return ReflectionReport(
@@ -888,6 +1144,7 @@ ReflectionReport _reflectionReport(
     userMessageCount: 5,
     assistantMessageCount: 3,
     pendingProfileProposalCount: 0,
+    generationMode: generationMode,
     insights: const [
       ReflectionInsight(
         category: '任务推进',
@@ -918,6 +1175,19 @@ class _DelayedDreamingService extends DreamingService {
       generatedAt: now,
       elapsedMs: 1,
     );
+  }
+}
+
+class _FailingReflectionService extends ReflectionService {
+  const _FailingReflectionService();
+
+  @override
+  ReflectionReport buildDailyReflection({
+    required DreamingDigest digest,
+    UserProfile? profile,
+    int pendingProfileProposalCount = 0,
+  }) {
+    throw StateError('simulated reflection failure');
   }
 }
 

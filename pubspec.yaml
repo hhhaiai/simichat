@@ -63,6 +63,7 @@ dependencies:
   gal: ^2.3.0
   flutter_localizations:
     sdk: flutter
+  workmanager: 0.8.0
 
 dev_dependencies:
   flutter_test:

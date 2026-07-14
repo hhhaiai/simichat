@@ -16,6 +16,7 @@ class OllamaProtocol implements AiProtocol {
     required List<AiMessage> messages,
     String? systemPrompt,
     CancelToken? cancelToken,
+    bool jsonResponse = false,
   }) async* {
     final normalized = normalizeUrl(baseUrl);
     final url = '$normalized/api/chat';
@@ -47,6 +48,11 @@ class OllamaProtocol implements AiProtocol {
       'model': model,
       'messages': msgList,
       'stream': true,
+      if (jsonResponse) ...{
+        'format': 'json',
+        'think': false,
+        'options': {'temperature': 0},
+      },
     });
 
     final request = http.Request('POST', Uri.parse(url));

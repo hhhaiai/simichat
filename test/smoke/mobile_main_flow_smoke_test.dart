@@ -5,6 +5,7 @@ import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/core/ai/model_switch_record.dart';
 import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/memory/dreaming_service.dart';
+import 'package:ai_chat_app/core/memory/reflection_service.dart';
 import 'package:ai_chat_app/core/memory/user_profile.dart';
 import 'package:ai_chat_app/main.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
@@ -25,11 +26,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
     resetDreamingAutoRunStateForTesting();
+    resetAssistantReflectionRetryStateForTesting();
     resetDreamingForegroundCheckIntervalForTesting();
   });
   tearDown(() {
     resetBackgroundInterruptedPersistDelayForTesting();
     resetDreamingAutoRunStateForTesting();
+    resetAssistantReflectionRetryStateForTesting();
     resetDreamingDigestCompleteNotifierForTesting();
     resetDreamingForegroundCheckIntervalForTesting();
   });
@@ -132,9 +135,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('mobile due dreaming smoke: creates pending profile proposal', (
-    tester,
-  ) async {
+  testWidgets('mobile due dreaming persists reflection', (tester) async {
     await pumpMobileApp(
       tester,
       initialPrefs: {
@@ -158,7 +159,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    _expectStoredReflectionMatchesDreaming(prefs);
     expect(prefs.getString(kUserProfileStorageKey), isNull);
     final proposals = decodeUserProfileChangeProposals(
       prefs.getString(kUserProfileChangeProposalsStorageKey),
@@ -168,9 +169,106 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('mobile resumed lifecycle runs due dreaming smoke', (
+  testWidgets('mobile startup retries pending reflection', (tester) async {
+    final now = DateTime.utc(2026, 7, 6, 22);
+    final digest = DreamingDigest(
+      day: now,
+      generatedAt: now,
+      sessionCount: 1,
+      originalMessageCount: 2,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      sessions: [
+        DreamingSessionDigest(
+          sessionId: 'pending-reflection-session',
+          title: '反思恢复',
+          messageCount: 2,
+          userMessageCount: 1,
+          assistantMessageCount: 1,
+          highlights: const ['移动端恢复待处理反思'],
+          firstMessageAt: now.subtract(const Duration(minutes: 1)),
+          lastMessageAt: now,
+        ),
+      ],
+      memoryCandidates: const [],
+      keywords: const ['恢复'],
+      elapsedMs: 1,
+    );
+
+    await pumpMobileApp(
+      tester,
+      initialPrefs: {
+        kDreamingScheduleStorageKey: jsonEncode({
+          'enabled': false,
+          'hour': 22,
+          'minute': 0,
+        }),
+        kDreamingDigestStorageKey: jsonEncode(digest.toJson()),
+        kAssistantReflectionPendingStorageKey: jsonEncode({
+          'sourceDigestDayKey': digest.dayKey,
+          'updatedAt': now.toIso8601String(),
+          'attemptCount': 1,
+        }),
+      },
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    _expectStoredReflectionMatchesDreaming(prefs);
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile resume recovers reflection after follow-up failure', (
     tester,
   ) async {
+    final reflectionService = _FailingOnceReflectionService();
+    await pumpMobileApp(
+      tester,
+      initialPrefs: {
+        kDreamingScheduleStorageKey: jsonEncode({
+          'enabled': true,
+          'hour': 0,
+          'minute': 0,
+        }),
+      },
+      seed: (db) async {
+        await db.sessionDao.createSession(id: 'reflection-retry-session');
+        await db.messageDao.insertMessage(
+          id: 'reflection-retry-message',
+          sessionId: 'reflection-retry-session',
+          role: 'user',
+          content: '请记住移动端反思失败后需要在恢复前台时重试。',
+        );
+      },
+      overrides: (db) => [
+        reflectionServiceProvider.overrideWithValue(reflectionService),
+      ],
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    var prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    expect(prefs.getString(kAssistantReflectionStorageKey), isNull);
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNotNull);
+    expect(reflectionService.attemptCount, 1);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    prefs = await SharedPreferences.getInstance();
+    _expectStoredReflectionMatchesDreaming(prefs);
+    expect(prefs.getString(kAssistantReflectionPendingStorageKey), isNull);
+    expect(reflectionService.attemptCount, 2);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile resume runs dreaming reflection', (tester) async {
     SharedPreferences.setMockInitialValues({
       kDreamingScheduleStorageKey: jsonEncode({
         'enabled': false,
@@ -221,7 +319,7 @@ void main() {
     await tester.pumpAndSettle();
 
     prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    _expectStoredReflectionMatchesDreaming(prefs);
     final proposals = decodeUserProfileChangeProposals(
       prefs.getString(kUserProfileChangeProposalsStorageKey),
     );
@@ -230,7 +328,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('mobile foreground timer runs due dreaming smoke', (
+  testWidgets('mobile foreground timer runs dreaming reflection', (
     tester,
   ) async {
     dreamingForegroundCheckInterval = const Duration(milliseconds: 30);
@@ -283,7 +381,7 @@ void main() {
     }
 
     prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString(kDreamingDigestStorageKey), isNotNull);
+    _expectStoredReflectionMatchesDreaming(prefs);
     final proposals = decodeUserProfileChangeProposals(
       prefs.getString(kUserProfileChangeProposalsStorageKey),
     );
@@ -1373,6 +1471,23 @@ void main() {
   });
 }
 
+void _expectStoredReflectionMatchesDreaming(SharedPreferences prefs) {
+  final rawDigest = prefs.getString(kDreamingDigestStorageKey);
+  expect(rawDigest, isNotNull);
+  final digest = DreamingDigest.fromJson(
+    (jsonDecode(rawDigest!) as Map).cast<String, dynamic>(),
+  );
+  final reflection = decodeReflectionReport(
+    prefs.getString(kAssistantReflectionStorageKey),
+  );
+  final reflectionHistory = decodeReflectionReportHistory(
+    prefs.getString(kAssistantReflectionHistoryStorageKey),
+  );
+  expect(reflection?.hasContent, isTrue);
+  expect(reflection?.sourceDigestDayKey, digest.dayKey);
+  expect(reflectionHistory, isNotEmpty);
+}
+
 class _GateDreamingService extends DreamingService {
   _GateDreamingService({
     required AppDatabase db,
@@ -1395,6 +1510,27 @@ class _GateDreamingService extends DreamingService {
       day: day,
       maxMessages: maxMessages,
       maxMemoryCandidates: maxMemoryCandidates,
+    );
+  }
+}
+
+class _FailingOnceReflectionService extends ReflectionService {
+  int attemptCount = 0;
+
+  @override
+  ReflectionReport buildDailyReflection({
+    required DreamingDigest digest,
+    UserProfile? profile,
+    int pendingProfileProposalCount = 0,
+  }) {
+    attemptCount += 1;
+    if (attemptCount == 1) {
+      throw StateError('simulated reflection follow-up failure');
+    }
+    return super.buildDailyReflection(
+      digest: digest,
+      profile: profile,
+      pendingProfileProposalCount: pendingProfileProposalCount,
     );
   }
 }

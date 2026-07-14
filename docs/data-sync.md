@@ -144,10 +144,12 @@ Obsidian Vault v1 输出目录：
   - `key_point_memory_v1`
   - `dreaming_digest_v1`
   - `dreaming_schedule_v1`
+    - 包含自动整理开关、时间、最近自动运行日期，以及默认关闭的 `requiresCharging` / `requiresUnmeteredNetwork` 后台附加条件；恢复旧备份缺少新字段时保持无附加条件。
   - `user_profile_v1`
   - `user_profile_controls_v1`
   - `user_profile_history_v1`
   - `user_profile_change_proposals_v1`
+  - `user_profile_model_enabled_v1`
   - `theme_mode`
   - `compress_threshold`
   - `font_scale`

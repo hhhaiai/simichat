@@ -40,5 +40,6 @@ abstract class AiProtocol {
     required List<AiMessage> messages,
     String? systemPrompt,
     CancelToken? cancelToken,
+    bool jsonResponse = false,
   });
 }

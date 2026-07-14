@@ -1,23 +1,61 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/ai/ai_protocol.dart';
+import '../../core/database/dao/channel_dao.dart';
+import '../../core/memory/dreaming_service.dart';
+import '../../core/memory/model_user_profile_service.dart';
 import '../../core/memory/user_profile.dart';
+import '../../core/relay/channel_model_relay_bridge.dart';
+import 'database_provider.dart';
 import 'dreaming_provider.dart';
 import 'key_point_memory_provider.dart';
+import 'provider_access.dart';
 
 const kUserProfileStorageKey = 'user_profile_v1';
 const kUserProfileControlsStorageKey = 'user_profile_controls_v1';
 const kUserProfileHistoryStorageKey = 'user_profile_history_v1';
 const kUserProfileChangeProposalsStorageKey =
     'user_profile_change_proposals_v1';
+const kUserProfileModelEnabledStorageKey = 'user_profile_model_enabled_v1';
 const _kMaxUserProfileHistoryEntries = 20;
 const _kMaxUserProfileChangeProposals = 10;
 
 final userProfileBuilderProvider = Provider<UserProfileBuilder>(
   (ref) => const UserProfileBuilder(),
 );
+
+final modelUserProfileServiceProvider = Provider<ModelUserProfileService>(
+  (ref) => const ModelUserProfileService(),
+);
+
+typedef UserProfileModelEnhancer =
+    Future<UserProfile> Function({
+      required DreamingDigest digest,
+      required UserProfile localCandidate,
+      required UserProfileControls controls,
+    });
+
+final userProfileModelEnhancerProvider = Provider<UserProfileModelEnhancer>((
+  ref,
+) {
+  final channelDao = ref.watch(channelDaoProvider);
+  final service = ref.watch(modelUserProfileServiceProvider);
+  return ({required digest, required localCandidate, required controls}) {
+    return _enhanceUserProfileWithConfiguredModel(
+      channelDao: channelDao,
+      service: service,
+      digest: digest,
+      localCandidate: localCandidate,
+      controls: controls,
+    );
+  };
+});
 
 final userProfileProvider =
     StateNotifierProvider<UserProfileNotifier, UserProfile?>((ref) {
@@ -46,6 +84,31 @@ final userProfileChangeProposalsProvider =
     >((ref) {
       return UserProfileChangeProposalsNotifier();
     });
+
+final userProfileModelEnabledProvider =
+    StateNotifierProvider<UserProfileModelEnabledNotifier, bool>((ref) {
+      return UserProfileModelEnabledNotifier();
+    });
+
+class UserProfileModelEnabledNotifier extends StateNotifier<bool> {
+  UserProfileModelEnabledNotifier() : super(false) {
+    ready = _load();
+  }
+
+  late final Future<void> ready;
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool(kUserProfileModelEnabledStorageKey) ?? false;
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    await ready;
+    state = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(kUserProfileModelEnabledStorageKey, enabled);
+  }
+}
 
 class UserProfileNotifier extends StateNotifier<UserProfile?> {
   UserProfileNotifier() : super(null) {
@@ -246,20 +309,30 @@ class UserProfileHistoryNotifier
 Future<UserProfile> buildCurrentUserProfileCandidate(
   WidgetRef ref, {
   DateTime? now,
+}) {
+  return buildCurrentUserProfileCandidateWithAccess(
+    WidgetRefProviderAccess(ref),
+    now: now,
+  );
+}
+
+Future<UserProfile> buildCurrentUserProfileCandidateWithAccess(
+  ProviderAccess access, {
+  DateTime? now,
 }) async {
-  final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
-  final digestNotifier = ref.read(dreamingDigestProvider.notifier);
-  final controlsNotifier = ref.read(userProfileControlsProvider.notifier);
+  final memoryNotifier = access.read(keyPointMemoryProvider.notifier);
+  final digestNotifier = access.read(dreamingDigestProvider.notifier);
+  final controlsNotifier = access.read(userProfileControlsProvider.notifier);
   await memoryNotifier.ready;
   await digestNotifier.ready;
   await controlsNotifier.ready;
 
-  return ref
+  return access
       .read(userProfileBuilderProvider)
       .build(
-        keyPoints: ref.read(keyPointMemoryProvider),
-        digest: ref.read(dreamingDigestProvider),
-        controls: ref.read(userProfileControlsProvider),
+        keyPoints: access.read(keyPointMemoryProvider),
+        digest: access.read(dreamingDigestProvider),
+        controls: access.read(userProfileControlsProvider),
         now: now,
       );
 }
@@ -284,22 +357,62 @@ Future<UserProfileChangeProposal?> proposeUserProfileChanges(
   WidgetRef ref, {
   DateTime? now,
   String reason = 'profile_proposal',
+}) {
+  return proposeUserProfileChangesWithAccess(
+    WidgetRefProviderAccess(ref),
+    now: now,
+    reason: reason,
+  );
+}
+
+Future<UserProfileChangeProposal?> proposeUserProfileChangesWithAccess(
+  ProviderAccess access, {
+  DateTime? now,
+  String reason = 'profile_proposal',
 }) async {
-  final profileNotifier = ref.read(userProfileProvider.notifier);
-  final proposalNotifier = ref.read(
+  final profileNotifier = access.read(userProfileProvider.notifier);
+  final proposalNotifier = access.read(
     userProfileChangeProposalsProvider.notifier,
+  );
+  final modelEnabledNotifier = access.read(
+    userProfileModelEnabledProvider.notifier,
   );
   await profileNotifier.ready;
   await proposalNotifier.ready;
+  await modelEnabledNotifier.ready;
 
-  final current = ref.read(userProfileProvider);
-  final candidate = await buildCurrentUserProfileCandidate(ref, now: now);
+  final current = access.read(userProfileProvider);
+  var candidate = await buildCurrentUserProfileCandidateWithAccess(
+    access,
+    now: now,
+  );
+  var generationMode = kUserProfileProposalGenerationModeLocal;
+  final digest = access.read(dreamingDigestProvider);
+  if (access.read(userProfileModelEnabledProvider) &&
+      digest != null &&
+      digest.hasContent) {
+    try {
+      candidate = await access.read(userProfileModelEnhancerProvider)(
+        digest: digest,
+        localCandidate: candidate,
+        controls: access.read(userProfileControlsProvider),
+      );
+      generationMode = kUserProfileProposalGenerationModeModel;
+    } catch (error) {
+      generationMode = kUserProfileProposalGenerationModeModelFallback;
+      debugPrint(
+        'Model profile enhancement failed; using local candidate '
+        '(${error.runtimeType})',
+      );
+    }
+  }
   final proposal = UserProfileChangeProposal(
     id: '${(now ?? DateTime.now()).microsecondsSinceEpoch}-$reason',
     createdAt: now ?? DateTime.now(),
     reason: reason,
     baseProfile: current,
     candidateProfile: candidate,
+    generationMode: generationMode,
   );
   if (!proposal.hasChanges || !candidate.hasContent) return null;
   await proposalNotifier.add(proposal);
@@ -467,4 +580,83 @@ Future<UserProfile?> restoreUserProfileFromHistory(
   await profileNotifier.save(restored);
   await historyNotifier.record(restored, reason: 'restore_history');
   return restored;
+}
+
+Future<UserProfile> _enhanceUserProfileWithConfiguredModel({
+  required ChannelDao channelDao,
+  required ModelUserProfileService service,
+  required DreamingDigest digest,
+  required UserProfile localCandidate,
+  required UserProfileControls controls,
+}) async {
+  final configuredModels = await channelDao.getChatModels();
+  if (configuredModels.isEmpty) {
+    throw StateError('No enabled chat model');
+  }
+  var selected = configuredModels.first;
+  for (final item in configuredModels) {
+    if (item.channelModel.isDefault) {
+      selected = item;
+      break;
+    }
+  }
+
+  final bridge = ChannelModelRelayBridge(channelDao: channelDao);
+  final model = await bridge.resolveModel(selected.channelModel.id);
+  if (model == null) throw StateError('Default chat model is unavailable');
+
+  final cancelToken = CancelToken();
+  final messages = [
+    AiMessage(
+      role: 'user',
+      content: service.buildUserPrompt(
+        digest: digest,
+        localCandidate: localCandidate,
+      ),
+    ),
+  ];
+  late final String response;
+  try {
+    final oneShot = await bridge
+        .forwardOnce(
+          model: model,
+          messages: messages,
+          systemPrompt: service.systemPrompt,
+          cancelToken: cancelToken,
+        )
+        .timeout(
+          kModelUserProfileTimeout,
+          onTimeout: () {
+            cancelToken.cancel('model profile timed out');
+            throw TimeoutException('模型画像超过总时限', kModelUserProfileTimeout);
+          },
+        );
+    if (oneShot != null) {
+      response = oneShot.content ?? '';
+    } else {
+      response = await service.collectResponse(
+        chunks: bridge
+            .forward(
+              model: model,
+              messages: messages,
+              systemPrompt: service.systemPrompt,
+              cancelToken: cancelToken,
+              jsonResponse: true,
+            )
+            .map((chunk) => chunk.content ?? ''),
+        onTimeout: () => cancelToken.cancel('model profile timed out'),
+      );
+    }
+  } catch (_) {
+    if (!cancelToken.isCancelled) {
+      cancelToken.cancel('model profile stopped');
+    }
+    rethrow;
+  }
+  return service.enhanceFromResponse(
+    digest: digest,
+    localCandidate: localCandidate,
+    controls: controls,
+    response: response,
+  );
 }

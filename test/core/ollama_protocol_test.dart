@@ -9,6 +9,44 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('OllamaProtocol', () {
+    test('requests deterministic JSON mode for structured responses', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requestBody = Completer<Map<String, dynamic>>();
+
+      unawaited(
+        server.forEach((request) async {
+          requestBody.complete(
+            (jsonDecode(await utf8.decodeStream(request)) as Map)
+                .cast<String, dynamic>(),
+          );
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            '${jsonEncode({
+              'message': {'content': '{}'},
+              'done': true,
+            })}\n',
+          );
+          await request.response.close();
+        }),
+      );
+
+      await OllamaProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}',
+            apiKey: '',
+            model: 'qwen-json-test',
+            messages: const [AiMessage(role: 'user', content: 'json')],
+            jsonResponse: true,
+          )
+          .toList();
+
+      final body = await requestBody.future;
+      expect(body['format'], 'json');
+      expect(body['think'], isFalse);
+      expect(body['options'], {'temperature': 0});
+    });
+
     test('stops streaming when cancel token is cancelled', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));

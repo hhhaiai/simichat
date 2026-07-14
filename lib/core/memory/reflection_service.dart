@@ -5,6 +5,9 @@ import 'user_profile.dart';
 
 const kAssistantReflectionTitle = '本地反思报告';
 const kAssistantReflectionPromptTitle = '本地反思行动提示';
+const kReflectionGenerationModeLocal = 'local';
+const kReflectionGenerationModeModel = 'model';
+const kReflectionGenerationModeModelFallback = 'model_fallback';
 
 class ReflectionInsight {
   const ReflectionInsight({
@@ -46,6 +49,7 @@ class ReflectionReport {
     required this.actionItems,
     this.sourceDigestIsTruncated = false,
     this.sourceDigestMessageLimit = 0,
+    this.generationMode = kReflectionGenerationModeLocal,
     int? sourceDigestTotalOriginalMessageCount,
   }) : sourceDigestTotalOriginalMessageCount =
            sourceDigestTotalOriginalMessageCount ?? originalMessageCount;
@@ -72,6 +76,12 @@ class ReflectionReport {
           json['sourceDigestTotalOriginalMessageCount'] as int? ??
           json['originalMessageCount'] as int? ??
           0,
+      generationMode: switch (json['generationMode']) {
+        kReflectionGenerationModeModel => kReflectionGenerationModeModel,
+        kReflectionGenerationModeModelFallback =>
+          kReflectionGenerationModeModelFallback,
+        _ => kReflectionGenerationModeLocal,
+      },
       insights:
           (json['insights'] as List?)
               ?.whereType<Map>()
@@ -100,10 +110,37 @@ class ReflectionReport {
   final bool sourceDigestIsTruncated;
   final int sourceDigestMessageLimit;
   final int sourceDigestTotalOriginalMessageCount;
+  final String generationMode;
   final List<ReflectionInsight> insights;
   final List<String> actionItems;
 
   bool get hasContent => originalMessageCount > 0 && insights.isNotEmpty;
+
+  String get generationModeLabel => switch (generationMode) {
+    kReflectionGenerationModeModel => '模型增强 + 本地规则',
+    kReflectionGenerationModeModelFallback => '模型失败回退',
+    _ => '本地规则',
+  };
+
+  ReflectionReport withGenerationMode(String generationMode) {
+    return ReflectionReport(
+      dayKey: dayKey,
+      generatedAt: generatedAt,
+      sourceDigestDayKey: sourceDigestDayKey,
+      sessionCount: sessionCount,
+      originalMessageCount: originalMessageCount,
+      userMessageCount: userMessageCount,
+      assistantMessageCount: assistantMessageCount,
+      pendingProfileProposalCount: pendingProfileProposalCount,
+      sourceDigestIsTruncated: sourceDigestIsTruncated,
+      sourceDigestMessageLimit: sourceDigestMessageLimit,
+      sourceDigestTotalOriginalMessageCount:
+          sourceDigestTotalOriginalMessageCount,
+      generationMode: generationMode,
+      insights: insights,
+      actionItems: actionItems,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'dayKey': dayKey,
@@ -119,6 +156,7 @@ class ReflectionReport {
       'sourceDigestMessageLimit': sourceDigestMessageLimit,
     'sourceDigestTotalOriginalMessageCount':
         sourceDigestTotalOriginalMessageCount,
+    'generationMode': generationMode,
     'insights': insights.map((item) => item.toJson()).toList(),
     'actionItems': actionItems,
   };
@@ -134,6 +172,7 @@ class ReflectionReport {
       ..writeln('- 来源 Dreaming 原始消息总数：$sourceDigestTotalOriginalMessageCount')
       ..writeln('- 用户 / 助手消息：$userMessageCount / $assistantMessageCount')
       ..writeln('- 待确认画像变更：$pendingProfileProposalCount')
+      ..writeln('- 生成方式：$generationModeLabel')
       ..writeln()
       ..writeln('## 反思结论')
       ..writeln();

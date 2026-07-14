@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+import '../../core/background/dreaming_background_workmanager.dart';
+import '../../core/background/ios_background_refresh_status.dart';
 import '../../core/archive/data_import_service.dart';
 import '../../core/archive/data_export_service.dart';
 import '../../core/archive/data_export_share_service.dart';
@@ -3514,6 +3516,7 @@ class SettingsPage extends ConsumerWidget {
   ) async {
     try {
       final result = await service.importExport(file);
+      ref.invalidate(assistantReflectionPendingProvider);
       var dreamingSyncSuffix = '';
       try {
         final restoredDreamingReports =
@@ -3682,12 +3685,19 @@ class SettingsPage extends ConsumerWidget {
     final digest = ref.watch(dreamingDigestProvider);
     final history = ref.watch(dreamingDigestHistoryProvider);
     final schedule = ref.watch(dreamingScheduleProvider);
+    final iosBackgroundRefreshStatus = ref
+        .watch(iosBackgroundRefreshStatusProvider)
+        .valueOrNull;
     final latestFailedJob = ref
         .watch(latestFailedDreamingJobProvider)
         .valueOrNull;
     final scheduleText =
         '${schedule.enabled ? '自动整理已开启' : '自动整理已关闭'} · ${formatDreamingScheduleTime(schedule)}';
-    const scheduleBoundaryText = '前台到期 · 非系统后台';
+    final backgroundConditionsText = formatDreamingBackgroundConditions(
+      schedule,
+    );
+    const scheduleBoundaryText =
+        'Android WorkManager / iOS BGTaskScheduler 系统后台择机执行 · 前台到期兜底';
     final nextRunText = formatNextDreamingForegroundRun(
       schedule,
       now: DateTime.now(),
@@ -3696,9 +3706,13 @@ class SettingsPage extends ConsumerWidget {
     final failedText = latestFailedJob == null
         ? ''
         : ' · 最近失败 ${latestFailedJob.dayKey} · 可重试';
+    final iosBackgroundRefreshText =
+        iosBackgroundRefreshStatus?.settingsSummary == null
+        ? ''
+        : ' · ${iosBackgroundRefreshStatus!.settingsSummary}';
     final subtitle = digest == null
-        ? '$scheduleText · $scheduleBoundaryText · $nextRunText · 可手动生成今日摘要$historyText$failedText'
-        : '$scheduleText · $scheduleBoundaryText · $nextRunText · 最近 ${digest.dayKey} · ${_formatDreamingMessageCoverage(digest)}$historyText$failedText';
+        ? '$scheduleText · $backgroundConditionsText · $scheduleBoundaryText$iosBackgroundRefreshText · $nextRunText · 可手动生成今日摘要$historyText$failedText'
+        : '$scheduleText · $backgroundConditionsText · $scheduleBoundaryText$iosBackgroundRefreshText · $nextRunText · 最近 ${digest.dayKey} · ${_formatDreamingMessageCoverage(digest)}$historyText$failedText';
 
     return ListTile(
       leading: const Icon(Icons.nightlight_round_outlined),
@@ -3719,6 +3733,9 @@ class SettingsPage extends ConsumerWidget {
           final digest = ref.watch(dreamingDigestProvider);
           final history = ref.watch(dreamingDigestHistoryProvider);
           final schedule = ref.watch(dreamingScheduleProvider);
+          final iosBackgroundRefreshStatus = ref
+              .watch(iosBackgroundRefreshStatusProvider)
+              .valueOrNull;
           final latestFailedJob = ref
               .watch(latestFailedDreamingJobProvider)
               .valueOrNull;
@@ -3735,19 +3752,71 @@ class SettingsPage extends ConsumerWidget {
                     const Text('本地 v1 会整理今日原始消息，生成会话摘要、关键词和记忆候选。'),
                     const SizedBox(height: 8),
                     const Text(
-                      '当前不会上传云端，也不会调用远端模型。自动整理采用前台到期触发：到达设定时间后，打开应用会自动整理一次。',
+                      '当前不会上传云端，也不会调用远端模型。Android WorkManager 与 iOS BGTaskScheduler 会交给系统后台择机执行；系统不保证精确时刻，打开应用后的前台到期检查仍作为兜底。iOS 关闭“后台 App 刷新”后不会执行系统后台任务。',
                     ),
+                    if (iosBackgroundRefreshStatus?.settingsSummary !=
+                        null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        iosBackgroundRefreshStatus!.settingsSummary!,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color:
+                              iosBackgroundRefreshStatus ==
+                                      IosBackgroundRefreshStatus.denied ||
+                                  iosBackgroundRefreshStatus ==
+                                      IosBackgroundRefreshStatus.restricted
+                              ? Theme.of(ctx).colorScheme.error
+                              : null,
+                        ),
+                      ),
+                      if (iosBackgroundRefreshStatus ==
+                              IosBackgroundRefreshStatus.denied ||
+                          iosBackgroundRefreshStatus ==
+                              IosBackgroundRefreshStatus.restricted)
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () async {
+                                final opened = await openIosAppSettings();
+                                if (!opened && ctx.mounted) {
+                                  _showArchiveSnack(ctx, '无法打开系统设置，请手动前往设置。');
+                                }
+                              },
+                              icon: const Icon(Icons.settings_outlined),
+                              label: const Text('打开系统设置'),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                ref.invalidate(
+                                  iosBackgroundRefreshStatusProvider,
+                                );
+                              },
+                              icon: const Icon(Icons.refresh_outlined),
+                              label: const Text('重新检查'),
+                            ),
+                          ],
+                        ),
+                    ],
                     const SizedBox(height: 8),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('前台到期自动整理'),
+                      title: const Text('自动 Dreaming'),
                       subtitle: Text(
                         '默认夜间 ${formatDreamingScheduleTime(schedule)}',
                       ),
                       value: schedule.enabled,
-                      onChanged: (value) => ref
-                          .read(dreamingScheduleProvider.notifier)
-                          .setEnabled(value),
+                      onChanged: (value) async {
+                        await ref
+                            .read(dreamingScheduleProvider.notifier)
+                            .setEnabled(value);
+                        if (!ctx.mounted) return;
+                        await _syncDreamingBackgroundScheduleWithFeedback(
+                          ctx,
+                          ref,
+                        );
+                      },
                     ),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -3766,6 +3835,47 @@ class SettingsPage extends ConsumerWidget {
                         await ref
                             .read(dreamingScheduleProvider.notifier)
                             .setTime(hour: picked.hour, minute: picked.minute);
+                        if (!ctx.mounted) return;
+                        await _syncDreamingBackgroundScheduleWithFeedback(
+                          ctx,
+                          ref,
+                        );
+                      },
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('仅充电时执行'),
+                      subtitle: const Text(
+                        'Android / iOS 系统后台任务都会要求系统判定设备正在充电。',
+                      ),
+                      value: schedule.requiresCharging,
+                      onChanged: (value) async {
+                        await ref
+                            .read(dreamingScheduleProvider.notifier)
+                            .setRequiresCharging(value);
+                        if (!ctx.mounted) return;
+                        await _syncDreamingBackgroundScheduleWithFeedback(
+                          ctx,
+                          ref,
+                        );
+                      },
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('仅非计费网络执行'),
+                      subtitle: const Text(
+                        'Android 通常对应 Wi-Fi；iOS BGTaskScheduler 只能要求联网，无法保证 Wi-Fi。',
+                      ),
+                      value: schedule.requiresUnmeteredNetwork,
+                      onChanged: (value) async {
+                        await ref
+                            .read(dreamingScheduleProvider.notifier)
+                            .setRequiresUnmeteredNetwork(value);
+                        if (!ctx.mounted) return;
+                        await _syncDreamingBackgroundScheduleWithFeedback(
+                          ctx,
+                          ref,
+                        );
                       },
                     ),
                     if (latestFailedJob != null) ...[
@@ -3910,6 +4020,25 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
+  Future<void> _syncDreamingBackgroundScheduleWithFeedback(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    try {
+      await syncDreamingBackgroundSchedule(ref.read(dreamingScheduleProvider));
+    } on IosBackgroundRefreshUnavailableException catch (error) {
+      if (context.mounted) {
+        _showArchiveSnack(context, error.userMessage);
+      }
+    } catch (_) {
+      if (context.mounted) {
+        _showArchiveSnack(context, '系统后台调度更新失败，自动 Dreaming 将使用前台到期兜底。');
+      }
+    } finally {
+      ref.invalidate(iosBackgroundRefreshStatusProvider);
+    }
+  }
+
   Future<void> _clearDreamingReports(
     BuildContext context,
     WidgetRef ref,
@@ -3917,6 +4046,7 @@ class SettingsPage extends ConsumerWidget {
     await ref.read(dreamingDaoProvider).clearReports();
     await ref.read(dreamingDigestProvider.notifier).clear();
     await ref.read(dreamingDigestHistoryProvider.notifier).clear();
+    await ref.read(assistantReflectionPendingProvider.notifier).clear();
     if (!context.mounted) return;
     _showArchiveSnack(context, 'Dreaming 报告已清空');
   }
@@ -3929,6 +4059,10 @@ class SettingsPage extends ConsumerWidget {
     final digest = ref.read(dreamingDigestProvider);
     await ref.read(dreamingDaoProvider).deleteReportByDay(dayKey);
     await ref.read(dreamingDigestHistoryProvider.notifier).removeDay(dayKey);
+    final pending = ref.read(assistantReflectionPendingProvider);
+    if (pending?.sourceDigestDayKey == dayKey) {
+      await ref.read(assistantReflectionPendingProvider.notifier).clear();
+    }
     if (digest?.dayKey == dayKey) {
       final remainingHistory = ref.read(dreamingDigestHistoryProvider);
       if (remainingHistory.isEmpty) {
@@ -3971,6 +4105,7 @@ class SettingsPage extends ConsumerWidget {
         ? await proposeUserProfileChanges(ref, reason: 'profile_proposal')
         : null;
     var reflectionActionCount = 0;
+    var reflectionPending = false;
     if (digest.hasContent) {
       try {
         final reflection = await runAssistantReflection(
@@ -3981,11 +4116,14 @@ class SettingsPage extends ConsumerWidget {
         reflectionActionCount = reflection?.actionItems.length ?? 0;
       } catch (_) {
         // 反思失败不能影响 Dreaming 和画像候选主链路。
+        reflectionPending = true;
       }
     }
     if (!context.mounted) return;
     final reflectionSuffix = reflectionActionCount > 0
         ? '，反思 $reflectionActionCount 个行动项'
+        : reflectionPending
+        ? '，反思待重试'
         : '';
     final messageCoverage = _formatDreamingMessageCoverage(digest);
     final message = digest.hasContent
@@ -4059,18 +4197,23 @@ class SettingsPage extends ConsumerWidget {
     final report = ref.watch(assistantReflectionProvider);
     final history = ref.watch(assistantReflectionHistoryProvider);
     final digest = ref.watch(dreamingDigestProvider);
+    final pending = ref.watch(assistantReflectionPendingProvider);
     final promptEnabled = ref.watch(assistantReflectionPromptEnabledProvider);
+    final modelEnabled = ref.watch(assistantReflectionModelEnabledProvider);
     final reflectionFreshnessText =
         report != null &&
             report.sourceDigestDayKey.isNotEmpty &&
             report.sourceDigestDayKey != report.dayKey
         ? ' · 来源 ${report.sourceDigestDayKey} · 先运行今日 Dreaming'
         : '';
+    final pendingSuffix = pending == null
+        ? ''
+        : ' · 反思待重试 ${pending.sourceDigestDayKey}';
     final subtitle = report == null
         ? digest == null
-              ? '暂无反思 · 先运行 Dreaming 后再生成'
-              : '可基于 ${digest.dayKey} 的 Dreaming 报告生成本地反思'
-        : '最近 ${report.dayKey}$reflectionFreshnessText · ${report.insights.length} 条结论 · ${report.actionItems.length} 个行动项 · 历史 ${history.length} 次 · 短期提示${promptEnabled ? '开启' : '关闭'}';
+              ? '暂无反思 · 先运行 Dreaming 后再生成$pendingSuffix'
+              : '可基于 ${digest.dayKey} 的 Dreaming 报告生成本地反思$pendingSuffix'
+        : '最近 ${report.dayKey}$reflectionFreshnessText · ${report.insights.length} 条结论 · ${report.actionItems.length} 个行动项 · ${report.generationModeLabel} · 历史 ${history.length} 次 · 短期提示${promptEnabled ? '开启' : '关闭'} · 模型开关${modelEnabled ? '开启' : '关闭'}$pendingSuffix';
 
     return ListTile(
       leading: const Icon(Icons.psychology_alt_outlined),
@@ -4090,8 +4233,12 @@ class SettingsPage extends ConsumerWidget {
           final report = dialogRef.watch(assistantReflectionProvider);
           final history = dialogRef.watch(assistantReflectionHistoryProvider);
           final digest = dialogRef.watch(dreamingDigestProvider);
+          final pending = dialogRef.watch(assistantReflectionPendingProvider);
           final promptEnabled = dialogRef.watch(
             assistantReflectionPromptEnabledProvider,
+          );
+          final modelEnabled = dialogRef.watch(
+            assistantReflectionModelEnabledProvider,
           );
           final preview = report?.toMarkdown();
           final promptPreview = promptEnabled
@@ -4106,8 +4253,58 @@ class SettingsPage extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '本地 v1 基于最近 Dreaming 报告和用户画像，生成对回应质量、长期记忆、画像确认和下一步任务的可解释反思；不上传云端，不调用远端模型。',
+                    Text(
+                      modelEnabled
+                          ? '反思先在本机生成安全基线，再尝试使用默认聊天模型增强；模型失败、响应异常或无可用模型时会自动回退本地反思。'
+                          : '本地 v1 基于最近 Dreaming 报告和用户画像，生成对回应质量、长期记忆、画像确认和下一步任务的可解释反思；当前不上传云端。',
+                    ),
+                    if (report?.generationMode ==
+                        kReflectionGenerationModeModelFallback) ...[
+                      const SizedBox(height: 12),
+                      const ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.info_outline),
+                        title: Text('最近一次模型增强失败，已安全回退本地反思'),
+                        subtitle: Text('本地安全结论和行动项已正常保存，可稍后重新运行模型增强。'),
+                      ),
+                    ],
+                    if (pending != null) ...[
+                      const SizedBox(height: 12),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.sync_problem_outlined),
+                        title: Text(
+                          'Reflection 待重试：来源 Dreaming ${pending.sourceDigestDayKey}',
+                        ),
+                        subtitle: Text(
+                          '已尝试 ${pending.attemptCount} 次；应用启动或恢复前台时会自动重试。',
+                        ),
+                        trailing: TextButton(
+                          onPressed: () => _clearAssistantReflectionPending(
+                            context,
+                            parentRef,
+                          ),
+                          child: const Text('清除待重试'),
+                        ),
+                      ),
+                    ],
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('使用模型增强反思'),
+                      subtitle: const Text(
+                        '默认关闭。开启后，经过长度限制和密钥 / URL / 本机路径脱敏的 Dreaming 摘要与本地反思可能发送给默认聊天模型；失败会自动回退本地反思。',
+                      ),
+                      value: modelEnabled,
+                      onChanged: (enabled) {
+                        unawaited(
+                          dialogRef
+                              .read(
+                                assistantReflectionModelEnabledProvider
+                                    .notifier,
+                              )
+                              .setEnabled(enabled),
+                        );
+                      },
                     ),
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
@@ -4139,7 +4336,7 @@ class SettingsPage extends ConsumerWidget {
                       const Text('暂无本地反思报告。')
                     else ...[
                       Text(
-                        '最近反思：${report.dayKey} · 来源 ${report.sourceDigestDayKey}',
+                        '最近反思：${report.dayKey} · 来源 ${report.sourceDigestDayKey} · ${report.generationMode == kReflectionGenerationModeModel ? '模型增强 + 本地规则' : '本地规则'}',
                       ),
                       Text(
                         '结论 ${report.insights.length} 条 · 行动项 ${report.actionItems.length} 个',
@@ -4230,7 +4427,7 @@ class SettingsPage extends ConsumerWidget {
             ),
             actions: [
               TextButton(
-                onPressed: report == null && history.isEmpty
+                onPressed: report == null && history.isEmpty && pending == null
                     ? null
                     : () => _clearAssistantReflection(context, parentRef),
                 child: const Text('清空反思'),
@@ -4259,8 +4456,18 @@ class SettingsPage extends ConsumerWidget {
   ) async {
     await ref.read(assistantReflectionProvider.notifier).clear();
     await ref.read(assistantReflectionHistoryProvider.notifier).clear();
+    await ref.read(assistantReflectionPendingProvider.notifier).clear();
     if (!context.mounted) return;
     _showArchiveSnack(context, '本地反思报告已清空');
+  }
+
+  Future<void> _clearAssistantReflectionPending(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await ref.read(assistantReflectionPendingProvider.notifier).clear();
+    if (!context.mounted) return;
+    _showArchiveSnack(context, '已清除 Reflection 待重试状态');
   }
 
   Future<void> _deleteAssistantReflection(
@@ -4292,14 +4499,28 @@ class SettingsPage extends ConsumerWidget {
     final pendingProfileProposalCount = ref
         .read(userProfileChangeProposalsProvider)
         .fold<int>(0, (total, proposal) => total + proposal.diff.items.length);
-    final report = await runAssistantReflection(
-      ref,
-      pendingProfileProposalCount: pendingProfileProposalCount,
-    );
+    ReflectionReport? report;
+    try {
+      report = await runAssistantReflection(
+        ref,
+        pendingProfileProposalCount: pendingProfileProposalCount,
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      _showArchiveSnack(context, '反思失败，已标记待重试');
+      return;
+    }
     if (!context.mounted) return;
     final message = report == null
         ? '请先运行 Dreaming 并积累可整理对话，再生成本地反思'
-        : '反思已完成：${report.insights.length} 条结论，${report.actionItems.length} 个行动项';
+        : switch (report.generationMode) {
+            kReflectionGenerationModeModel =>
+              '模型增强反思已完成：${report.insights.length} 条结论，${report.actionItems.length} 个行动项',
+            kReflectionGenerationModeModelFallback =>
+              '模型增强不可用，本次已安全回退本地反思：${report.insights.length} 条结论',
+            _ =>
+              '本地反思已完成：${report.insights.length} 条结论，${report.actionItems.length} 个行动项',
+          };
     _showArchiveSnack(context, message);
   }
 
@@ -4308,14 +4529,15 @@ class SettingsPage extends ConsumerWidget {
   Widget _buildUserProfileTile(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(userProfileProvider);
     final proposals = ref.watch(userProfileChangeProposalsProvider);
+    final modelEnabled = ref.watch(userProfileModelEnabledProvider);
     final proposalSuffix = proposals.isEmpty
         ? ''
         : ' · ${proposals.length} 个待确认变更';
     final subtitle = profile == null
         ? '尚未生成 · 可从本地 Key Points 与 Dreaming 报告重建$proposalSuffix'
         : profile.hasContent
-        ? '${profile.sourceCount} 条来源 · ${profile.totalSignalCount} 个画像信号 · 本地保存$proposalSuffix'
-        : '暂无足够画像信号 · 继续聊天或添加记忆后重建$proposalSuffix';
+        ? '${profile.sourceCount} 条来源 · ${profile.totalSignalCount} 个画像信号 · 本地保存 · 模型候选${modelEnabled ? '开启' : '关闭'}$proposalSuffix'
+        : '暂无足够画像信号 · 继续聊天或添加记忆后重建 · 模型候选${modelEnabled ? '开启' : '关闭'}$proposalSuffix';
 
     return ListTile(
       leading: const Icon(Icons.person_search_outlined),
@@ -4335,6 +4557,7 @@ class SettingsPage extends ConsumerWidget {
           final controls = ref.watch(userProfileControlsProvider);
           final history = ref.watch(userProfileHistoryProvider);
           final proposals = ref.watch(userProfileChangeProposalsProvider);
+          final modelEnabled = ref.watch(userProfileModelEnabledProvider);
           return AlertDialog(
             title: const Text('用户画像 / 镜像数字人基础'),
             content: SizedBox(
@@ -4344,8 +4567,26 @@ class SettingsPage extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '本地 v1 只读取本机 Key Points 与最近 Dreaming 报告，生成可解释画像；不上传云端，不调用远端模型。',
+                    Text(
+                      modelEnabled
+                          ? '本地规则先生成画像候选，再尝试使用默认聊天模型补充少量有证据的待确认候选；模型失败会回退本地候选。'
+                          : '本地 v1 只读取本机 Key Points 与最近 Dreaming 报告，生成可解释画像；不上传云端，模型辅助默认关闭。',
+                    ),
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('使用模型辅助画像候选'),
+                      subtitle: const Text(
+                        '默认关闭。开启后，只发送限长、脱敏的 Dreaming 摘要和本地候选；模型只能追加少量有证据的待确认候选，不能直接修改正式画像，也不能删除或覆盖已有画像，失败会回退本地规则。',
+                      ),
+                      value: modelEnabled,
+                      onChanged: (enabled) {
+                        unawaited(
+                          ref
+                              .read(userProfileModelEnabledProvider.notifier)
+                              .setEnabled(enabled),
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                     if (proposals.isNotEmpty) ...[

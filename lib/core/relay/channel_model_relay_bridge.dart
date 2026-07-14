@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show CancelToken;
+
 import '../ai/ai_protocol.dart';
 import '../ai/ai_service.dart';
 import '../ai/model_capability.dart';
+import '../ai/openai_chat_protocol.dart';
 import '../crypto/key_encryptor.dart';
 import '../database/dao/channel_dao.dart';
 import 'openai_compatible_relay_server.dart';
@@ -15,6 +18,18 @@ typedef OpenAiRelayAiSender =
       required String model,
       required List<AiMessage> messages,
       String? systemPrompt,
+      CancelToken? cancelToken,
+      required bool jsonResponse,
+    });
+
+typedef OpenAiRelayAiFetcher =
+    Future<({String content, String? thinking})> Function({
+      required String baseUrl,
+      required String apiKey,
+      required String model,
+      required List<AiMessage> messages,
+      String? systemPrompt,
+      CancelToken? cancelToken,
     });
 
 /// 将数据库中的渠道 / 模型配置桥接到本地 OpenAI 兼容中转服务。
@@ -24,12 +39,14 @@ class ChannelModelRelayBridge {
     this.routeStrategy = OpenAiRelayRouteStrategy.direct,
     this.decryptApiKey = KeyEncryptor.decrypt,
     this.sendMessage = _defaultSendMessage,
+    this.fetchOpenAiMessage = OpenAiChatProtocol.fetchMessageOnce,
   });
 
   final ChannelDao channelDao;
   final OpenAiRelayRouteStrategy routeStrategy;
   final String Function(String encrypted) decryptApiKey;
   final OpenAiRelayAiSender sendMessage;
+  final OpenAiRelayAiFetcher fetchOpenAiMessage;
 
   Future<List<OpenAiCompatibleRelayModel>> listModels() async {
     final models = await channelDao.getChatModels();
@@ -94,6 +111,8 @@ class ChannelModelRelayBridge {
     required OpenAiCompatibleRelayModel model,
     required List<AiMessage> messages,
     String? systemPrompt,
+    CancelToken? cancelToken,
+    bool jsonResponse = false,
   }) async* {
     final item = await channelDao.getModelWithChannel(model.id);
     if (item == null || !item.channel.isEnabled) {
@@ -112,7 +131,38 @@ class ChannelModelRelayBridge {
       model: item.channelModel.modelName,
       messages: messages,
       systemPrompt: systemPrompt,
+      cancelToken: cancelToken,
+      jsonResponse: jsonResponse,
     );
+  }
+
+  Future<AiChunk?> forwardOnce({
+    required OpenAiCompatibleRelayModel model,
+    required List<AiMessage> messages,
+    String? systemPrompt,
+    CancelToken? cancelToken,
+  }) async {
+    final item = await channelDao.getModelWithChannel(model.id);
+    if (item == null || !item.channel.isEnabled) {
+      throw const OpenAiCompatibleRelayException('模型不存在或未启用');
+    }
+    if (!ModelCapability.isChat(item.channelModel.capability)) {
+      throw const OpenAiCompatibleRelayException('模型不是聊天模型');
+    }
+    if (item.channel.protocol != 'openai_chat') return null;
+
+    final apiKey = item.channel.apiKeyEncrypted.isEmpty
+        ? ''
+        : decryptApiKey(item.channel.apiKeyEncrypted);
+    final result = await fetchOpenAiMessage(
+      baseUrl: item.channel.baseUrl,
+      apiKey: apiKey,
+      model: item.channelModel.modelName,
+      messages: messages,
+      systemPrompt: systemPrompt,
+      cancelToken: cancelToken,
+    );
+    return AiChunk(content: result.content, thinking: result.thinking);
   }
 
   OpenAiCompatibleRelayModel _toRelayModel(ChannelModelWithChannel item) {
@@ -218,6 +268,8 @@ Stream<AiChunk> _defaultSendMessage({
   required String model,
   required List<AiMessage> messages,
   String? systemPrompt,
+  CancelToken? cancelToken,
+  required bool jsonResponse,
 }) {
   return AiService.sendMessage(
     protocol: protocol,
@@ -226,5 +278,7 @@ Stream<AiChunk> _defaultSendMessage({
     model: model,
     messages: messages,
     systemPrompt: systemPrompt,
+    cancelToken: cancelToken,
+    jsonResponse: jsonResponse,
   );
 }

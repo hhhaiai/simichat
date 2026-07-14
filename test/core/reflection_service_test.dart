@@ -5,6 +5,29 @@ import 'package:ai_chat_app/core/memory/user_profile.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('model fallback generation mode survives storage and markdown', () {
+    final now = DateTime.utc(2026, 7, 14, 22);
+    final report = ReflectionReport(
+      dayKey: '2026-07-14',
+      generatedAt: now,
+      sourceDigestDayKey: '2026-07-14',
+      sessionCount: 1,
+      originalMessageCount: 2,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      pendingProfileProposalCount: 0,
+      generationMode: kReflectionGenerationModeModelFallback,
+      insights: const [ReflectionInsight(category: '安全回退', text: '保留本地结论。')],
+      actionItems: const ['稍后重试模型增强。'],
+    );
+
+    final reloaded = decodeReflectionReport(encodeReflectionReport(report));
+
+    expect(reloaded?.generationMode, kReflectionGenerationModeModelFallback);
+    expect(reloaded?.generationModeLabel, '模型失败回退');
+    expect(reloaded?.toMarkdown(), contains('模型失败回退'));
+  });
+
   test('reflection service builds local insights and action items', () {
     final now = DateTime.utc(2026, 7, 6, 22);
     final digest = DreamingDigest(

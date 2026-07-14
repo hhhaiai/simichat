@@ -2,6 +2,7 @@ import Flutter
 import UIKit
 import AVFoundation
 import Speech
+import workmanager_apple
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, AVAudioPlayerDelegate {
@@ -10,6 +11,7 @@ import Speech
   private var audioPlayerChannel: FlutterMethodChannel?
   private var nativeSpeechToTextChannel: FlutterMethodChannel?
   private var deepLinkChannel: FlutterMethodChannel?
+  private var backgroundRefreshStatusChannel: FlutterMethodChannel?
   private var pendingInitialDeepLink: String?
   private var audioRecorder: AVAudioRecorder?
   private var audioPlayer: AVAudioPlayer?
@@ -22,6 +24,12 @@ import Speech
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    SwiftWorkmanagerPlugin.setPluginRegistrantCallback { registry in
+      GeneratedPluginRegistrant.register(with: registry)
+    }
+    SwiftWorkmanagerPlugin.registerBGProcessingTask(
+      withIdentifier: "top.simitalk.aichat.dreaming.processing"
+    )
     if let url = launchOptions?[.url] as? URL {
       _ = handleIncomingDeepLink(url)
     }
@@ -47,6 +55,7 @@ import Speech
     registerAudioPlayerChannel(messenger: messenger)
     registerNativeSpeechToTextChannel(messenger: messenger)
     registerDeepLinkChannel(messenger: messenger)
+    registerBackgroundRefreshStatusChannel(messenger: messenger)
   }
 
   @discardableResult
@@ -77,6 +86,32 @@ import Speech
       self?.pendingInitialDeepLink = nil
     }
     deepLinkChannel = channel
+  }
+
+  private func registerBackgroundRefreshStatusChannel(
+    messenger: FlutterBinaryMessenger
+  ) {
+    let channel = FlutterMethodChannel(
+      name: "simichat/background_refresh_status",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "getBackgroundRefreshStatus":
+        result(Int(UIApplication.shared.backgroundRefreshStatus.rawValue))
+      case "openAppSettings":
+        guard let url = URL(string: UIApplication.openSettingsURLString) else {
+          result(false)
+          return
+        }
+        UIApplication.shared.open(url, options: [:]) { opened in
+          result(opened)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    backgroundRefreshStatusChannel = channel
   }
 
   private func registerDataExportShareChannel(messenger: FlutterBinaryMessenger) {

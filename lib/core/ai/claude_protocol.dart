@@ -14,6 +14,7 @@ class ClaudeProtocol implements AiProtocol {
     required List<AiMessage> messages,
     String? systemPrompt,
     CancelToken? cancelToken,
+    bool jsonResponse = false,
   }) async* {
     final normalized = normalizeUrl(baseUrl);
     final url = '$normalized/v1/messages';

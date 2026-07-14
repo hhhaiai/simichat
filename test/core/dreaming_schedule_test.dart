@@ -8,7 +8,40 @@ void main() {
     expect(config.enabled, isTrue);
     expect(config.hour, 22);
     expect(config.minute, 0);
+    expect(config.requiresCharging, isFalse);
+    expect(config.requiresUnmeteredNetwork, isFalse);
     expect(formatDreamingScheduleTime(config), '22:00');
+  });
+
+  test('dreaming schedule persists optional background constraints', () {
+    final config = DreamingScheduleConfig.fromJson({
+      'enabled': true,
+      'hour': 21,
+      'minute': 45,
+      'requiresCharging': true,
+      'requiresUnmeteredNetwork': true,
+    });
+
+    expect(config.requiresCharging, isTrue);
+    expect(config.requiresUnmeteredNetwork, isTrue);
+    expect(config.toJson(), containsPair('requiresCharging', true));
+    expect(config.toJson(), containsPair('requiresUnmeteredNetwork', true));
+    expect(
+      formatDreamingBackgroundConditions(config),
+      '后台附加条件：充电 + 非计费网络（通常 Wi-Fi）',
+    );
+  });
+
+  test('legacy dreaming schedule keeps background constraints disabled', () {
+    final config = DreamingScheduleConfig.fromJson({
+      'enabled': true,
+      'hour': 22,
+      'minute': 0,
+    });
+
+    expect(config.requiresCharging, isFalse);
+    expect(config.requiresUnmeteredNetwork, isFalse);
+    expect(formatDreamingBackgroundConditions(config), '后台附加条件：无');
   });
 
   test('dreaming schedule only runs after configured time once per day', () {

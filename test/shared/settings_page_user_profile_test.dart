@@ -12,6 +12,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('profile model candidate switch is independent and default off', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('用户画像 / 镜像数字人基础'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('用户画像 / 镜像数字人基础'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('使用模型辅助画像候选'), findsOneWidget);
+    expect(find.textContaining('默认关闭。开启后'), findsOneWidget);
+    expect(find.textContaining('不能直接修改正式画像'), findsOneWidget);
+
+    final switchTile = find.ancestor(
+      of: find.text('使用模型辅助画像候选'),
+      matching: find.byType(SwitchListTile),
+    );
+    await tester.tap(switchTile);
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool(kUserProfileModelEnabledStorageKey), isTrue);
+  });
+
   testWidgets('settings page can rebuild and show local user profile', (
     tester,
   ) async {

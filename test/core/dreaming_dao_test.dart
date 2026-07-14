@@ -2,8 +2,98 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ai_chat_app/core/database/app_database.dart';
+import 'package:ai_chat_app/core/database/dao/dreaming_dao.dart';
 
 void main() {
+  test('dreaming dao atomically claims one automatic job per day', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final first = await db.dreamingDao.claimAutomaticJob(
+      id: 'dreaming-auto-2026-07-14',
+      dayKey: '2026-07-14',
+      scheduledFor: 1000,
+      trigger: 'android_background',
+      claimedAt: 1100,
+      staleBefore: 100,
+    );
+    final concurrent = await db.dreamingDao.claimAutomaticJob(
+      id: 'dreaming-auto-2026-07-14',
+      dayKey: '2026-07-14',
+      scheduledFor: 1000,
+      trigger: 'foreground_due',
+      claimedAt: 1200,
+      staleBefore: 200,
+    );
+
+    expect(first, DreamingAutomaticJobClaim.claimed);
+    expect(concurrent, DreamingAutomaticJobClaim.inFlight);
+
+    await db.dreamingDao.markJobCompleted(
+      'dreaming-auto-2026-07-14',
+      finishedAt: 1300,
+    );
+    final completed = await db.dreamingDao.claimAutomaticJob(
+      id: 'dreaming-auto-2026-07-14',
+      dayKey: '2026-07-14',
+      scheduledFor: 1000,
+      trigger: 'android_background',
+      claimedAt: 1400,
+      staleBefore: 300,
+    );
+    expect(completed, DreamingAutomaticJobClaim.completed);
+  });
+
+  test('dreaming dao reclaims failed or stale automatic jobs', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await db.dreamingDao.claimAutomaticJob(
+      id: 'dreaming-auto-failed',
+      dayKey: '2026-07-15',
+      scheduledFor: 1000,
+      trigger: 'android_background',
+      claimedAt: 1100,
+      staleBefore: 100,
+    );
+    await db.dreamingDao.markJobFailed(
+      'dreaming-auto-failed',
+      error: 'temporary failure',
+      finishedAt: 1200,
+    );
+    expect(
+      await db.dreamingDao.claimAutomaticJob(
+        id: 'dreaming-auto-failed',
+        dayKey: '2026-07-15',
+        scheduledFor: 1000,
+        trigger: 'android_background',
+        claimedAt: 1300,
+        staleBefore: 300,
+      ),
+      DreamingAutomaticJobClaim.claimed,
+    );
+
+    await db.dreamingDao.claimAutomaticJob(
+      id: 'dreaming-auto-stale',
+      dayKey: '2026-07-16',
+      scheduledFor: 2000,
+      trigger: 'foreground_due',
+      claimedAt: 2100,
+      staleBefore: 100,
+    );
+    expect(
+      await db.dreamingDao.claimAutomaticJob(
+        id: 'dreaming-auto-stale',
+        dayKey: '2026-07-16',
+        scheduledFor: 2000,
+        trigger: 'android_background',
+        claimedAt: 4000,
+        staleBefore: 3000,
+      ),
+      DreamingAutomaticJobClaim.claimed,
+    );
+  });
+
   test('dreaming dao persists job lifecycle and latest report', () async {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);

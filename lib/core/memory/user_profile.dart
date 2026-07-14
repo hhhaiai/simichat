@@ -4,6 +4,9 @@ import 'dreaming_service.dart';
 import 'key_point_memory.dart';
 
 const kLocalUserProfileTitle = '本地用户画像（v1）';
+const kUserProfileProposalGenerationModeLocal = 'local';
+const kUserProfileProposalGenerationModeModel = 'model';
+const kUserProfileProposalGenerationModeModelFallback = 'model_fallback';
 
 const _kMaxProfileItemsPerSection = 12;
 const _kMaxProfileKeywords = 24;
@@ -288,6 +291,7 @@ class UserProfileChangeProposal {
     required this.reason,
     required this.candidateProfile,
     this.baseProfile,
+    this.generationMode = kUserProfileProposalGenerationModeLocal,
   });
 
   factory UserProfileChangeProposal.fromJson(Map<String, dynamic> json) {
@@ -305,6 +309,9 @@ class UserProfileChangeProposal {
       candidateProfile: UserProfile.fromJson(
         (candidate as Map?)?.cast<String, dynamic>() ?? const {},
       ),
+      generationMode:
+          (json['generationMode'] as String?) ??
+          kUserProfileProposalGenerationModeLocal,
     );
   }
 
@@ -313,6 +320,7 @@ class UserProfileChangeProposal {
   final String reason;
   final UserProfile? baseProfile;
   final UserProfile candidateProfile;
+  final String generationMode;
 
   UserProfileChangeProposal copyWith({
     String? id,
@@ -320,6 +328,7 @@ class UserProfileChangeProposal {
     String? reason,
     UserProfile? baseProfile,
     UserProfile? candidateProfile,
+    String? generationMode,
   }) {
     return UserProfileChangeProposal(
       id: id ?? this.id,
@@ -327,6 +336,7 @@ class UserProfileChangeProposal {
       reason: reason ?? this.reason,
       baseProfile: baseProfile ?? this.baseProfile,
       candidateProfile: candidateProfile ?? this.candidateProfile,
+      generationMode: generationMode ?? this.generationMode,
     );
   }
 
@@ -336,7 +346,13 @@ class UserProfileChangeProposal {
   bool get hasChanges => diff.hasChanges;
 
   String get summary =>
-      '${_historyReasonLabel(reason)} · ${candidateProfile.sourceCount} 条来源 · ${diff.summary}';
+      '${_historyReasonLabel(reason)} · $generationModeLabel · ${candidateProfile.sourceCount} 条来源 · ${diff.summary}';
+
+  String get generationModeLabel => switch (generationMode) {
+    kUserProfileProposalGenerationModeModel => '模型辅助候选',
+    kUserProfileProposalGenerationModeModelFallback => '模型失败，已回退本地候选',
+    _ => '本地规则候选',
+  };
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -344,6 +360,7 @@ class UserProfileChangeProposal {
     'reason': reason,
     if (baseProfile != null) 'baseProfile': baseProfile!.toJson(),
     'candidateProfile': candidateProfile.toJson(),
+    'generationMode': generationMode,
   };
 }
 
@@ -693,6 +710,10 @@ String encodeUserProfileControls(UserProfileControls controls) =>
 
 bool isSafeUserProfileSignal(String value) {
   return _isSafeProfileText(_normalizeProfileText(value));
+}
+
+List<String> detectUserProfileConflicts(List<String> preferences) {
+  return List.unmodifiable(_detectProfileConflicts(preferences));
 }
 
 UserProfileDiffSection _diffProfileSection(

@@ -6,7 +6,7 @@
 >
 > **权威来源**：项目目标、进度、待办、已完成事项和重要安排以根目录 `AGENTS.md` 为准；本文档沉淀产品需求与功能边界。
 >
-> **最后更新**：2026-07-07。
+> **最后更新**：2026-07-14。
 
 参考项目：
 
@@ -46,7 +46,7 @@
 - 核心记忆点提取后常驻本地索引 / 内存（Key Points），每次对话带入检索结果。
 - 跨对话内容支持快速检索，形成“本地聊天 ≈ 本地知识库”的体验。
 - 无限上下文设计：超过模型令牌限制时自动提取重要内容并压缩；聊天发送前按模型上下文窗口预算裁剪 system / 记忆 / Skills / MCP 工具说明和历史消息，优先保留最新用户问题，接口返回超限时自动严格裁剪重试一次。
-- 支持人工智能反思机制（Reflection），用于回答质量、长期偏好、用户画像和任务计划改进；当前已落地本地启发式反思 v1、未回复会话 / 会话追问压力 / 最后一问未答提醒、敏感标题降级与最后用户问题安全片段、最近 20 次反思历史、反思历史展开审阅 / 精确单条删除 / 清空入口，并可把少量高优先级行动项作为下一轮本机短期提示，模型驱动反思仍待实现。
+- 支持人工智能反思机制（Reflection），用于回答质量、长期偏好、用户画像和任务计划改进；当前已落地本地启发式反思 v1、未回复会话 / 会话追问压力 / 最后一问未答提醒、敏感标题降级与最后用户问题安全片段、最近 20 次反思历史、反思历史展开审阅 / 精确单条删除 / 清空入口，并可把少量高优先级行动项作为下一轮本机短期提示。可选模型增强反思 v1 默认关闭，用户显式开启后只把长度受限且经过敏感信息处理的摘要发送给默认已启用聊天模型，严格解析 JSON 并与本地安全结论合并；模型失败自动回退本地报告且不残留 pending。一个仓库外配置驱动的远程 OpenAI-compatible 模型已在三个 dayKey 的 72 条长会话上 3 / 3 通过；更多远程模型族和真实多日用户会话仍待质量评估。历史本地模型结果只保留为旧证据，按当前约束禁止再次启动或探测本地模型。
 
 ### M3 — Dreaming（夜间整理）
 
@@ -151,14 +151,20 @@
 - [x] SQLite FTS 搜索索引 v1。
 - [x] Dreaming 本地整理 v1。
 - [x] Dreaming 前台到期调度 v1。
-- [x] Dreaming 前台到期系统通知 v1：前台自动整理产生内容后推送本地完成通知，通知展示整理消息数、记忆候选数和待确认画像变更数；设置页入口明确“前台到期 · 非系统后台”边界，并显示下次前台整理状态；真正系统后台调度仍待实现。
+- [x] Dreaming 移动端系统后台代码基线 v1：Android WorkManager 一次性唯一任务已在 Pixel 8 真机通过；iOS 使用一次性 `BGProcessingTask`，已完成启动前原生注册、Info.plist、成功后次日重排、失败 15 分钟重试、`ios_background` trigger、后台 App 刷新状态诊断和隔离 release smoke。iOS 设置页在后台 App 刷新关闭 / 受限时提供“打开系统设置”和“重新检查”，smoke READY JSON 直接记录 `backgroundRefreshStatus`，避免只根据 pending task 缺失推断原因。后台 isolate 复用正式 Dreaming / 待确认画像变更 / Reflection / 通知编排，前台到期继续兜底。
 - [x] Dreaming 报告历史 v1：`dreaming_digest_history_v1` 保留最近 20 次有内容报告，按 `dayKey` 去重，设置页可查看历史保留次数、日期和消息覆盖，可展开审阅历史报告 Markdown 预览，可删除单条报告，删除当前报告后自动回退到下一条历史，并可清空最近报告与历史报告。
-- [x] DreamingJob / DreamingReport SQLite 表 v1：本地 `dreaming_jobs` / `dreaming_reports` 与 `DreamingDao` 已落地，支持 job lifecycle、同日报告 upsert、最近报告读取，并随本地数据库快照导出 / 恢复；`runDreamingDigest()` 已把手动 / 前台到期运行实际写入 SQLite job/report，并在失败时记录 failed job、阻止半成功报告发布到 SharedPreferences；导入 / 恢复后可从 SQLite report 回灌设置页最近 Dreaming 状态；设置页删除 / 清空 Dreaming 报告会同步清理 SQLite report；同日 in-flight 运行会复用同一个 Future，新运行前会把同日 pending / running 残留 job 标记 failed，避免重复 completed job 和 stale 状态；设置页可分页扫描并显示最近未解决 failed job，提供按失败日期重试或清除 / 忽略的入口，清除后不再启动 / 前台恢复反复提示；失败错误摘要会脱敏 Bearer / sk / token 参数、HTTP(S) URL 和本机路径；本地数据库快照导出 / 恢复 failed job 错误时会二次脱敏；设置页手动运行失败时会显示可重试提示并保留 failed job；应用启动或恢复前台时会主动提示上次 Dreaming 失败并提供去设置页重试的动作。
+- [x] DreamingJob / DreamingReport SQLite 表与自动 claim v1：本地 `dreaming_jobs` / `dreaming_reports` 与 `DreamingDao` 已落地，支持 job lifecycle、同日报告 upsert、最近报告读取，并随本地数据库快照导出 / 恢复；手动 / 前台到期 / Android WorkManager 运行实际写入 SQLite job/report，并在失败时记录 failed job、阻止半成功报告发布到 SharedPreferences；自动路径使用固定 `dreaming-auto-YYYY-MM-DD` 主键原子 claim，防止前台与后台 isolate 重复运行，failed / 超时 pending / running 可重领，completed / dismissed 不重复；其余 report 回灌、删除、failed job 可见 / 重试 / 清除、错误脱敏和启动提示能力均已落地。
 - [ ] 本地向量检索增强：Key Points 本地语义向量召回、本地消息语义索引、用户可控开关已完成；模型 embedding、真正向量数据库 / ANN、增量维护优化和真机长会话基线仍待实现。
-- [ ] Dreaming 系统后台调度。
+- [x] Dreaming Android WorkManager 系统后台调度 v1，并已在 Pixel 8 Home 后分别通过 JobScheduler 强制执行和不调用强制命令的自然调度；自然模式 30 秒 initialDelay、36 秒完成 Dreaming / Reflection，pending 已清除。
+- [x] Dreaming Android 强制 deep idle 短时 smoke：Pixel 8 隔离包在调度与结果时均保持 `deep=IDLE`，无永久 idle whitelist，37 秒完成 Dreaming / Reflection；cleanup 自动 `deviceidle unforce`、恢复正式包并清理隔离包 / sqlite hook。force smoke 的 Job ID 只从精确包名 `dumpsys jobscheduler` 读取，不再误用全局 logcat 中其他 App 的 WorkManager Job ID。
+- [x] Dreaming Android UI 进程被回收后的 headless 冷启动 smoke：Pixel 8 隔离 App 调度完成并回到 Home 后，以 `am kill` 回收 UI pid，确认 package 未 force-stop；forced 分支等待 WorkSpec 到期后可冷启动不同的新 pid，natural 分支完全不调用 `cmd jobscheduler run`，系统在 249 秒后通过 `SystemJobService` 自然冷启动不同的新 pid，后台 Flutter isolate 完成 Dreaming / Reflection 并清除 pending。自然进程死亡 smoke 默认观察 900 秒，避免用 240 秒过紧窗口误判系统批处理失败；该证据仍不等同于跨小时、跨日或 OEM 长时存活证明。
+- [x] Dreaming Android UI 进程死亡后的跨小时自然调度：Pixel 8 使用同一隔离 smoke，设置 3600 秒 initialDelay、7200 秒观察上限，旧 pid `6444` 消失后 job 持久存在，standby bucket 从 `ACTIVE` 自然降到 `RARE`；任务到期后继续由系统批处理，最终在 4360 秒时通过 `SystemJobService` 冷启动新 pid `24325`，完成 Dreaming / Reflection 并清除 pending。该结果证明跨小时存活与自然冷启动，不替代跨日、长时间 Doze 或 OEM 杀后台验证。
+- [ ] Dreaming Android 跨日自然调度：已新增可分离 `schedule / status / verify / cleanup` 的安全 smoke；schedule 完成后会恢复正式包和仓库 sqlite 配置，只保留隔离包、JobScheduler job 和 0600 状态文件。harness 会把 seed 消息时间写到预定执行日，避免次日执行时因消息仍属于前一天而误报 `notDue`。Pixel 8 已调度 86400 秒任务，旧 pid `28141` 已消失，目标 dayKey `2026-07-15`，当前 job id `0` 为 waiting；待次日通过独立 verify 检查 Dreaming / Reflection / history / pending、正式包 identity 并清理隔离包。
+- [x] Dreaming 后台附加条件代码 / UI / 持久化 v1：设置页可选择“仅充电时执行”和“仅非计费网络执行”，配置随 `dreaming_schedule_v1` 保存、结构化备份与恢复，并在设置变化后重排系统任务。Android 映射为 WorkManager `requiresCharging` / `NetworkType.unmetered`；iOS 映射充电条件，但 `workmanager 0.8.0` 的 Apple 侧只能表达“要求联网”，无法保证 Wi-Fi，设置页已明确提示该平台边界。旧配置默认两项关闭，保持原行为。Pixel 8 真机已证明：无 Wi-Fi 时非计费网络任务被 `jobscheduler run -s` 拒绝，恢复 `WIFI + NOT_METERED + VALIDATED` 后严格放行并完成 Dreaming / Reflection；充电任务在未充电时被严格拒绝，系统 charging 后不使用 `-f`、等待 initialDelay 自然完成 Dreaming / Reflection。
+- [ ] Dreaming iOS BGTaskScheduler 真机系统执行和 Android 跨日 Doze / OEM 长期可靠性。2026-07-14 15:19 iPhone13 隔离 release smoke 通过解锁预检、27.5MB release 构建、安装、启动和 READY 文件，但设备原生通道直接返回 `backgroundRefreshStatus=denied`，`scheduledTasks=[BGTaskScheduler] There are no scheduled tasks`；隔离 bundle 已清理、正式包重新运行。用户可从 Dreaming 设置页点“打开系统设置”，开启后点“重新检查”，再继续 pending task / LLDB 严格触发 / Dreaming 与 Reflection 结果持久化验证。Android 已完成短时强制 deep idle、UI 进程回收后的自然冷启动、跨小时自然调度、非计费网络和充电条件阻塞 / 满足后放行真机闭环，但不替代跨日、长时间 Doze 或 OEM 杀后台观察。
 - [x] 无限上下文预算控制 v1：根据 `protocol + modelName` 推断模型窗口，动态提高压缩阈值，预算模式不再固定最近 20 条，可在输入预算内尽量保留更多历史；超限错误会给出可操作提示。
 - [ ] 无限上下文长期压缩策略增强：仍需真机长会话基线、摘要质量评估和更细粒度的长期压缩策略。
-- [x] 本地反思机制 v1：Dreaming 后基于本地日报、用户画像和待确认画像变更生成回应质量、未回复会话、会话追问压力、最后一问未答、敏感标题降级和最后用户问题安全片段、上下文、长期记忆、用户画像、任务推进和来源新鲜度的可解释反思报告；来源过期时设置页入口会直接提示先运行今日 Dreaming；支持保存最近 20 次反思历史，可展开审阅历史反思、按 `dayKey + sourceDigestDayKey` 精确删除单条反思、删除反馈显示来源、删除当前最近反思后自动回退并可清空最近反思报告与历史，并把少量高优先级结论 / 行动项作为下一轮本机短期提示，用户可关闭，模型驱动反思仍待实现。
+- [x] Reflection 反思机制 v1：Dreaming 后始终基于本地日报、用户画像和待确认画像变更生成回应质量、未回复会话、会话追问压力、最后一问未答、敏感标题降级和最后用户问题安全片段、上下文、长期记忆、用户画像、任务推进和来源新鲜度的可解释安全基线；来源过期时设置页入口会直接提示先运行今日 Dreaming；支持保存最近 20 次反思历史，可展开审阅历史反思、按 `dayKey + sourceDigestDayKey` 精确删除单条反思、删除反馈显示来源、删除当前最近反思后自动回退并可清空最近反思报告与历史，并把少量高优先级结论 / 行动项作为下一轮本机短期提示，用户可关闭。可选模型增强默认关闭，显式开启后使用默认聊天模型、严格 JSON、输入输出限长与脱敏，并在失败时回退本地报告、清除 pending；一个仓库外配置驱动的远程模型三日长会话门禁已 3 / 3 通过，更多模型族仍待验证。
 - [x] 本地用户画像 v1：从 Key Points 与最近 Dreaming 报告生成可解释画像。
 - [x] 用户画像可控管理 v1：用户可在设置页编辑 / 删除画像信号，控制记录本地保存。
 - [x] 用户画像版本历史与冲突检测 v1：本地保留最近画像快照，展示偏好冲突提示。
@@ -166,7 +172,7 @@
 - [x] Dreaming 待确认画像变更 v1：Dreaming 后生成本地待确认画像变更，用户采纳后才写入正式画像。
 - [x] 待确认画像变更逐项采纳 / 拒绝 v1：用户可对单条画像新增 / 移除信号单独采纳或忽略。
 - [x] 待确认画像变更详情审阅 v1：用户可查看全部待确认画像差异，并处理卡片未展示的后续单项。
-- [ ] 模型驱动画像增量分析。
+- [x] 模型驱动画像增量分析 v1：独立开关默认关闭；只发送限长、脱敏的 Dreaming / 本地候选摘要；模型新增必须带逐字证据，只能追加少量待确认候选，不能删除、覆盖、生成基础身份事实或直接修改正式画像；失败回退本地候选。真实远程质量门禁 3 / 3 和 Pixel 8 系统后台自然冷启动已通过。
 
 ### Phase 3 — 生态扩展
 
@@ -204,7 +210,7 @@
 
 ### Phase 5 — 数字孪生
 
-- [x] 用户画像分析系统 v1：本地画像结构、构建器、持久化、设置页查看 / 重建 / 编辑 / 删除、冲突提示、版本历史、差异对比、历史恢复、待确认变更、逐项采纳 / 拒绝和全部变更详情审阅。
+- [x] 用户画像分析系统 v1：本地画像结构、构建器、持久化、设置页查看 / 重建 / 编辑 / 删除、冲突提示、版本历史、差异对比、历史恢复、待确认变更、逐项采纳 / 拒绝、全部变更详情审阅和默认关闭的模型驱动增量候选。
 - [ ] 声音 / 图像 / 表情处理。
 - [ ] 镜像数字人生成。
 - [ ] 数字人直播能力（长期）。

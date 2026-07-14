@@ -20,7 +20,7 @@ void main() {
         ModelCapability.chat,
       );
       expect(
-        ModelCapability.inferFromModel('mimo-v2.5-pro'),
+        ModelCapability.inferFromModel('custom-chat-pro'),
         ModelCapability.chat,
       );
       expect(ModelCapability.inferFromModel('gpt-4o'), ModelCapability.vision);
@@ -90,7 +90,7 @@ void main() {
       expect(normalizeUrl('api.openai.com'), 'https://api.openai.com');
       expect(normalizeUrl('api.openai.com/v1/'), 'https://api.openai.com/v1');
       expect(normalizeUrl('localhost:11434'), 'http://localhost:11434');
-      expect(normalizeUrl('47.85.40.209:5001'), 'http://47.85.40.209:5001');
+      expect(normalizeUrl('192.0.2.10:5001'), 'http://192.0.2.10:5001');
       expect(
         normalizeOpenAiBaseUrl('api.openai.com/v1'),
         'https://api.openai.com',

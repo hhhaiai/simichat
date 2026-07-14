@@ -4,6 +4,7 @@ import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/core/relay/channel_model_relay_bridge.dart';
 import 'package:ai_chat_app/core/relay/openai_compatible_relay_server.dart';
+import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -78,6 +79,8 @@ void main() {
       String? seenModel;
       String? seenSystemPrompt;
       List<AiMessage>? seenMessages;
+      CancelToken? seenCancelToken;
+      bool? seenJsonResponse;
       final bridge = ChannelModelRelayBridge(
         channelDao: db.channelDao,
         sendMessage:
@@ -88,6 +91,8 @@ void main() {
               required model,
               required messages,
               systemPrompt,
+              cancelToken,
+              required jsonResponse,
             }) {
               seenProtocol = protocol;
               seenBaseUrl = baseUrl;
@@ -95,16 +100,21 @@ void main() {
               seenModel = model;
               seenSystemPrompt = systemPrompt;
               seenMessages = messages;
+              seenCancelToken = cancelToken;
+              seenJsonResponse = jsonResponse;
               return Stream.fromIterable(const [AiChunk(content: 'ok')]);
             },
       );
 
       final relayModel = (await bridge.resolveModel('chat-model'))!;
+      final cancelToken = CancelToken();
       final chunks = await bridge
           .forward(
             model: relayModel,
             messages: const [AiMessage(role: 'user', content: 'hello')],
             systemPrompt: 'system',
+            cancelToken: cancelToken,
+            jsonResponse: true,
           )
           .toList();
 
@@ -115,8 +125,61 @@ void main() {
       expect(seenModel, 'gpt-test');
       expect(seenSystemPrompt, 'system');
       expect(seenMessages!.single.content, 'hello');
+      expect(seenCancelToken, same(cancelToken));
+      expect(seenJsonResponse, isTrue);
     },
   );
+
+  test('bridge fetches OpenAI chat messages without streaming', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await _seed(db);
+
+    String? seenBaseUrl;
+    String? seenApiKey;
+    String? seenModel;
+    String? seenSystemPrompt;
+    List<AiMessage>? seenMessages;
+    CancelToken? seenCancelToken;
+    final bridge = ChannelModelRelayBridge(
+      channelDao: db.channelDao,
+      fetchOpenAiMessage:
+          ({
+            required baseUrl,
+            required apiKey,
+            required model,
+            required messages,
+            systemPrompt,
+            cancelToken,
+          }) async {
+            seenBaseUrl = baseUrl;
+            seenApiKey = apiKey;
+            seenModel = model;
+            seenSystemPrompt = systemPrompt;
+            seenMessages = messages;
+            seenCancelToken = cancelToken;
+            return (content: 'one-shot-json', thinking: 'reasoning');
+          },
+    );
+
+    final relayModel = (await bridge.resolveModel('chat-model'))!;
+    final cancelToken = CancelToken();
+    final chunk = await bridge.forwardOnce(
+      model: relayModel,
+      messages: const [AiMessage(role: 'user', content: 'hello once')],
+      systemPrompt: 'system once',
+      cancelToken: cancelToken,
+    );
+
+    expect(chunk?.content, 'one-shot-json');
+    expect(chunk?.thinking, 'reasoning');
+    expect(seenBaseUrl, 'https://api.example.com/v1');
+    expect(seenApiKey, 'test-key-local-relay');
+    expect(seenModel, 'gpt-test');
+    expect(seenSystemPrompt, 'system once');
+    expect(seenMessages!.single.content, 'hello once');
+    expect(seenCancelToken, same(cancelToken));
+  });
 
   test(
     'bridge routes default, free and fast aliases with fallback candidates',
