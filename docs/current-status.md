@@ -1,6 +1,6 @@
 # 当前项目状态
 
-> **更新时间：2026-08-08**
+> **更新时间：2026-08-09**
 >
 > 本文档是当前状态的快速事实摘要。项目目标、长期待办和历史账本以根目录 `AGENTS.md` 为准；安装和使用入口以根目录 `README.md` 为准；具体实现方案以本目录专题文档为准；本次验证命令与结果以 `verification-baseline-2026-08-08.md` 为准；移动端 MCP / Skills / 记忆专项以 `mobile-mcp-skills-memory-quality-2026-08-08.md` 为准。
 
@@ -18,6 +18,8 @@
 | Android / PC Node 文档 | 已补齐实现、生命周期、构建、平台矩阵和真实证据边界 | `docs/MCP_BUNDLED_NODE_RUNTIME.md`、`docs/runtime-manifest.example.json` |
 | 移动端 Skills | 本地缓存恢复、下载大小 / 编码 / SHA-256 边界、搜索竞态已收口 | Pixel 8 / iPhone13 Skills Hub UI 和逻辑专项通过 |
 | 移动端记忆 | Key Point、SQLite FTS、semantic、索引预热 / 修复和搜索竞态已收口 | Pixel 8 / iPhone13 全局搜索 UI 与 162 项专项通过 |
+| 移动端扩展包协议 | MCP / Skill / Agent 共用 manifest、SHA-256、权限 allowlist、原子安装、registry、quarantine；Skill / Agent / App Native MCP 已接入 shared provider | `test/mobile_extension_installer_test.dart` 通过；Android Pixel 8 / iPhone13 真机扩展包 smoke 均输出 `SIMICHAT_MOBILE_EXTENSIONS_APP_NATIVE_READY` |
+| iOS 纯 JS MCP | 包协议可以校验和落盘，但 iOS 随包 NodeMobile framework / native bridge 尚未纳入当前仓库发布构建 | 不能把 iOS 纯 JS MCP 的安装记录写成真机运行成功；当前使用 App Native 或远程 SSE |
 | Android 构建 | Debug / release APK 构建通过 | `build/app/outputs/flutter-apk/app-debug.apk`、`build/app/outputs/flutter-apk/app-release.apk` |
 | 全量测试 | 681 项通过 | `flutter --no-version-check test --no-pub --no-test-assets -r compact` |
 | 本机真实 Ollama | 当前未验证 | 本机没有 `ollama` 命令，`127.0.0.1:11434` 当前不可连接 |
@@ -137,6 +139,15 @@ docs/MCP_BUNDLED_NODE_RUNTIME.md
 SIMICHAT_MCP_RUNTIME_PORT=37651 ./scripts/smoke_bundled_node_runtime.sh
 ```
 
+移动端扩展包协议与安装器：
+
+```text
+docs/MOBILE_EXTENSIONS.md
+lib/core/extensions/
+lib/shared/providers/mobile_extension_provider.dart
+test/mobile_extension_installer_test.dart
+```
+
 预期输出：
 
 ```text
@@ -153,6 +164,9 @@ SIMICHAT_DESKTOP_BUNDLED_NODE_PROCESS_READY
 - Android Emulator、Android 真机、iOS Simulator、iOS 真机的真实网络访问；
 - 移动端后台、锁屏、系统资源限制和长时间运行；
 - 模型内存 / 显存占用和并发容量。
+- Android / iOS 扩展管理页面的真实文件选择器 UI、应用重启后的扩展 registry 恢复和发布包升级回滚仍需单独补证。
+- Android Pixel 8 与 iPhone13 已完成扩展包运行时 smoke：Skill SHA-256、启用、Agent `gemma4` plan、App Native MCP initialize / tools/list / tools/call、Agent 卸载均通过；尚未覆盖文件选择器 UI 和真实发布包升级恢复。
+- iOS `runtime=node-mobile` 纯 JS MCP 的 NodeMobile framework、bridge、health、tools/list 和 tools/call 真机链路。
 
 这些项目必须在真实环境中补证，并在新的带日期验证记录中记录，不修改历史验证文档的原始结论。
 

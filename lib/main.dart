@@ -10,6 +10,7 @@ import 'l10n/generated/app_localizations.dart';
 import 'features/chat/chat_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/marketplace/marketplace_page.dart';
+import 'features/extensions/mobile_extensions_page.dart';
 import 'features/search/search_sheet.dart';
 import 'core/background/dreaming_background_workmanager.dart';
 import 'core/deep_link/deep_link_service.dart';
@@ -200,6 +201,7 @@ class AiChatApp extends ConsumerWidget {
         '/': (_) => const ResponsiveShell(),
         '/settings': (_) => const SettingsPage(),
         '/marketplace': (_) => const MarketplacePage(),
+        '/mobile-extensions': (_) => const MobileExtensionsPage(),
       },
     );
   }

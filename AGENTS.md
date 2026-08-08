@@ -151,6 +151,14 @@
 - **决策**：当前移动端 App Native 已满足不依赖外部环境的 MCP 基线，不增加 Android Node.js 容器。移动端 `stdio` 继续拒绝；只有未来需要手机运行任意第三方 Node MCP 时，才另行设计 APK 内置 Node runtime，不把 PC Docker / Podman 侧车误称为 Android 容器。
 - **证据**：`/tmp/simichat-mcp-app-native-real-pixel8.log`、`/tmp/simichat-mcp-app-native-real-iphone13.log`；详细边界见 `docs/MCP_RUNTIME_CONTAINERIZATION.md` 和 `docs/mobile-mcp-skills-memory-quality-2026-08-08.md`。
 
+### 0.2.12 2026-08-09 Android / iOS 移动端扩展包安装与 Agent 计划
+
+- **统一包协议**：新增 `lib/core/extensions/`，MCP、Skill、Agent 共用 JSON envelope、manifest、entry SHA-256、size、权限 allowlist、相对路径校验、`.part` 下载、原子安装、registry 和 quarantine；不执行 npm、npx、shell、Docker、Podman 或下载二进制。
+- **三类接入**：Skill 通过 `SkillDao.upsertSkill` 接入现有 system prompt；Declarative Agent 通过 `MobileAgentRuntime` 生成请求计划，空模型默认 `gemma4`；App Native MCP 通过 shared provider 安装后创建配置并连接现有 `McpManager`。
+- **移动端入口**：新增 `/mobile-extensions` 页面，可从 Android / iOS 文件选择器导入扩展包，查看状态、启用和卸载；MCP 市场页面提供入口。
+- **验证**：`test/mobile_extension_installer_test.dart` 纳入全量测试；Android Pixel 8 与 iPhone13 真机运行 `scripts/smoke_device_mobile_extensions.sh` 均输出 `SIMICHAT_MOBILE_EXTENSIONS_APP_NATIVE_READY`，覆盖 Skill SHA-256、Agent `gemma4`、App Native MCP `initialize` / `tools/list` / `tools/call` 和 Agent 卸载；全量 Flutter 测试 **686 项通过**，`flutter analyze` 和 `git diff --check` 通过。
+- **未完成边界**：iOS `runtime=node-mobile` 的 `NodeMobile.framework` / native bridge 尚未纳入当前发布构建；纯 JS MCP 包可以校验和落盘，但 iOS 纯 JS MCP 真机运行仍需 framework、health、SSE 和工具调用证据。完整矩阵见 `docs/MOBILE_EXTENSIONS.md`。
+
 ### 0.3 2026-07-14 模型增强 Reflection 验证补充
 
 - 2026-07-14 22:57 将非流式远程 Reflection 修复推进到 Pixel 8 正式后台真机闭环。首次 wrapper 预检收到临时 `401`，在构建前安全退出、设备未变化；为预检新增最多 3 次有界重试，只重试 `401 / 408 / 429 / 5xx / curl 失败 / 200 空内容`，manifest 红灯后转绿。复跑时 attempt 1 为 401、attempt 2 成功，独立 `backgroundmodelsmoke` build / install 后 READY pid `8925` 被回收，JobScheduler 未使用 shell force，在 elapsed `324` 秒时由 `SystemJobService` 冷启动 pid `10117`，完成 `status=completed digest=2026-07-14 reflection=2026-07-14`。prefs 同时含 Dreaming / Reflection 当前与历史，`generationMode=model`，无 pending / `model_fallback`，日志与 prefs 无配置地址 / key。cleanup 后隔离包和 sqlite hook 无残留，正式包 pid `10528`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 不变，跨日 job id `0` 仍 waiting；最终全量稳定门禁 557 项通过。取证：`/tmp/simichat-android-background-dreaming-20260714224926.log`、`/tmp/simichat-android-background-dreaming-prefs-20260714224926.xml`。
@@ -290,6 +298,7 @@
   - `lib/core/context/`：无限上下文、摘要压缩、令牌估算。
   - `lib/core/crypto/`：接口密钥加密。
   - `lib/core/mcp/`：MCP 客户端，App 内建 / stdio / SSE 传输。
+  - `lib/core/extensions/`：移动端 MCP / Skill / Agent 包协议、安装、registry 和声明式 Agent 运行计划。
   - `lib/core/notification/`：本地通知服务。
   - `lib/core/skills/`：技能系统与市场接入。
   - `lib/features/chat/`：对话主页。
@@ -343,6 +352,7 @@
 - [ ] 定时任务 → 系统日历 / 闹钟联动；Dreaming 前台到期系统通知 v1 已完成。
 - [x] MCP 协议客户端基础能力：App 内建 / stdio / SSE、Tool / Resource / Prompt。
 - [x] MCP 工具调用循环：人工智能 → 工具调用 → 工具结果 → 人工智能最终回复。
+- [x] Android / iOS 移动端扩展包 v1：Skill、Declarative Agent、App Native MCP 的 manifest / SHA-256 / 权限 / 原子安装 / registry / quarantine / 真机 smoke；纯 JS MCP 的 iOS NodeMobile runtime 仍待纳入发布构建。
 - [x] MCP App 内建 Runtime v1：`app_native` 传输在 App 进程内响应 MCP JSON-RPC，内建 `simichat.now` / `simichat.runtime_info`，移动端和 PC 端均不依赖宿主机 Node / npx / Python；MCP 市场首项 `SimiChat 内建工具` 可安装后自动连接，设置页默认新增 App 内建类型。
 - [x] MCP PC Node 容器侧车 v1：新增 `tools/mcp_runtime/container/` Node SSE Runtime、`scripts/mcp_runtime_container.sh` Docker/Podman 启停脚本、`docs/runtime-manifest.example.json` 和市场项 `SimiChat Node 容器 Runtime`，PC 端 Node 环境在容器内，不依赖宿主机 node/npm/npx。
 - [ ] MCP 运行时 / 旁车：Runtime 状态表、App 内启动 / 停止 / 日志、第三方 Node MCP 包白名单安装、权限治理仍待做。

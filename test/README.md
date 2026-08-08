@@ -50,8 +50,9 @@ benchmark 通过根目录 `scripts/benchmark_*.sh` 运行。脚本内部统一�
 2. 文件名必须包含明确的能力或页面名，并以 `_test.dart` 或 `_benchmark.dart` 结尾。
 3. 协议、Provider、设置页、数据库和 manifest 测试不再依赖目录名表达分类。
 4. 真实设备 / 模拟器交互测试继续放在 `integration_test/`，避免破坏 Flutter integration runner 和现有设备 smoke 脚本。
-5. 移动或重命名测试后，必须同步脚本、README、`AGENTS.md`、专题文档和验证记录中的路径。
-6. 运行全量测试、静态分析和 `git diff --check` 后，才更新当前验证基线。
+5. 移动端扩展包真机入口是 `integration_test/mobile_extensions_real_smoke_test.dart`，统一脚本是 `scripts/smoke_device_mobile_extensions.sh`；测试使用 App sandbox 临时目录，不依赖 PC Node、npx、Docker 或 Podman。
+6. 移动或重命名测试后，必须同步脚本、README、`AGENTS.md`、专题文档和验证记录中的路径。
+7. 运行全量测试、静态分析和 `git diff --check` 后，才更新当前验证基线。
 
 ## 当前规模
 

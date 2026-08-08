@@ -9,6 +9,7 @@ SimiChat 是一个 Flutter 全平台 AI 对话应用：会话、模型渠道、�
 - **可回退但不静默切云端**：本地 Ollama 不可用时会显示连接错误，不会自动把本地请求改发到远程厂商。
 - **跨平台**：Flutter 项目包含 Android、iOS、macOS、Linux 和 Windows 工程；真机 smoke 与静态测试分开记录。
 - **MCP 自带运行时**：Android APK 内置 arm64 Node.js Runtime；PC 构建前准备与目标平台匹配的官方 Node binary，App 运行 MCP 时不依赖宿主机 `node` / `npx` / Docker / Podman。
+- **移动端扩展安装**：Android / iOS 共用 manifest、SHA-256、权限 allowlist、原子安装、registry 和 quarantine；Skills、声明式 Agents、App Native MCP 可直接安装，Node MCP 按平台 runtime 矩阵运行。
 
 ## 快速开始
 
@@ -95,6 +96,7 @@ Ollama 适配层同时处理：
 | lib/features/chat/ | 聊天页面与消息交互 |
 | lib/features/settings/ | 模型渠道、模型测试、数据和功能设置 |
 | lib/core/database/ | Drift 表、迁移和 DAO |
+| lib/core/extensions/ | 移动端 MCP / Skill / Agent 包协议、校验、安装、registry 和运行计划 |
 | test/ | 全部 Flutter 单元 / Widget / manifest / smoke / benchmark 测试，统一放在一个目录并按文件名区分类型 |
 | test/README.md | 测试目录约定、测试类型、运行命令和与 integration_test 的边界 |
 | integration_test/ | 移动端集成入口 |
@@ -108,6 +110,7 @@ Ollama 适配层同时处理：
 - [本地 Ollama 接入与稳定性说明](docs/local-model.md)
 - [当前验证基线](docs/verification-baseline-2026-08-08.md)
 - [Android / PC 内置 Node Runtime](docs/MCP_BUNDLED_NODE_RUNTIME.md)
+- [Android / iOS 移动端 MCP、Skills、Agent 安装协议](docs/MOBILE_EXTENSIONS.md)
 - [MCP Runtime 容器化设计](docs/MCP_RUNTIME_CONTAINERIZATION.md)
 - [AI 协议适配层](docs/ai-protocols.md)
 - [整体架构](docs/architecture.md)

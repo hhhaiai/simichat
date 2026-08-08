@@ -32,6 +32,11 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
         title: const Text('MCP 市场'),
         actions: [
           IconButton(
+            tooltip: '移动端扩展',
+            icon: const Icon(Icons.extension_outlined),
+            onPressed: () => Navigator.pushNamed(context, '/mobile-extensions'),
+          ),
+          IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showInfoDialog(context),
           ),
