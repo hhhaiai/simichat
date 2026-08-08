@@ -4,7 +4,7 @@
 
 本轮只收口移动端稳定性，不把桌面端布局、mock 服务或 source inspection 当成真机成功。覆盖三条主线：
 
-1. **MCP**：App 内建 MCP、移动端 `stdio` 硬边界、SSE 连接 / endpoint / timeout / disconnect / HTTP 错误、`web_search` 工具和设置页入口。
+1. **MCP**：App 内建 MCP 的真机工具调用、移动端 `stdio` 硬边界、SSE 连接 / endpoint / timeout / disconnect / HTTP 错误、`web_search` 工具和设置页入口。
 2. **Skills**：SkillHub 本地缓存、Generic HTTP 技能源、大小限制、JSON / UTF-8 / SHA-256 校验、分页、搜索竞态、移动端 Skills Hub 页面。
 3. **记忆**：Key Point、SQLite FTS、消息语义索引、语义搜索开关、搜索结果上限、搜索竞态、Dreaming / Reflection / background runner / user profile 的本地持久化和失败回退边界。
 
@@ -79,8 +79,9 @@
 | --- | --- | --- |
 | MCP / Skills / 记忆逻辑专项 | `device_targeted` 通过，162 项 | `/tmp/simichat-mcp-skills-memory-logic-pixel8-final.log` |
 | MCP / Skills / 记忆真实 UI smoke | `ui_verified` 通过，1 项 | `/tmp/simichat-mcp-skills-memory-ui-pixel8-final.log` |
+| App Native MCP 真机工具调用 | `ui_verified` 通过，1 项 | `/tmp/simichat-mcp-app-native-real-pixel8.log` |
 
-真实 UI smoke 覆盖 Android Drawer、Skills Hub HTTP 搜索、设置页 MCP 区、App Native MCP、移动端隐藏 stdio、搜索索引预热 / 修复、全局搜索 bottom sheet、SQLite FTS / semantic / message 结果渲染和页面返回。
+真实 UI smoke 覆盖 Android Drawer、Skills Hub HTTP 搜索、设置页 MCP 区、App Native MCP、移动端隐藏 stdio、搜索索引预热 / 修复、全局搜索 bottom sheet、SQLite FTS / semantic / message 结果渲染和页面返回。独立 App Native smoke 进一步通过真实 `McpManager` 连接并调用 `simichat.runtime_info` / `simichat.now`，不启动 HTTP mock、远程 SSE、Node、npx 或其他外部进程。
 
 ### 3.2 iPhone13
 
@@ -90,6 +91,7 @@
 | --- | --- | --- |
 | MCP / Skills / 记忆逻辑专项 | `device_targeted` 通过，162 项 | `/tmp/simichat-mcp-skills-memory-logic-iphone13-final.log` |
 | MCP / Skills / 记忆真实 UI smoke | `ui_verified` 通过，1 项 | `/tmp/simichat-mcp-skills-memory-ui-iphone13-final.log` |
+| App Native MCP 真机工具调用 | `ui_verified` 通过，1 项 | `/tmp/simichat-mcp-app-native-real-iphone13.log` |
 
 首次 iPhone13 UI 复跑发现：添加 MCP 服务器弹窗中的 `DropdownButtonFormField<String>` 在真实窄屏下溢出 12 px；修复为 `isExpanded: true` 后，iPhone13 UI smoke 重新运行通过。修复后的最终日志不包含 Flutter layout exception。
 
@@ -107,6 +109,26 @@ flutter --no-version-check test \
 flutter --no-version-check test \
   integration_test/mobile_mcp_skills_memory_smoke_test.dart \
   -d 00008110-0016349A3A20A01E --no-pub -r expanded
+
+flutter --no-version-check test \
+  integration_test/mobile_mcp_app_native_real_smoke_test.dart \
+  -d 37101FDJH0077P --no-pub -r expanded
+
+flutter --no-version-check test \
+  integration_test/mobile_mcp_app_native_real_smoke_test.dart \
+  -d 00008110-0016349A3A20A01E --no-pub -r expanded
+```
+
+独立 App Native smoke 的决定性断言：
+
+```text
+SIMICHAT_MOBILE_MCP_APP_NATIVE_READY
+externalProcess=false
+requiresNode=false
+requiresNpx=false
+requiresPython=false
+mobileReady=true
+simichat.runtime_info + simichat.now 调用成功
 ```
 
 ### 4.2 逻辑专项
@@ -162,7 +184,18 @@ git diff --check
 
 本轮结果：全量 Flutter 测试 **672 项通过**；Dart analyze `No issues found!`；`git diff --check` 无输出。
 
-## 5. 尚未被本轮证明的边界
+## 5. Android Node.js 容器决策
+
+当前移动端内建 MCP 不需要 Android Node.js 容器：
+
+- `AppNativeMcpTransport` 在 App 进程内完成 MCP JSON-RPC 初始化、工具发现和工具调用。
+- Pixel 8 / iPhone13 已在真实设备上通过 `McpManager` 调用 `simichat.runtime_info` 和 `simichat.now`。
+- 该路径不启动 `node`、`npx`、Python、Docker、Podman、HTTP mock 或远程 SSE。
+- 移动端 `stdio` 仍然明确拒绝，避免把宿主机命令依赖伪装成移动端稳定能力。
+
+因此本轮不添加 Android Node.js 容器。只有当产品要求在手机上运行任意第三方 Node MCP 包时，才需要新增独立的 Android Node runtime 方案。那不是 Docker 容器直接复用：需要随 APK 提供 arm64 / 其他 ABI 二进制、Node 模块安装来源、沙箱目录、权限模型、进程生命周期、升级和 APK 体积门禁，并重新做 Android 真机验证。当前仓库的 Node 容器实现是 **PC Docker / Podman 侧车**，不应误称为 Android 内置 runtime。
+
+## 6. 尚未被本轮证明的边界
 
 以下边界不能由本轮 UI smoke 或 162 项逻辑专项替代：
 
@@ -171,4 +204,4 @@ git diff --check
 - Android OEM 严格后台限制、跨日 / 长期 Doze 和长时间进程回收；本轮只复用了既有后台专项代码 / provider 回归。
 - 真实 Ollama `gemma4` 权重、移动端局域网地址、长上下文本地模型质量；详见 `docs/local-model.md` 和 `docs/verification-baseline-2026-08-08.md`。
 
-因此本轮结论是：**MCP、Skills、记忆的核心移动 UI 路径已在 Pixel 8 和 iPhone13 通过，相关逻辑专项也在两台真机目标上重复通过；系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**
+因此本轮结论是：**App Native MCP 已在 Pixel 8 和 iPhone13 上完成不依赖外部环境的真实连接与工具调用；MCP、Skills、记忆的核心移动 UI 路径也已通过，相关逻辑专项在两台真机目标上重复通过；第三方 Node MCP、系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**

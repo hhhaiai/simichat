@@ -144,6 +144,13 @@
 - **未完成边界**：真实远程 MCP 长时弱网恢复、iOS 系统 BGTask 实际执行、Android OEM / 跨日长期后台和真实 Ollama `gemma4` runtime 仍按独立文档保留未证明状态。
 - **文档入口**：专项详见 `docs/mobile-mcp-skills-memory-quality-2026-08-08.md`；当前状态和验证基线已同步更新。
 
+### 0.2.11 2026-08-08 App Native MCP 真机无外部依赖验证
+
+- **真机闭环**：新增 `integration_test/mobile_mcp_app_native_real_smoke_test.dart`，Pixel 8 和 iPhone13 各通过 1 项真实设备 smoke；通过真实 `McpManager` 完成 `initialize`、`tools/list`、`simichat.runtime_info` 和 `simichat.now` 工具调用。
+- **依赖断言**：真机结果确认 `externalProcess=false`、`requiresNode=false`、`requiresNpx=false`、`requiresPython=false`、`mobileReady=true`；没有启动 HTTP mock、远程 SSE、Node、npx、Python、Docker 或 Podman。
+- **决策**：当前移动端 App Native 已满足不依赖外部环境的 MCP 基线，不增加 Android Node.js 容器。移动端 `stdio` 继续拒绝；只有未来需要手机运行任意第三方 Node MCP 时，才另行设计 APK 内置 Node runtime，不把 PC Docker / Podman 侧车误称为 Android 容器。
+- **证据**：`/tmp/simichat-mcp-app-native-real-pixel8.log`、`/tmp/simichat-mcp-app-native-real-iphone13.log`；详细边界见 `docs/MCP_RUNTIME_CONTAINERIZATION.md` 和 `docs/mobile-mcp-skills-memory-quality-2026-08-08.md`。
+
 ### 0.3 2026-07-14 模型增强 Reflection 验证补充
 
 - 2026-07-14 22:57 将非流式远程 Reflection 修复推进到 Pixel 8 正式后台真机闭环。首次 wrapper 预检收到临时 `401`，在构建前安全退出、设备未变化；为预检新增最多 3 次有界重试，只重试 `401 / 408 / 429 / 5xx / curl 失败 / 200 空内容`，manifest 红灯后转绿。复跑时 attempt 1 为 401、attempt 2 成功，独立 `backgroundmodelsmoke` build / install 后 READY pid `8925` 被回收，JobScheduler 未使用 shell force，在 elapsed `324` 秒时由 `SystemJobService` 冷启动 pid `10117`，完成 `status=completed digest=2026-07-14 reflection=2026-07-14`。prefs 同时含 Dreaming / Reflection 当前与历史，`generationMode=model`，无 pending / `model_fallback`，日志与 prefs 无配置地址 / key。cleanup 后隔离包和 sqlite hook 无残留，正式包 pid `10528`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 不变，跨日 job id `0` 仍 waiting；最终全量稳定门禁 557 项通过。取证：`/tmp/simichat-android-background-dreaming-20260714224926.log`、`/tmp/simichat-android-background-dreaming-prefs-20260714224926.xml`。

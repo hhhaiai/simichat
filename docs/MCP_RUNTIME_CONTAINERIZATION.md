@@ -81,6 +81,26 @@ flutter --no-version-check test --no-pub --no-test-assets -r expanded
 
 覆盖内容：内建传输初始化、工具调用、时区参数、市场首项为移动端可运行内建 MCP、`McpManager` 无 stdio command 连接内建 MCP；随后 analyzer 无问题，全量 Flutter 测试 461 项通过。
 
+## 2026-08-08 移动端真机决策：App Native 优先，不内置 Android Node.js 容器
+
+本轮新增独立真机 smoke：
+
+```text
+integration_test/mobile_mcp_app_native_real_smoke_test.dart
+```
+
+该 smoke 在 Pixel 8 和 iPhone13 上通过真实 `McpManager` 完成：
+
+- 从本地内存数据库加载启用的 `app_native` MCP 配置；
+- 在 App 进程内完成 MCP `initialize`、`tools/list`；
+- 调用 `simichat.runtime_info`；
+- 调用 `simichat.now` 并校验 UTC+08:00 转换；
+- 校验 `externalProcess=false`、`requiresNode=false`、`requiresNpx=false`、`requiresPython=false`、`mobileReady=true`。
+
+这条验证链不启动 HTTP mock、远程 SSE、`node`、`npx`、Python、Docker 或 Podman。证明移动端内建 MCP 不依赖外部运行时，因此当前不增加 Android Node.js 容器。
+
+当前边界保持明确：移动端 `stdio` 继续拒绝；PC 端第三方 Node MCP 继续使用 Docker / Podman Runtime 侧车。若未来要求 Android 运行任意第三方 Node MCP，必须另行引入随 APK 分发的 Android Node runtime，而不能直接把 PC Docker 方案当作手机容器；届时需要重新评估 ABI、APK 体积、模块来源、沙箱、权限、进程生命周期、升级和真机长时间运行。
+
 ---
 
 
@@ -715,4 +735,3 @@ App 自己只做：
 - UI
 - 会话/任务
 - 输出工作区
-
