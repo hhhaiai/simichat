@@ -102,8 +102,8 @@ scripts/smoke_android_background_stream_cancel.sh 37101FDJH0077P
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/smoke/mobile_main_flow_smoke_test.dart \
-  test/core/release_send_smoke_manifest_test.dart
+  test/mobile_main_flow_smoke_test.dart \
+  test/release_send_smoke_manifest_test.dart
 flutter --no-version-check analyze
 git diff --check
 scripts/smoke_android_release_install_launch.sh 37101FDJH0077P

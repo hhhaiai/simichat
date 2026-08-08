@@ -67,9 +67,9 @@
 
 已完成验证：
 
-- `test/shared/markdown_rendering_test.dart`：390×844 移动视口渲染扩展 Markdown，覆盖旧式图片、行内公式、块级公式、HTML audio/video、HTML details、Mermaid 和 Draw.io。
-- `test/shared/settings_provider_test.dart`：覆盖字体缩放范围收敛为 90%–120%。
-- `test/core/app_identity_test.dart`：覆盖移动端展示名和 Android / iOS 包名。
+- `test/markdown_rendering_test.dart`：390×844 移动视口渲染扩展 Markdown，覆盖旧式图片、行内公式、块级公式、HTML audio/video、HTML details、Mermaid 和 Draw.io。
+- `test/settings_provider_test.dart`：覆盖字体缩放范围收敛为 90%–120%。
+- `test/app_identity_test.dart`：覆盖移动端展示名和 Android / iOS 包名。
 - `flutter analyze`：通过。
 - `flutter test`：289 个测试通过。
 - `scripts/smoke_mobile_main_flow.sh`：4 个移动端 smoke 通过，脚本内置 `flutter analyze` 通过。
@@ -86,4 +86,4 @@
 - 图片兼容补充：标准 Markdown 图片、旧式 `[[img:...]]` / `[[image:...]]`、Obsidian `![[...]]`、简写 `[img:...]` / `[image:...]`、HTML `<img src="...">`。
 - Mermaid 兼容补充：```mermaid fenced code、无语言但源码可识别的 Mermaid 代码块、`:::mermaid`、`[mermaid]...[/mermaid]`、HTML `<div class="mermaid">...`。
 - Draw.io / mxGraph 兼容补充：```drawio / ```draw.io / ```mxgraph / ```diagrams.net fenced code、XML 代码块自动识别、`:::draw.io`、`[mxgraph]...[/mxgraph]`、原始 `<mxGraphModel>...</mxGraphModel>` 块。
-- 回归测试：`test/shared/markdown_rendering_test.dart` 覆盖行内 code、fenced code、图片新老格式、Mermaid / Draw.io 新老格式、用户输入和 AI 输出统一渲染。
+- 回归测试：`test/markdown_rendering_test.dart` 覆盖行内 code、fenced code、图片新老格式、Mermaid / Draw.io 新老格式、用户输入和 AI 输出统一渲染。

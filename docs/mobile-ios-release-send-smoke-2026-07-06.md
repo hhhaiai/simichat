@@ -172,7 +172,7 @@ Launched release app:
 - 更新 `lib/main.dart`：仅当 `SIMICHAT_RELEASE_SEND_SMOKE=true` 时进入 smoke harness；普通 release 仍走原启动路径。
 - 更新 `lib/shared/providers/chat_provider.dart`：release smoke session 跳过 Markdown 原始档案追加，避免污染真实会话档案。
 - 新增 `scripts/smoke_ios_release_send.sh`：构建 smoke release、覆盖安装、启动、拉取结果、恢复普通 release。
-- 新增 `test/core/release_send_smoke_manifest_test.dart`：静态回归 dart-define 防护、结果目录和恢复普通 release 约束。
+- 新增 `test/release_send_smoke_manifest_test.dart`：静态回归 dart-define 防护、结果目录和恢复普通 release 约束。
 - 2026-07-07 更新：
   - `cancelStreaming()` 显式取消 active `StreamSubscription`。
   - `openSseStream()` 的 SSE 字节流支持下游取消时传播 `CancelToken.cancel()`。
@@ -182,9 +182,9 @@ Launched release app:
 ## 已通过检查
 
 ```bash
-dart format lib/core/smoke/release_send_smoke_harness.dart lib/shared/providers/chat_provider.dart test/core/release_send_smoke_manifest_test.dart
+dart format lib/core/smoke/release_send_smoke_harness.dart lib/shared/providers/chat_provider.dart test/release_send_smoke_manifest_test.dart
 flutter --no-version-check analyze
-flutter --no-version-check test --no-pub --no-test-assets -r expanded test/core/release_send_smoke_manifest_test.dart
+flutter --no-version-check test --no-pub --no-test-assets -r expanded test/release_send_smoke_manifest_test.dart
 bash -n scripts/smoke_ios_release_send.sh
 ./scripts/smoke_ios_release_send.sh BAD258BF-4E4A-5C40-9701-AEF8CCF43E6D
 ```
@@ -193,9 +193,9 @@ bash -n scripts/smoke_ios_release_send.sh
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_chat_protocol_test.dart \
-  test/core/release_send_smoke_manifest_test.dart \
-  test/shared/chat_provider_retry_test.dart
+  test/openai_chat_protocol_test.dart \
+  test/release_send_smoke_manifest_test.dart \
+  test/chat_provider_retry_test.dart
 git diff --check
 bash -n scripts/smoke_ios_release_send.sh scripts/smoke_ios_release_background_restore.sh
 flutter --no-version-check analyze

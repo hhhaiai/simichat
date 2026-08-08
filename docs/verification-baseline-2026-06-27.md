@@ -1,4 +1,6 @@
-# SimiChat 产品需求总纲
+# 历史验证基线（2026-06-27）
+
+> 本文只保留 2026-06-27 当时的产品、测试、构建和设备证据。它不是当前验收入口；当前结果请读 `verification-baseline-2026-08-08.md`，当前缺口请读 `current-status.md`。
 
 > **定位**：人工智能聊天工具，最终形态 = 好友陪伴（虚拟朋友 / 智能助理）+ 数字孪生（镜像数字人，基于对话录入、长期记忆与用户资料蒸馏生成）。
 >
@@ -263,14 +265,14 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart` 输出 `00:01 +10: All tests passed!`，覆盖脱敏审计不包含 prompt / token、未授权 / 授权 / chat 请求审计、并发上限 1 时第二个聊天请求返回 429 `concurrency_limit` 与 `Retry-After: 1`、Provider 审计汇总、设置页展示并发保护和暂无请求摘要 |
+| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart` 输出 `00:01 +10: All tests passed!`，覆盖脱敏审计不包含 prompt / token、未授权 / 授权 / chat 请求审计、并发上限 1 时第二个聊天请求返回 429 `concurrency_limit` 与 `Retry-After: 1`、Provider 审计汇总、设置页展示并发保护和暂无请求摘要 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.5s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 2.3s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:15 +194: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
 | OpenAI relay 性能基线脚本 | 通过 | `./scripts/benchmark_openai_relay.sh` 输出 `openai_relay_benchmark requests=100 total_ms=221 avg_ms=2.21`，覆盖 100 次本地 buffered 请求；新增内存计数和脱敏审计对本地请求开销仍处于毫秒级 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
-| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/core/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；审计事件和设置页摘要不包含 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
+| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；审计事件和设置页摘要不包含 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
 | 代码索引刷新 | 通过 | `index_repository(repo_path="/Users/sanbo/code/simichat", mode="full", persistence=true)` 完成；`index_status` 返回 `Users-sanbo-code-simichat` 状态 `ready`，节点 2167，边 5199 |
 
 结论：SimiChat 本地 OpenAI 兼容中转已具备基础可运维性和抗滥用保护，能在不泄露敏感内容的前提下向用户展示访问摘要，并对过高并发返回标准 429。局域网开放二次确认在下一节继续收口；仍待高级路由策略、可配置并发上限、持久化审计、用量统计和真机长时间运行验证。
@@ -281,14 +283,14 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart test/core/openai_compatible_relay_server_test.dart` 输出 `00:01 +12: All tests passed!`，覆盖默认 loopback、选择局域网模式后绑定 `0.0.0.0`、局域网绑定仍需 Bearer 令牌、绑定模式持久化、设置页取消确认不改变状态、确认后展示局域网候选地址 |
+| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart test/openai_compatible_relay_server_test.dart` 输出 `00:01 +12: All tests passed!`，覆盖默认 loopback、选择局域网模式后绑定 `0.0.0.0`、局域网绑定仍需 Bearer 令牌、绑定模式持久化、设置页取消确认不改变状态、确认后展示局域网候选地址 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.5s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 2.4s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:18 +196: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
 | OpenAI relay 性能基线脚本 | 通过 | `./scripts/benchmark_openai_relay.sh` 输出 `openai_relay_benchmark requests=100 total_ms=189 avg_ms=1.89`，局域网地址刷新异步化后不阻塞默认启动路径 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
-| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/core/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；局域网开放提示、确认和绑定模式不记录 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
+| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；局域网开放提示、确认和绑定模式不记录 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
 | 代码索引刷新 | 通过 | `index_repository(repo_path="/Users/sanbo/code/simichat", mode="full", persistence=true)` 完成；`index_status` 返回 `Users-sanbo-code-simichat` 状态 `ready`，节点 2178，边 5227 |
 
 结论：本地 OpenAI 兼容中转的默认暴露面仍是仅本机；局域网开放已经具备“显式开关 + 二次确认 + 风险提示 + 候选地址展示 + 可关闭恢复”的基础安全闭环。高级路由策略在下一节继续收口；仍待可配置并发上限、持久化审计、用量统计和真机长时间运行验证。
@@ -299,14 +301,14 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Bridge / Provider / 设置页局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart test/core/channel_model_relay_bridge_test.dart test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart` 输出 `00:02 +17: All tests passed!`，覆盖路由别名暴露、默认 / 免费 / 本地快速排序、真实模型 id 直连、缺省 model 选路、非流式失败回退、路由策略持久化且不进入结构化备份、设置页策略选择 |
+| Relay / Bridge / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart test/channel_model_relay_bridge_test.dart test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart` 输出 `00:02 +17: All tests passed!`，覆盖路由别名暴露、默认 / 免费 / 本地快速排序、真实模型 id 直连、缺省 model 选路、非流式失败回退、路由策略持久化且不进入结构化备份、设置页策略选择 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.0s)`；补充静默日志调整后再次输出 `No issues found! (ran in 3.2s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:23 +199: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
 | OpenAI relay 性能基线脚本 | 通过 | `./scripts/benchmark_openai_relay.sh` 最终输出 `openai_relay_benchmark requests=100 total_ms=225 avg_ms=2.25`，路由别名与策略判断后 100 次本地 buffered 请求仍处于毫秒级 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
-| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/core/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；路由策略、别名、回退错误和审计摘要不记录 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
+| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；路由策略、别名、回退错误和审计摘要不记录 prompt、Bearer token、API Key、上游 Base URL 或本机路径 |
 | 代码索引刷新 | 通过 | `index_repository(repo_path="/Users/sanbo/code/simichat", mode="full", persistence=true)` 完成；`index_status` 返回 `Users-sanbo-code-simichat` 状态 `ready`，节点 2197，边 5307 |
 
 结论：本地 OpenAI 兼容中转已从“指定模型直连”推进到“可配置路由聚合”：用户可通过路由别名和设置页策略把多个模型当作一个本地中转池使用，并在非流式场景获得基础失败回退。仍待可配置并发上限、持久化审计、用量统计、多模态 OpenAI 兼容透传和真机长时间运行验证。
@@ -318,14 +320,14 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart test/core/openai_compatible_relay_server_test.dart` 输出 `00:02 +16: All tests passed!`，覆盖并发上限持久化、1–32 越界抛错、启动时保留用户配置、用量统计累计与持久化、清空统计、备份白名单排除、设置页切换 8 并发、展示与清空累计用量 |
+| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart test/openai_compatible_relay_server_test.dart` 输出 `00:02 +16: All tests passed!`，覆盖并发上限持久化、1–32 越界抛错、启动时保留用户配置、用量统计累计与持久化、清空统计、备份白名单排除、设置页切换 8 并发、展示与清空累计用量 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.7s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 3.0s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:23 +201: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
 | OpenAI relay 性能基线脚本 | 通过 | `./scripts/benchmark_openai_relay.sh` 输出 `openai_relay_benchmark requests=100 total_ms=231 avg_ms=2.31`，串行统计落盘队列不影响本地 buffered 请求毫秒级基线 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
-| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/core/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；并发配置和用量统计不记录 prompt、Bearer token、API Key、上游 Base URL、本机路径或用户原始内容 |
+| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；并发配置和用量统计不记录 prompt、Bearer token、API Key、上游 Base URL、本机路径或用户原始内容 |
 | 代码索引刷新 | 通过 | `index_repository(repo_path="/Users/sanbo/code/simichat", mode="full", persistence=true)` 完成；`index_status` 返回 `Users-sanbo-code-simichat` 状态 `ready`，节点 2211，边 5362 |
 
 结论：本地 OpenAI 兼容中转已具备用户可调并发保护和本地脱敏用量可见性，能在不纳入备份、不泄露敏感内容的前提下帮助用户控制本机负载与查看累计调用概况。仍待持久化访问日志脱敏明细 / 审计导出、多模态 OpenAI 兼容透传和真机长时间运行验证。
@@ -337,14 +339,14 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart test/core/openai_compatible_relay_server_test.dart` 输出 `00:05 +16: All tests passed!`，覆盖审计明细持久化、导出 JSON schema、导出不包含 token / 测试 API Key / 上游 Base URL、结构化备份白名单排除、设置页展示最近审计、复制审计 JSON 入口和清空审计 |
+| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart test/openai_compatible_relay_server_test.dart` 输出 `00:05 +16: All tests passed!`，覆盖审计明细持久化、导出 JSON schema、导出不包含 token / 测试 API Key / 上游 Base URL、结构化备份白名单排除、设置页展示最近审计、复制审计 JSON 入口和清空审计 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.6s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 4.1s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:24 +201: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
 | OpenAI relay 性能基线脚本 | 通过 | `./scripts/benchmark_openai_relay.sh` 输出 `openai_relay_benchmark requests=100 total_ms=266 avg_ms=2.66`，新增最近 100 条脱敏审计明细和 JSON 导出能力后，本地 buffered 请求仍保持毫秒级 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
-| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/core/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；持久化审计明细与导出 JSON 不包含 prompt、Bearer token、API Key、上游 Base URL、本机路径或用户原始内容 |
+| 安全扫描 | 通过，有既有测试假阳性 | 敏感 `debugPrint` / `print` 扫描无命中；真实密钥字面量扫描仅命中 `test/key_encryptor_test.dart` 的测试假 key `sk-test-key-12345`；Android `FileProvider` 路径配置无 `<root-path>`；`docs/conversations/example.md` 仍被 `.gitignore` 忽略；持久化审计明细与导出 JSON 不包含 prompt、Bearer token、API Key、上游 Base URL、本机路径或用户原始内容 |
 | 代码索引刷新 | 通过 | MCP 通道短暂断开后改用本地 CLI：`codebase-memory-mcp cli index_repository '{"repo_path":"/Users/sanbo/code/simichat","mode":"full","persistence":true}'` 完成；`codebase-memory-mcp cli index_status '{"project":"Users-sanbo-code-simichat"}'` 返回状态 `ready`，节点 2226，边 5472 |
 
 结论：本地 OpenAI 兼容中转已经具备“脱敏累计统计 + 最近审计明细 + 本地 JSON 导出 + 一键清空”的基础可排障闭环，且审计数据不会进入结构化备份或自动上传。仍待多模态 OpenAI 兼容透传和真机长时间运行验证。
@@ -356,7 +358,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay 局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart` 输出 `00:00 +11: All tests passed!`，覆盖 `text` / `input_text` / `image_url` / `input_image` / `input_audio` / `file` 解析、安全占位、非文本类型计数、响应不泄露 URL / data URL / 文件 id / 本机路径，以及异常 `model` 路径不进入审计 modelId |
+| Relay 局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart` 输出 `00:00 +11: All tests passed!`，覆盖 `text` / `input_text` / `image_url` / `input_image` / `input_audio` / `file` 解析、安全占位、非文本类型计数、响应不泄露 URL / data URL / 文件 id / 本机路径，以及异常 `model` 路径不进入审计 modelId |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.1s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:28 +204: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!`；脚本内分析再次输出 `No issues found! (ran in 4.2s)` |
@@ -375,7 +377,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 附件 / Relay 局部测试 | 通过 | `flutter test test/core/attachment_helper_test.dart test/core/openai_compatible_relay_server_test.dart` 输出 `00:00 +13: All tests passed!`，覆盖图片 data URL 规范化 / 加载、Relay 把 `input_image` data URL 转为 `AiMessage.attachments`、远端 URL 仍安全占位、响应和审计不回显 data URL / base64 / 远端 URL / file URL / 文件 id |
+| 附件 / Relay 局部测试 | 通过 | `flutter test test/attachment_helper_test.dart test/openai_compatible_relay_server_test.dart` 输出 `00:00 +13: All tests passed!`，覆盖图片 data URL 规范化 / 加载、Relay 把 `input_image` data URL 转为 `AiMessage.attachments`、远端 URL 仍安全占位、响应和审计不回显 data URL / base64 / 远端 URL / file URL / 文件 id |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.4s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 3.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:20 +205: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `./scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -394,7 +396,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Bridge / 模型能力局部测试 | 通过 | `flutter test test/core/openai_compatible_test.dart test/core/channel_model_relay_bridge_test.dart test/core/attachment_helper_test.dart test/core/openai_compatible_relay_server_test.dart` 输出 `00:01 +23: All tests passed!`，覆盖 vision 能力推断、`gemini-embedding` 不误判、Bridge 列出 / 解析视觉模型且标记 `supportsVision`、图片请求指定纯文本模型返回 `vision_model_required` 且不 forward、路由候选过滤到视觉模型 |
+| Relay / Bridge / 模型能力局部测试 | 通过 | `flutter test test/openai_compatible_test.dart test/channel_model_relay_bridge_test.dart test/attachment_helper_test.dart test/openai_compatible_relay_server_test.dart` 输出 `00:01 +23: All tests passed!`，覆盖 vision 能力推断、`gemini-embedding` 不误判、Bridge 列出 / 解析视觉模型且标记 `supportsVision`、图片请求指定纯文本模型返回 `vision_model_required` 且不 forward、路由候选过滤到视觉模型 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.1s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 3.3s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:23 +207: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -413,7 +415,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 模型能力 / Bridge / Relay / 设置页局部测试 | 通过 | `flutter test test/core/openai_compatible_test.dart test/core/channel_model_relay_bridge_test.dart test/core/openai_compatible_relay_server_test.dart test/shared/settings_page_channel_import_test.dart test/shared/settings_page_model_test_history_test.dart` 输出 `00:03 +24: All tests passed!`，覆盖中文能力标签、vision 导入、路由别名 `supportsVision`、`/v1/models` 的 `capabilities` / `supports_vision` 脱敏元数据 |
+| 模型能力 / Bridge / Relay / 设置页局部测试 | 通过 | `flutter test test/openai_compatible_test.dart test/channel_model_relay_bridge_test.dart test/openai_compatible_relay_server_test.dart test/settings_page_channel_import_test.dart test/settings_page_model_test_history_test.dart` 输出 `00:03 +24: All tests passed!`，覆盖中文能力标签、vision 导入、路由别名 `supportsVision`、`/v1/models` 的 `capabilities` / `supports_vision` 脱敏元数据 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.3s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 2.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:18 +208: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -433,7 +435,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart test/shared/openai_relay_provider_test.dart test/shared/settings_page_openai_relay_test.dart` 输出 `00:04 +25: All tests passed!`，覆盖远端图片安全策略、默认关闭不 fetch、开启后注入 fetcher 转内存附件、开关持久化、不进入结构化备份白名单、设置页二次确认 |
+| Relay / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart test/openai_relay_provider_test.dart test/settings_page_openai_relay_test.dart` 输出 `00:04 +25: All tests passed!`，覆盖远端图片安全策略、默认关闭不 fetch、开启后注入 fetcher 转内存附件、开关持久化、不进入结构化备份白名单、设置页二次确认 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.4s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 2.7s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:16 +211: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -453,7 +455,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 语音输入 / 音频归档局部测试 | 通过 | `flutter test test/shared/chat_input_bar_voice_test.dart test/core/audio_file_archive_test.dart test/core/audio_transcript_archive_test.dart test/core/audio_transcription_service_test.dart test/shared/settings_page_voice_input_test.dart` 输出 `00:02 +11: All tests passed!`，覆盖录音按钮开始 / 停止、停止后添加 audio 附件、录音中禁用发送、音频私有归档、转写稿件草稿和设置页 STT 状态 |
+| 语音输入 / 音频归档局部测试 | 通过 | `flutter test test/chat_input_bar_voice_test.dart test/audio_file_archive_test.dart test/audio_transcript_archive_test.dart test/audio_transcription_service_test.dart test/settings_page_voice_input_test.dart` 输出 `00:02 +11: All tests passed!`，覆盖录音按钮开始 / 停止、停止后添加 audio 附件、录音中禁用发送、音频私有归档、转写稿件草稿和设置页 STT 状态 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.0s)`；移动端 smoke 链路内再次输出 `No issues found! (ran in 3.2s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:24 +213: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -475,7 +477,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 导出 / 导入局部测试 | 通过 | `flutter test test/core/data_export_service_test.dart test/core/data_import_service_test.dart` 输出 `00:00 +11: All tests passed!`，覆盖非语音附件复制到 `attachments/`、路径净化、不泄露源目录、跳过 audio / 缺失附件、导入 `attachments/` 文件恢复 |
+| 导出 / 导入局部测试 | 通过 | `flutter test test/data_export_service_test.dart test/data_import_service_test.dart` 输出 `00:00 +11: All tests passed!`，覆盖非语音附件复制到 `attachments/`、路径净化、不泄露源目录、跳过 audio / 缺失附件、导入 `attachments/` 文件恢复 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 5.1s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 3.2s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:25 +215: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -498,7 +500,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 导出 / 导入局部测试 | 通过 | `flutter test test/core/data_export_service_test.dart test/core/data_import_service_test.dart` 输出 `00:00 +13: All tests passed!`，覆盖 `structured_data/local_database.json` 导出、不泄露附件源绝对路径、导入恢复 sessions / messages / attachments、附件 localPath 重定向、二次导入默认跳过已有记录 |
+| 导出 / 导入局部测试 | 通过 | `flutter test test/data_export_service_test.dart test/data_import_service_test.dart` 输出 `00:00 +13: All tests passed!`，覆盖 `structured_data/local_database.json` 导出、不泄露附件源绝对路径、导入恢复 sessions / messages / attachments、附件 localPath 重定向、二次导入默认跳过已有记录 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.7s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 6.0s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:24 +217: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:03 +4: All tests passed!` |
@@ -521,7 +523,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 导出 / 导入局部测试 | 通过 | `flutter test test/core/data_export_service_test.dart test/core/data_import_service_test.dart` 输出 `00:02 +15: All tests passed!`，覆盖非密钥配置表入包、`apiKeyEncrypted` / MCP headers / token 参数不入包、导入恢复 folders / prompts / skills / mcp_servers / model_channels / channel_models、模型渠道和 MCP 默认禁用、二次导入默认跳过已有记录 |
+| 导出 / 导入局部测试 | 通过 | `flutter test test/data_export_service_test.dart test/data_import_service_test.dart` 输出 `00:02 +15: All tests passed!`，覆盖非密钥配置表入包、`apiKeyEncrypted` / MCP headers / token 参数不入包、导入恢复 folders / prompts / skills / mcp_servers / model_channels / channel_models、模型渠道和 MCP 默认禁用、二次导入默认跳过已有记录 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.2s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:20 +219: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:02 +4: All tests passed!` |
@@ -544,7 +546,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 导出 / 设置页入口局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart test/benchmark/obsidian_vault_export_benchmark.dart` 输出 `00:06 +7: All tests passed!`，覆盖会话 / 语音转写 Markdown 复制、README / Index / Manifest 生成、空 vault、忽略非 Markdown 与旧 exports、Manifest 不泄露本机绝对路径、设置页导出弹窗展示「Obsidian Vault」入口 |
+| Obsidian 导出 / 设置页入口局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart test/obsidian_vault_export_benchmark.dart` 输出 `00:06 +7: All tests passed!`，覆盖会话 / 语音转写 Markdown 复制、README / Index / Manifest 生成、空 vault、忽略非 Markdown 与旧 exports、Manifest 不泄露本机绝对路径、设置页导出弹窗展示「Obsidian Vault」入口 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.9s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 4.0s)` |
 | 全量测试 | 通过 | 首次全量测试因语音状态文案测试仍断言旧文案失败，已同步修复测试；复跑 `flutter test` 输出 `00:19 +221: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:03 +4: All tests passed!` |
@@ -568,7 +570,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 增量同步 / 设置页入口局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `00:02 +10: All tests passed!`，覆盖首次写入、二次未变跳过、源文件变更安全更新、目标手动修改冲突跳过、符号链接目标不写穿、源档案目录内目标拒绝、设置页展示「同步到 Obsidian」入口 |
+| Obsidian 增量同步 / 设置页入口局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `00:02 +10: All tests passed!`，覆盖首次写入、二次未变跳过、源文件变更安全更新、目标手动修改冲突跳过、符号链接目标不写穿、源档案目录内目标拒绝、设置页展示「同步到 Obsidian」入口 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.0s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.8s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `00:20 +225: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `00:03 +4: All tests passed!` |
@@ -588,7 +590,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 附件链接局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `+11: All tests passed!`，覆盖非语音附件复制到 `Attachments/`、会话 Markdown 附件项重写为 wiki 链接、audio 附件跳过、设置页同步入口和字体设置回归 |
+| Obsidian 附件链接局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `+11: All tests passed!`，覆盖非语音附件复制到 `Attachments/`、会话 Markdown 附件项重写为 wiki 链接、audio 附件跳过、设置页同步入口和字体设置回归 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；移动端 smoke 脚本内再次通过静态分析 |
 | 全量测试 | 通过 | `flutter test` 输出 `+226: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -608,7 +610,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 冲突详情局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `+12: All tests passed!`，覆盖同步冲突检测、附件链接重写和冲突详情组件展示冲突数量、相对路径、中文原因与短 SHA |
+| Obsidian 冲突详情局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `+12: All tests passed!`，覆盖同步冲突检测、附件链接重写和冲突详情组件展示冲突数量、相对路径、中文原因与短 SHA |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.9s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+227: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -628,7 +630,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 覆盖策略局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `+14: All tests passed!`，覆盖服务层 `overwriteConflicts: true` 只在显式请求时覆盖普通文件目标、默认冲突仍跳过、符号链接仍不写穿、设置页展示「安全同步 / 覆盖冲突」策略选择 |
+| Obsidian 覆盖策略局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `+14: All tests passed!`，覆盖服务层 `overwriteConflicts: true` 只在显式请求时覆盖普通文件目标、默认冲突仍跳过、符号链接仍不写穿、设置页展示「安全同步 / 覆盖冲突」策略选择 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.4s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+229: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -648,7 +650,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 原始音频附件局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 已在本轮实现后通过；新增用例覆盖 `includeAudioAttachments: true` 后 audio 原文件进入 `Attachments/m1/audio_1-voice.m4a`、会话 Markdown 重写为 `[[Attachments/m1/audio_1-voice.m4a|voice.m4a]]`，Manifest 不泄露源设备绝对路径 |
+| Obsidian 原始音频附件局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 已在本轮实现后通过；新增用例覆盖 `includeAudioAttachments: true` 后 audio 原文件进入 `Attachments/m1/audio_1-voice.m4a`、会话 Markdown 重写为 `[[Attachments/m1/audio_1-voice.m4a|voice.m4a]]`，Manifest 不泄露源设备绝对路径 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.3s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.8s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+230: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -668,7 +670,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian 同名附件局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `+16: All tests passed!`，新增覆盖同一消息两个 `duplicate.png` 分别复制到 `att_1-duplicate.png` / `att_2-duplicate.png`，会话 Markdown 按出现顺序生成两个不同 wiki 链接，且不泄露本机绝对路径 |
+| Obsidian 同名附件局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `+16: All tests passed!`，新增覆盖同一消息两个 `duplicate.png` 分别复制到 `att_1-duplicate.png` / `att_2-duplicate.png`，会话 Markdown 按出现顺序生成两个不同 wiki 链接，且不泄露本机绝对路径 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.7s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.8s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+231: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -688,7 +690,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian stale 清理局部测试 | 通过 | `flutter test test/core/obsidian_vault_export_service_test.dart test/shared/settings_page_font_scale_test.dart` 输出 `+18: All tests passed!`，覆盖源文件删除后清理未修改旧目标文件、`sync_deleted: 1` / `deleted_count` 写入索引和状态、目标已被用户修改时记录 `source_removed_target_modified` 并保留 |
+| Obsidian stale 清理局部测试 | 通过 | `flutter test test/obsidian_vault_export_service_test.dart test/settings_page_font_scale_test.dart` 输出 `+18: All tests passed!`，覆盖源文件删除后清理未修改旧目标文件、`sync_deleted: 1` / `deleted_count` 写入索引和状态、目标已被用户修改时记录 `source_removed_target_modified` 并保留 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.4s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 3.8s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+233: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -708,7 +710,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Obsidian stale 冲突详情局部测试 | 通过 | `flutter test test/shared/settings_page_font_scale_test.dart test/core/obsidian_vault_export_service_test.dart` 输出 `+18: All tests passed!`，覆盖 `target_modified`、`unsafe_existing_entity`、`source_removed_target_modified`、`stale_unsafe_existing_entity` 四类原因中文解释、原因代码和短 SHA 展示 |
+| Obsidian stale 冲突详情局部测试 | 通过 | `flutter test test/settings_page_font_scale_test.dart test/obsidian_vault_export_service_test.dart` 输出 `+18: All tests passed!`，覆盖 `target_modified`、`unsafe_existing_entity`、`source_removed_target_modified`、`stale_unsafe_existing_entity` 四类原因中文解释、原因代码和短 SHA 展示 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.6s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 3.3s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+233: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -728,7 +730,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 语音转写 / 导出局部测试 | 通过 | `flutter test test/core/audio_transcript_archive_test.dart test/core/audio_transcription_service_test.dart test/core/data_export_service_test.dart test/core/obsidian_vault_export_service_test.dart` 输出 `+28: All tests passed!`；覆盖 `pending`、`ready`、`empty`、`failed`，失败稿件脱敏，以及 `.tar.gz` / Obsidian 导出中不泄露本机路径、密钥、令牌或 URL |
+| 语音转写 / 导出局部测试 | 通过 | `flutter test test/audio_transcript_archive_test.dart test/audio_transcription_service_test.dart test/data_export_service_test.dart test/obsidian_vault_export_service_test.dart` 输出 `+28: All tests passed!`；覆盖 `pending`、`ready`、`empty`、`failed`，失败稿件脱敏，以及 `.tar.gz` / Obsidian 导出中不泄露本机路径、密钥、令牌或 URL |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.8s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 3.1s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+238: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -750,7 +752,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 聊天音频卡片状态局部测试 | 通过 | `flutter test test/core/audio_transcript_archive_test.dart test/shared/message_bubble_attachment_test.dart test/benchmark/audio_transcript_status_benchmark.dart` 输出 `+10: All tests passed!`；覆盖 sidecar 状态读取、消息气泡状态文案、失败态样式与语义标签不展示完整本机路径 |
+| 聊天音频卡片状态局部测试 | 通过 | `flutter test test/audio_transcript_archive_test.dart test/message_bubble_attachment_test.dart test/audio_transcript_status_benchmark.dart` 输出 `+10: All tests passed!`；覆盖 sidecar 状态读取、消息气泡状态文案、失败态样式与语义标签不展示完整本机路径 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!` |
 | 全量测试 | 通过 | `flutter test` 输出 `+240: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!`，脚本内静态分析同样通过 |
@@ -771,7 +773,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| STT 引擎 / Provider / 设置页局部测试 | 通过 | `flutter test test/core/openai_speech_to_text_engine_test.dart test/shared/audio_transcription_provider_test.dart test/shared/settings_page_voice_input_test.dart` 输出 `+8: All tests passed!`；覆盖 multipart 请求、响应解析、HTTP(S) Base URL 校验、失败脱敏、API Key 加密持久化、结构化备份排除 STT 配置、设置页已配置 / 未配置状态和密钥不回显 |
+| STT 引擎 / Provider / 设置页局部测试 | 通过 | `flutter test test/openai_speech_to_text_engine_test.dart test/audio_transcription_provider_test.dart test/settings_page_voice_input_test.dart` 输出 `+8: All tests passed!`；覆盖 multipart 请求、响应解析、HTTP(S) Base URL 校验、失败脱敏、API Key 加密持久化、结构化备份排除 STT 配置、设置页已配置 / 未配置状态和密钥不回显 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 4.0s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.9s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+246: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -792,11 +794,11 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| 音频转写详情局部测试 | 通过 | `flutter test test/core/audio_transcript_archive_test.dart test/shared/message_bubble_attachment_test.dart` 输出 `+12: All tests passed!`；覆盖 `readDetails` 读取 ready 正文、failed 状态不暴露可复制正文、脱敏路径，以及音频卡片“查看 / 复制转写稿”动作 |
+| 音频转写详情局部测试 | 通过 | `flutter test test/audio_transcript_archive_test.dart test/message_bubble_attachment_test.dart` 输出 `+12: All tests passed!`；覆盖 `readDetails` 读取 ready 正文、failed 状态不暴露可复制正文、脱敏路径，以及音频卡片“查看 / 复制转写稿”动作 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 3.9s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 2.8s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+249: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
-| 音频转写详情读取性能基线 | 通过 | `flutter test test/benchmark/audio_transcript_details_benchmark.dart` 输出 `audio_transcript_details_benchmark files=300 read_ms=98 copyable=300`；详情读取是用户点击后的按需本地 sidecar 解析，不在消息列表每帧热路径上 |
+| 音频转写详情读取性能基线 | 通过 | `flutter test test/audio_transcript_details_benchmark.dart` 输出 `audio_transcript_details_benchmark files=300 read_ms=98 copyable=300`；详情读取是用户点击后的按需本地 sidecar 解析，不在消息列表每帧热路径上 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
 | 安全扫描 | 通过 | 敏感密钥字面量扫描无命中；生产目标 `debugPrint` / `print` 扫描无命中；目标生产代码、当前功能文档和 `AGENTS.md` 绝对路径 / 本地文件 URL 扫描无命中；`git diff --check` 无输出 |
@@ -813,7 +815,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| TTS 局部测试 | 通过 | `flutter test test/core/openai_text_to_speech_engine_test.dart test/core/text_to_speech_service_test.dart test/shared/text_to_speech_provider_test.dart test/shared/message_bubble_tts_test.dart test/shared/settings_page_voice_input_test.dart test/core/microphone_permission_manifest_test.dart` 输出 `All tests passed!`；覆盖 `/v1/audio/speech` 请求、bytes 响应、HTTP(S) Base URL 校验、失败脱敏、文本截断、音色校验、临时 mp3 写入、播放器调用、API Key 加密持久化、结构化备份排除 TTS 配置、设置页已配置 / 未配置状态、assistant 播报按钮展示规则和原生通道字符串 |
+| TTS 局部测试 | 通过 | `flutter test test/openai_text_to_speech_engine_test.dart test/text_to_speech_service_test.dart test/text_to_speech_provider_test.dart test/message_bubble_tts_test.dart test/settings_page_voice_input_test.dart test/microphone_permission_manifest_test.dart` 输出 `All tests passed!`；覆盖 `/v1/audio/speech` 请求、bytes 响应、HTTP(S) Base URL 校验、失败脱敏、文本截断、音色校验、临时 mp3 写入、播放器调用、API Key 加密持久化、结构化备份排除 TTS 配置、设置页已配置 / 未配置状态、assistant 播报按钮展示规则和原生通道字符串 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found! (ran in 5.2s)`；移动端 smoke 脚本内再次输出 `No issues found! (ran in 3.3s)` |
 | 全量测试 | 通过 | `flutter test` 输出 `+266: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 `+4: All tests passed!` |
@@ -834,11 +836,11 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| TTS 停止控制局部测试 | 通过 | `flutter test test/core/text_to_speech_service_test.dart test/shared/message_bubble_tts_test.dart test/benchmark/tts_playback_control_benchmark.dart` 输出 `+11: All tests passed!`；覆盖 `TextToSpeechService.stop()` 委托播放器、assistant 播放中展示停止按钮、生成中展示禁用状态、用户 / 空消息不展示播报按钮，以及 1000 次停止控制 benchmark |
+| TTS 停止控制局部测试 | 通过 | `flutter test test/text_to_speech_service_test.dart test/message_bubble_tts_test.dart test/tts_playback_control_benchmark.dart` 输出 `+11: All tests passed!`；覆盖 `TextToSpeechService.stop()` 委托播放器、assistant 播放中展示停止按钮、生成中展示禁用状态、用户 / 空消息不展示播报按钮，以及 1000 次停止控制 benchmark |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；`scripts/smoke_mobile_main_flow.sh` 内置 analyze 复跑同样无问题 |
 | 全量测试 | 通过 | `flutter test` 输出 `+269: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 4 个 smoke 全部通过，并复跑 analyze 无问题 |
-| TTS 播放控制性能基线 | 通过 | `test/benchmark/tts_playback_control_benchmark.dart` 输出 `tts_playback_control_benchmark iterations=1000 stop_ms=6 stops=1000`；`scripts/benchmark_tts_playback_control.sh` 复跑输出 `iterations=1000 stop_ms=5 stops=1000`；停止控制是轻量本地状态与播放器委托，不在网络或文件写入热路径 |
+| TTS 播放控制性能基线 | 通过 | `test/tts_playback_control_benchmark.dart` 输出 `tts_playback_control_benchmark iterations=1000 stop_ms=6 stops=1000`；`scripts/benchmark_tts_playback_control.sh` 复跑输出 `iterations=1000 stop_ms=5 stops=1000`；停止控制是轻量本地状态与播放器委托，不在网络或文件写入热路径 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
 | 安全扫描 | 通过 | 全仓高置信密钥字面量扫描无命中；TTS 本切片生产目标 `debugPrint` / `print`、本机绝对路径和 `file://` 扫描无命中；`git diff --check` 无输出 |
@@ -854,7 +856,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| TTS 播放事件局部测试 | 通过 | `flutter test test/core/text_to_speech_service_test.dart test/shared/chat_page_tts_playback_event_test.dart test/shared/message_bubble_tts_test.dart test/benchmark/tts_playback_control_benchmark.dart test/benchmark/tts_playback_event_benchmark.dart` 输出 `+15: All tests passed!`；覆盖服务层事件暴露、原生 MethodCall 事件解析、聊天页收到完成事件后自动恢复播报按钮、消息气泡 TTS 状态和停止控制 benchmark |
+| TTS 播放事件局部测试 | 通过 | `flutter test test/text_to_speech_service_test.dart test/chat_page_tts_playback_event_test.dart test/message_bubble_tts_test.dart test/tts_playback_control_benchmark.dart test/tts_playback_event_benchmark.dart` 输出 `+15: All tests passed!`；覆盖服务层事件暴露、原生 MethodCall 事件解析、聊天页收到完成事件后自动恢复播报按钮、消息气泡 TTS 状态和停止控制 benchmark |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；`scripts/smoke_mobile_main_flow.sh` 内置 analyze 复跑同样无问题 |
 | 全量测试 | 通过 | `flutter test` 输出 `+272: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 4 个 smoke 全部通过，并复跑 analyze 无问题 |
@@ -873,11 +875,11 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| STT/TTS 预设局部测试 | 通过 | `flutter test test/core/speech_provider_preset_test.dart test/shared/audio_transcription_provider_test.dart test/shared/text_to_speech_provider_test.dart test/shared/settings_page_voice_input_test.dart test/core/openai_text_to_speech_engine_test.dart test/benchmark/speech_provider_preset_benchmark.dart` 输出 `+20: All tests passed!`；文档同步和示例文案调整后复跑 `flutter test test/core/speech_provider_preset_test.dart test/shared/settings_page_voice_input_test.dart test/core/openai_text_to_speech_engine_test.dart` 输出 `+12: All tests passed!`；覆盖 OpenAI / Groq / 自定义预设、`/v1` 后缀归一、Provider 保存、设置页预设展示、选择 Groq STT 自动填充和 TTS `response_format` 字段 |
+| STT/TTS 预设局部测试 | 通过 | `flutter test test/speech_provider_preset_test.dart test/audio_transcription_provider_test.dart test/text_to_speech_provider_test.dart test/settings_page_voice_input_test.dart test/openai_text_to_speech_engine_test.dart test/speech_provider_preset_benchmark.dart` 输出 `+20: All tests passed!`；文档同步和示例文案调整后复跑 `flutter test test/speech_provider_preset_test.dart test/settings_page_voice_input_test.dart test/openai_text_to_speech_engine_test.dart` 输出 `+12: All tests passed!`；覆盖 OpenAI / Groq / 自定义预设、`/v1` 后缀归一、Provider 保存、设置页预设展示、选择 Groq STT 自动填充和 TTS `response_format` 字段 |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；移动端 smoke 脚本内置 analyze 复跑同样无问题 |
 | 全量测试 | 通过 | `flutter test` 输出 `+277: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 4 个 smoke 全部通过，并复跑 analyze 无问题 |
-| STT/TTS 预设性能基线 | 通过 | `test/benchmark/speech_provider_preset_benchmark.dart` 输出 `speech_provider_preset_benchmark iterations=10000 infer_ms=25 matches=20000`；`scripts/benchmark_speech_provider_preset.sh` 复跑输出 `infer_ms=24 matches=20000`；预设推断是轻量字符串归一和列表匹配，不在网络或文件写入热路径 |
+| STT/TTS 预设性能基线 | 通过 | `test/speech_provider_preset_benchmark.dart` 输出 `speech_provider_preset_benchmark iterations=10000 infer_ms=25 matches=20000`；`scripts/benchmark_speech_provider_preset.sh` 复跑输出 `infer_ms=24 matches=20000`；预设推断是轻量字符串归一和列表匹配，不在网络或文件写入热路径 |
 | Android 构建验证 | 通过 | `flutter build apk --debug` 输出 `✓ Built build/app/outputs/flutter-apk/app-debug.apk` |
 | iOS 构建验证 | 通过 | `flutter build ios --simulator --no-codesign` 输出 `✓ Built build/ios/iphonesimulator/Runner.app` |
 | 安全扫描 | 通过 | 全仓高置信密钥字面量扫描无命中；本切片生产目标 `debugPrint` / `print` 扫描无命中；本切片生产代码、当前功能文档的本机绝对路径 / `file://` 扫描无命中；`git diff --check` 无输出 |
@@ -893,7 +895,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay 健康检查局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` 输出 `+19: All tests passed!`；覆盖 `/health` 未授权不泄露状态、授权返回安全 JSON、`/v1/health` 兼容路径、健康检查不触发模型列表、审计路径记录和 100 次健康检查 benchmark |
+| Relay 健康检查局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart test/openai_relay_benchmark.dart` 输出 `+19: All tests passed!`；覆盖 `/health` 未授权不泄露状态、授权返回安全 JSON、`/v1/health` 兼容路径、健康检查不触发模型列表、审计路径记录和 100 次健康检查 benchmark |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；移动端 smoke 脚本内置 analyze 复跑同样无问题 |
 | 全量测试 | 通过 | `flutter test` 输出 `+278: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 4 个 smoke 全部通过，并复跑 analyze 无问题 |
@@ -913,7 +915,7 @@
 
 | 验证项 | 结果 | 关键输出 / 结论 |
 | --- | --- | --- |
-| Relay CORS 局部测试 | 通过 | `flutter test test/core/openai_compatible_relay_server_test.dart test/benchmark/openai_relay_benchmark.dart` 输出 `+20: All tests passed!`；覆盖无令牌 CORS 预检 204、安全 CORS 头、未知路径预检 `not_found`、真实响应 CORS 头、审计 code/path，以及 CORS benchmark |
+| Relay CORS 局部测试 | 通过 | `flutter test test/openai_compatible_relay_server_test.dart test/openai_relay_benchmark.dart` 输出 `+20: All tests passed!`；覆盖无令牌 CORS 预检 204、安全 CORS 头、未知路径预检 `not_found`、真实响应 CORS 头、审计 code/path，以及 CORS benchmark |
 | 全量静态分析 | 通过 | `flutter analyze` 输出 `No issues found!`；移动端 smoke 脚本内置 analyze 复跑同样无问题 |
 | 全量测试 | 通过 | `flutter test` 输出 `+279: All tests passed!` |
 | 移动端 smoke 脚本 | 通过 | `scripts/smoke_mobile_main_flow.sh` 输出 4 个 smoke 全部通过，并复跑 analyze 无问题 |

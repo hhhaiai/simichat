@@ -15,4 +15,4 @@ trap cleanup EXIT
 simichat_release_pubspec_setup 0
 
 "$FLUTTER_BIN" --no-version-check test --no-pub \
-  test/benchmark/dreaming_benchmark.dart "$@"
+  test/dreaming_benchmark.dart "$@"

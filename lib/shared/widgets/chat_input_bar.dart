@@ -27,6 +27,13 @@ class ChatInputBar extends StatefulWidget {
   final ValueNotifier<bool> hasTextNotifier;
   final Future<bool> Function(String text, List<PendingAttachment> attachments)
   onSend;
+
+  /// 图片生成回调：入参为输入框文本，返回是否成功（成功后清空输入框）。
+  /// 为 null 时不显示“生成图片”按钮。
+  final Future<bool> Function(String text)? onGenerateImage;
+
+  /// 替身回复回调：为最近一条用户消息以镜像人格生成回复。为 null 时不显示入口。
+  final Future<bool> Function()? onPersonaReply;
   final Widget? modelSelector;
   final VoiceRecorderPlatform? voiceRecorder;
   final bool? showVoiceInput;
@@ -38,6 +45,8 @@ class ChatInputBar extends StatefulWidget {
     required this.isStreaming,
     required this.hasTextNotifier,
     required this.onSend,
+    this.onGenerateImage,
+    this.onPersonaReply,
     this.modelSelector,
     this.voiceRecorder,
     this.showVoiceInput,
@@ -68,6 +77,20 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final sent = await widget.onSend(content, attachments);
     if (!sent || !mounted) return;
     setState(() => _pendingAttachments.clear());
+  }
+
+  Future<void> _handleGenerateImage() async {
+    final text = widget.controller.text.trim();
+    if (text.isEmpty || widget.onGenerateImage == null) return;
+    if (_isRecordingVoice) {
+      _showAttachmentError('请先结束当前录音');
+      return;
+    }
+    final ok = await widget.onGenerateImage!(text);
+    if (ok && mounted) {
+      widget.controller.clear();
+      widget.hasTextNotifier.value = false;
+    }
   }
 
   void _showAttachmentMenu() {
@@ -107,6 +130,16 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 _pickFile();
               },
             ),
+            if (widget.onPersonaReply != null)
+              ListTile(
+                leading: const Icon(Icons.face_retouching_natural),
+                title: const Text('替身回复'),
+                subtitle: const Text('以我的口吻为最近一条消息回复'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  widget.onPersonaReply!();
+                },
+              ),
           ],
         ),
       ),
@@ -331,6 +364,25 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           ),
                           tooltip: _isRecordingVoice ? '结束录音' : '语音输入',
                           color: _isRecordingVoice ? scheme.error : null,
+                        ),
+                      if (widget.onGenerateImage != null)
+                        ValueListenableBuilder<bool>(
+                          valueListenable: widget.hasTextNotifier,
+                          builder: (_, hasText, child) {
+                            final canGenerate =
+                                hasText &&
+                                !widget.isStreaming &&
+                                !_isRecordingVoice;
+                            return IconButton(
+                              key: const ValueKey('generate-image-button'),
+                              onPressed: canGenerate
+                                  ? _handleGenerateImage
+                                  : null,
+                              icon: const Icon(Icons.auto_awesome, size: 20),
+                              tooltip: '生成图片',
+                              color: canGenerate ? scheme.primary : null,
+                            );
+                          },
                         ),
                       widget.isStreaming
                           ? IconButton.filledTonal(

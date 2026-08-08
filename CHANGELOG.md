@@ -1,5 +1,21 @@
 # 更新日志
 
+## v2026.08.08-local-model — 2026-08-08
+
+### 本地模型
+
+- 设置页的“添加渠道 → 厂商预设”新增 Ollama 本地模型入口；Ollama 渠道 API Key 可留空，并提供 gemma4 / qwen3:4b / llama3.2:3b 推荐模型名。
+- Ollama 自动获取模型时默认勾选 gemma4 及其 tag 变体，云端渠道的默认勾选行为保持不变。
+- Ollama NDJSON 适配器保留 message.thinking 与 message.content，增加连接 / 流式空闲超时、有限错误响应和可选 Bearer 鉴权。
+- 空密钥渠道兼容旧数据库和手工导入，非空密钥仍严格解密。
+- 新增 scripts/smoke_local_ollama.sh，用于验证真实 Ollama 的 /api/tags 与流式 /api/chat，脚本不会代启或修改服务。
+
+### 文档与验证
+
+- 重写根目录 README，补充项目结构、本地模型网络地址和验证边界。
+- 新增 docs/README.md、docs/local-model.md 和当前验证基线。
+- 本轮仓库测试和静态分析通过；本机 Ollama 未运行，真实模型 runtime 仍需按文档补证。
+
 ## v2026.07.05-voice — 2026-07-05
 
 ### 重点

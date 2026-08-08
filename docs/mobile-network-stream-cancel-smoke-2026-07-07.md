@@ -57,7 +57,7 @@ TimeoutException after 0:00:08.000000: Future not completed
 ```bash
 bash -n scripts/smoke_android_network_stream_cancel.sh
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/release_send_smoke_manifest_test.dart \
+  test/release_send_smoke_manifest_test.dart \
   --name "Android network stream cancel"
 flutter --no-version-check analyze
 ```

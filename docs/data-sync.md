@@ -50,18 +50,18 @@
 - `android/app/src/main/res/xml/simichat_file_paths.xml`：Android `FileProvider` 路径白名单，不使用 `<root-path>`。
 - `android/app/src/main/AndroidManifest.xml`：声明不可导出的 `FileProvider`，只授予临时读权限。
 - `ios/Runner/AppDelegate.swift`：iOS `MethodChannel` + `UIActivityViewController` 分享。
-- `test/core/data_export_service_test.dart`：导出包内容、manifest、排除旧导出包、排除原始音频选项、结构化快照入包、非语音附件原文件导出、聊天核心数据库快照、非密钥配置表快照、密钥 / headers / 路径脱敏测试。
-- `test/core/structured_data_backup_test.dart`：结构化白名单导出、空白名单跳过、默认不覆盖恢复、覆盖恢复、格式错误测试。
-- `test/core/data_export_share_service_test.dart`：Dart 分享服务参数、文件名限制、缺失文件拦截测试。
-- `test/core/local_transfer_server_test.dart`：电脑端本地传输下载、错误令牌、过期、非法路径 / 方法、文件名限制测试。
-- `test/core/data_import_service_test.dart`：导入预览、恢复、附件文件恢复、聊天核心数据库快照恢复、非密钥配置表恢复、冲突跳过、checksum 失败、路径穿越、缺失 manifest 测试。
-- `test/core/obsidian_vault_export_service_test.dart`：Obsidian Vault 导出内容、增量同步、附件复制 / wiki 链接重写、同名附件按出现顺序分别链接、stale 文件安全删除 / 目标修改保护、audio 附件默认跳过与显式包含、索引、manifest、空 vault 和绝对路径脱敏测试。
-- `test/core/data_export_share_platform_test.dart`：Android / iOS 分享通道安全配置静态测试。
-- `test/benchmark/data_export_benchmark.dart`：导出性能基线。
-- `test/benchmark/data_import_benchmark.dart`：导入性能基线。
-- `test/benchmark/local_transfer_benchmark.dart`：电脑端本地传输 1 MB 下载性能基线。
-- `test/benchmark/obsidian_vault_export_benchmark.dart`：Obsidian Vault 导出 200 个 Markdown 文件性能基线。
-- `test/benchmark/obsidian_vault_sync_benchmark.dart`：Obsidian 现有 Vault 增量同步 200 个 Markdown + 200 个非语音附件性能基线。
+- `test/data_export_service_test.dart`：导出包内容、manifest、排除旧导出包、排除原始音频选项、结构化快照入包、非语音附件原文件导出、聊天核心数据库快照、非密钥配置表快照、密钥 / headers / 路径脱敏测试。
+- `test/structured_data_backup_test.dart`：结构化白名单导出、空白名单跳过、默认不覆盖恢复、覆盖恢复、格式错误测试。
+- `test/data_export_share_service_test.dart`：Dart 分享服务参数、文件名限制、缺失文件拦截测试。
+- `test/local_transfer_server_test.dart`：电脑端本地传输下载、错误令牌、过期、非法路径 / 方法、文件名限制测试。
+- `test/data_import_service_test.dart`：导入预览、恢复、附件文件恢复、聊天核心数据库快照恢复、非密钥配置表恢复、冲突跳过、checksum 失败、路径穿越、缺失 manifest 测试。
+- `test/obsidian_vault_export_service_test.dart`：Obsidian Vault 导出内容、增量同步、附件复制 / wiki 链接重写、同名附件按出现顺序分别链接、stale 文件安全删除 / 目标修改保护、audio 附件默认跳过与显式包含、索引、manifest、空 vault 和绝对路径脱敏测试。
+- `test/data_export_share_platform_test.dart`：Android / iOS 分享通道安全配置静态测试。
+- `test/data_export_benchmark.dart`：导出性能基线。
+- `test/data_import_benchmark.dart`：导入性能基线。
+- `test/local_transfer_benchmark.dart`：电脑端本地传输 1 MB 下载性能基线。
+- `test/obsidian_vault_export_benchmark.dart`：Obsidian Vault 导出 200 个 Markdown 文件性能基线。
+- `test/obsidian_vault_sync_benchmark.dart`：Obsidian 现有 Vault 增量同步 200 个 Markdown + 200 个非语音附件性能基线。
 - `scripts/benchmark_data_export.sh`：导出性能脚本入口。
 - `scripts/benchmark_data_import.sh`：导入性能脚本入口。
 - `scripts/benchmark_local_transfer.sh`：电脑端本地传输性能脚本入口。

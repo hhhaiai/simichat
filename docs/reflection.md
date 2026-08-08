@@ -1,5 +1,7 @@
 # Reflection 反思机制 v1
 
+> **文档边界**：本文是 Reflection 的实现专题和历史质量记录。当前代码、验证数量、默认模型和本地 Ollama 状态以 `current-status.md` 与 `verification-baseline-2026-08-08.md` 为准；历史质量记录不替代新的真实模型或真机验证。
+
 > 对应模块：M2 记忆与上下文系统 / M3 Dreaming / M10 数字孪生。状态：本地启发式反思 v1、可选模型增强反思 v1、会话追问压力提醒 v1、重复追问提醒 v1、最新任务推进提醒 v1、最后一问未答提醒 v1、短期提示注入 v1、反思历史可控管理 v1、反思独立失败恢复 v1 已落地。最后更新：2026-07-14。
 
 ## 1. 目标
@@ -103,7 +105,7 @@ Android 后台 isolate 通过 `ProviderContainer` 复用同一套 provider orche
 
 已补测试：
 
-- `test/core/reflection_service_test.dart`
+- `test/reflection_service_test.dart`
   - 生成回应质量 / 上下文 / 画像 / 行动项反思。
   - 全局轮次均衡但单个会话没有助手回复时，生成高优先级“未回复会话”结论和补回复行动项。
   - 全局轮次均衡但单个会话用户消息比助手回复多 2 条及以上时，生成高优先级“会话追问压力”结论和阶段性总结行动项。
@@ -116,10 +118,10 @@ Android 后台 isolate 通过 `ProviderContainer` 复用同一套 provider orche
   - secret-like 画像信号不会进入报告或短期提示。
   - 反思短期提示有标题、限量输出，并跳过 secret-like 内容。
   - 长会话质量基线：长会话 + 用户追问 + 待确认画像 + 画像任务同时出现时，报告覆盖回应质量 / 上下文 / 任务推进 / 用户画像；短期提示保留长会话风险和任务推进，完整报告保留画像采纳动作。
-- `test/shared/settings_page_dreaming_test.dart`
+- `test/settings_page_dreaming_test.dart`
   - 设置页反思弹窗展示下一轮短期提示预览。
   - Dreaming 弹窗关闭后 digest 才返回时仍能使用页面级 `WidgetRef` 保存报告，避免真机上使用已销毁弹窗 `WidgetRef`。
-- `test/shared/reflection_provider_test.dart`
+- `test/reflection_provider_test.dart`
   - 最近反思报告持久化 / 清空。
   - 短期提示注入开关持久化。
   - 反思历史持久化、同日同来源去重、精确删除同日不同来源中的单条报告和最多 20 次上限。
@@ -127,25 +129,25 @@ Android 后台 isolate 通过 `ProviderContainer` 复用同一套 provider orche
   - 反思失败保留 pending、重试成功清除 pending、非法 marker 自动清理、同一来源尝试次数持久化。
   - pending 指向旧 Dreaming 时从 SQLite 按 dayKey 恢复正确报告，不误用当前最新 Dreaming。
   - 模型增强开关默认关闭并持久化；模型增强成功写入 `generationMode=model`，失败自动回退本地报告并清除 pending。
-- `test/core/model_reflection_service_test.dart`
+- `test/model_reflection_service_test.dart`
   - 严格 JSON 解析、模型 / 本地结论合并、敏感输出过滤、无安全内容拒绝、提示 12000 字符上限和密钥脱敏。
-- `test/shared/model_reflection_protocol_integration_test.dart`
+- `test/model_reflection_protocol_integration_test.dart`
   - 使用本机 `HttpServer`、正式 `openai_chat` SSE 协议和内存 SQLite 渠道配置验证默认模型请求、流式 JSON 响应、模型报告持久化和 pending 清理；该测试不代表真实外部模型质量证明。
-- `test/shared/settings_page_dreaming_test.dart`
+- `test/settings_page_dreaming_test.dart`
   - 手动 Dreaming 后同时落盘最近反思和反思历史。
   - 设置页展开审阅历史反思、删除当前最近反思后回退到下一条历史，同日不同来源报告不会被误删。
   - 设置页展示 pending 来源和尝试次数、允许清除；手动反思失败给出可重试反馈；删除来源 Dreaming 或清空报告同步清除 pending。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 移动端启动时恢复已有 pending。
   - 自动 Dreaming 成功但 Reflection 首次失败后，恢复前台会重试并生成最近反思与历史。
-- `test/shared/dreaming_background_runner_test.dart`
+- `test/dreaming_background_runner_test.dart`
   - Android / iOS 后台 runner 会持久化 Dreaming 与 Reflection。
   - Reflection 首次失败后只重试 Reflection，不重复生成同日 Dreaming。
   - 已有 pending 再次恢复失败且当天 Dreaming 已完成时仍返回 `reflectionPending`，确保 WorkManager / BGTaskScheduler 继续失败退避，而不是误报 `notDue`。
-- `test/shared/chat_provider_context_limit_test.dart`
+- `test/chat_provider_context_limit_test.dart`
   - Key Points 与本地反思短期提示合并。
   - 关闭短期提示时仍保留 Key Points，不注入反思内容。
-- `test/core/structured_data_backup_test.dart`
+- `test/structured_data_backup_test.dart`
   - `assistant_reflection_v1`、`assistant_reflection_history_v1`、`assistant_reflection_prompt_enabled_v1`、`assistant_reflection_model_enabled_v1` 和 pending 进入结构化备份白名单，模型密钥仍不进入备份。
 
 2026-07-14 模型增强验证结果：
@@ -171,8 +173,8 @@ Android 后台 isolate 通过 `ProviderContainer` 复用同一套 provider orche
 2026-07-13 验证结果：
 
 - 移动端首次启动到期、恢复前台到期、持续前台定时三条 Dreaming 路径已补 Reflection 直接断言：从 SharedPreferences 解码最近 Dreaming、最近反思和反思历史，要求反思有内容、历史非空，并验证 `sourceDigestDayKey` 与触发它的 Dreaming `dayKey` 一致。
-- `flutter --no-version-check test --no-pub --no-test-assets test/smoke/mobile_main_flow_smoke_test.dart --name dreaming -r expanded`：9 项通过。
-- `scripts/smoke_full_stability_gate.sh -r expanded test/smoke/mobile_main_flow_smoke_test.dart test/core/notification_service_test.dart test/core/reflection_service_test.dart test/core/dreaming_service_test.dart test/shared/reflection_provider_test.dart test/shared/settings_page_dreaming_test.dart test/shared/dreaming_provider_test.dart test/shared/chat_provider_context_limit_test.dart test/core/dreaming_dao_test.dart test/core/structured_data_backup_test.dart`：93 项通过。
+- `flutter --no-version-check test --no-pub --no-test-assets test/mobile_main_flow_smoke_test.dart --name dreaming -r expanded`：9 项通过。
+- `scripts/smoke_full_stability_gate.sh -r expanded test/mobile_main_flow_smoke_test.dart test/notification_service_test.dart test/reflection_service_test.dart test/dreaming_service_test.dart test/reflection_provider_test.dart test/settings_page_dreaming_test.dart test/dreaming_provider_test.dart test/chat_provider_context_limit_test.dart test/dreaming_dao_test.dart test/structured_data_backup_test.dart`：93 项通过。
 - Reflection 独立失败恢复落地后，加入数据导出 / 导入回归的稳定门禁通过 120 项；`flutter --no-version-check analyze --no-pub` 无问题。
 
 2026-07-14 真机验证结果：
@@ -203,12 +205,12 @@ Android 后台 isolate 通过 `ProviderContainer` 复用同一套 provider orche
 
 2026-07-07 验证结果：
 
-- `scripts/smoke_full_stability_gate.sh -r expanded test/core/reflection_service_test.dart test/core/dreaming_service_test.dart test/shared/reflection_provider_test.dart test/shared/settings_page_dreaming_test.dart test/shared/dreaming_provider_test.dart test/core/structured_data_backup_test.dart`：44 项通过，覆盖反思来源新鲜度、旧 Dreaming 短期提示、设置页入口旧来源可见性、单会话未回复识别、会话追问压力识别、重复追问识别、最新任务推进识别、普通礼貌问题不误触发最新任务、最后一问未答识别、明确任务语气进入 Dreaming `task` 记忆候选、Dreaming 会话最后消息角色与最新用户问题 JSON 往返、敏感标题降级、敏感最后用户消息不回退、Dreaming / Reflection 联动和设置页反思弹窗。
+- `scripts/smoke_full_stability_gate.sh -r expanded test/reflection_service_test.dart test/dreaming_service_test.dart test/reflection_provider_test.dart test/settings_page_dreaming_test.dart test/dreaming_provider_test.dart test/structured_data_backup_test.dart`：44 项通过，覆盖反思来源新鲜度、旧 Dreaming 短期提示、设置页入口旧来源可见性、单会话未回复识别、会话追问压力识别、重复追问识别、最新任务推进识别、普通礼貌问题不误触发最新任务、最后一问未答识别、明确任务语气进入 Dreaming `task` 记忆候选、Dreaming 会话最后消息角色与最新用户问题 JSON 往返、敏感标题降级、敏感最后用户消息不回退、Dreaming / Reflection 联动和设置页反思弹窗。
 
 2026-07-06 验证结果：
 
 - `flutter --no-version-check analyze`：通过。
-- 局部 Dreaming 设置页测试：`flutter --no-version-check test --no-pub --no-test-assets test/shared/settings_page_dreaming_test.dart -r expanded`，3 个通过。
+- 局部 Dreaming 设置页测试：`flutter --no-version-check test --no-pub --no-test-assets test/settings_page_dreaming_test.dart -r expanded`，3 个通过。
 - 全量 `flutter --no-version-check test --no-pub --no-test-assets`：330 个测试通过。
 - Pixel 8 真机验证：修复后 debug 包 `adb install -r` 覆盖安装且不清数据；72 条 seed 长会话可见；手动 Dreaming 生成 2026-07-06 日报（72 条消息）；Reflection 生成 5 条结论、4 个行动项、1 次历史；设置页短期提示预览可展开查看。详见 `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md`。
 

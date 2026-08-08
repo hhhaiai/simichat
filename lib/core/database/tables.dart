@@ -147,6 +147,25 @@ class DreamingReports extends Table {
   ];
 }
 
+class PersonaAuditLogs extends Table {
+  TextColumn get id => text()();
+  TextColumn get eventType => text()(); // authorize | revoke | persona_reply
+  TextColumn get sessionId => text().nullable().references(
+    Sessions,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
+  TextColumn get messageId => text().nullable()();
+  TextColumn get summary => text().withDefault(const Constant(''))();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+
+  @override
+  List<Set<Column>> get uniqueKeys => [];
+}
+
 class Prompts extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();

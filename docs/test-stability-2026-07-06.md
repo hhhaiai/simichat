@@ -6,7 +6,7 @@
 
 ## 处理
 
-- 新增 `test/core/widget_test_database_lifecycle_test.dart`，静态约束基础 widget smoke 必须使用一次性测试数据库。
+- 新增 `test/widget_test_database_lifecycle_test.dart`，静态约束基础 widget smoke 必须使用一次性测试数据库。
 - `test/widget_test.dart` 改为通过 `AppDatabase.forTesting(NativeDatabase.memory())` 创建内存库。
 - 通过 `databaseProvider.overrideWithValue(db)` 注入测试库，不再打开默认应用数据库。
 - 使用 `addTearDown(db.close)` 保证每个 widget 用例结束后关闭测试库。
@@ -14,7 +14,7 @@
 ## 验证
 
 - 红灯：新增生命周期约束测试先确认旧写法会失败。
-- 局部绿灯：`scripts/smoke_full_stability_gate.sh -r expanded test/core/widget_test_database_lifecycle_test.dart test/widget_test.dart`，3 项通过，局部输出无 Drift warning。
+- 局部绿灯：`scripts/smoke_full_stability_gate.sh -r expanded test/widget_test_database_lifecycle_test.dart test/widget_test.dart`，3 项通过，局部输出无 Drift warning。
 - 静态检查：`flutter --no-version-check analyze` 无问题。
 - 全量理论门禁：`scripts/smoke_full_stability_gate.sh -r expanded`，352 项通过。
 - 全量日志复查：`/tmp/simichat_full_gate_1752.log` 中未匹配到 `WARNING (drift)` 或 `multiple databases`。
@@ -41,8 +41,8 @@
 ### 验证
 
 - 红灯：目标用例先失败，`Expected: <0>` / `Actual: <1>`，证明旧逻辑会在销毁后触发完成通知。
-- 绿灯：`scripts/smoke_full_stability_gate.sh -r expanded test/smoke/mobile_main_flow_smoke_test.dart --name "mobile disposed shell skips dreaming notification after proposal wait"`，1 项通过。
-- 相关 smoke：`scripts/smoke_full_stability_gate.sh -r expanded test/smoke/mobile_main_flow_smoke_test.dart`，9 项通过。
+- 绿灯：`scripts/smoke_full_stability_gate.sh -r expanded test/mobile_main_flow_smoke_test.dart --name "mobile disposed shell skips dreaming notification after proposal wait"`，1 项通过。
+- 相关 smoke：`scripts/smoke_full_stability_gate.sh -r expanded test/mobile_main_flow_smoke_test.dart`，9 项通过。
 - 静态检查：`flutter --no-version-check analyze` 无问题。
 - 全量理论门禁：`scripts/smoke_full_stability_gate.sh -r expanded`，353 项通过；日志 `/tmp/simichat_full_gate_current_182005.log` 未匹配 `WARNING (drift)` 或 `multiple databases`。
 - 卫生检查：`git diff --check` 无输出，正式 `pubspec.yaml` / `pubspec.lock` 不保留临时 `sqlite3.source=system` hook。

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/background/dreaming_background_workmanager.dart';
@@ -14,6 +15,7 @@ import '../../core/background/ios_background_refresh_status.dart';
 import '../../core/archive/data_import_service.dart';
 import '../../core/archive/data_export_service.dart';
 import '../../core/archive/data_export_share_service.dart';
+import '../../core/archive/markdown_conversation_archive.dart';
 import '../../core/archive/local_database_snapshot.dart';
 import '../../core/archive/local_transfer_server.dart';
 import '../../core/archive/obsidian_vault_export_service.dart';
@@ -27,15 +29,36 @@ import '../../core/ai/protocol_icons.dart';
 import '../../core/ai/sse_helper.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/message_dao.dart';
+import '../../core/database/dao/persona_audit_log_dao.dart';
 import '../../core/memory/dreaming_service.dart';
 import '../../core/memory/dreaming_schedule.dart';
 import '../../core/memory/reflection_service.dart';
 import '../../core/memory/user_profile.dart';
+import '../../core/twin/persona_profile.dart';
+import '../../core/twin/live_stream_service.dart';
 import '../../core/media/speech_provider_preset.dart';
 import '../../core/mcp/mcp_client.dart';
 import '../../core/relay/openai_compatible_relay_server.dart';
 import '../../shared/providers/database_provider.dart';
+import '../../shared/providers/external_url_provider.dart';
 import '../../shared/providers/audio_transcription_provider.dart';
+import '../../shared/providers/image_generation_provider.dart';
+import '../../shared/providers/webdav_backup_provider.dart';
+import '../../shared/providers/s3_backup_provider.dart';
+import '../../shared/providers/one_drive_backup_provider.dart';
+import '../../shared/providers/persona_provider.dart';
+import '../../shared/providers/telegram_bot_provider.dart';
+import '../../shared/providers/discord_bot_provider.dart';
+import '../../shared/providers/feishu_bot_provider.dart';
+import '../../shared/providers/webhook_bot_provider.dart';
+import '../../shared/providers/notion_sync_provider.dart';
+import '../../shared/providers/note_sync_providers.dart';
+import '../../core/backup/webdav_backup_service.dart';
+import '../../core/backup/s3_backup_service.dart';
+import '../../core/backup/one_drive_backup_service.dart';
+import '../../core/archive/notion_sync_service.dart';
+import '../../core/archive/yuque_sync_service.dart';
+import '../../core/archive/siyuan_sync_service.dart';
 import '../../shared/providers/channel_provider.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/conversation_archive_provider.dart';
@@ -204,12 +227,20 @@ class SettingsPage extends ConsumerWidget {
           _buildSearchIndexTile(context, ref),
           _buildDreamingTile(context, ref),
           _buildOpenAiRelayTile(context, ref),
+          _buildWebDavBackupTile(context, ref),
+          _buildS3BackupTile(context, ref),
+          _buildOneDriveBackupTile(context, ref),
+          _buildNotionSyncTile(context, ref),
+          _buildYuqueSyncTile(context, ref),
+          _buildSiyuanSyncTile(context, ref),
 
           const Divider(),
 
           // 记忆与画像
           _buildSectionHeader(context, '记忆与画像'),
           _buildUserProfileTile(context, ref),
+          _buildDigitalTwinTile(context, ref),
+          _buildLiveStreamTile(context, ref),
           _buildReflectionTile(context, ref),
 
           const Divider(),
@@ -218,6 +249,12 @@ class SettingsPage extends ConsumerWidget {
           _buildSectionHeader(context, '语音与多模态'),
           _buildVoiceInputTile(context, ref),
           _buildTextToSpeechTile(context, ref),
+
+          const Divider(),
+
+          // 图片生成
+          _buildSectionHeader(context, '图片生成'),
+          _buildImageGenerationTile(context, ref),
 
           const Divider(),
 
@@ -239,9 +276,19 @@ class SettingsPage extends ConsumerWidget {
 
           const Divider(),
 
+          // 社交通道
+          _buildSectionHeader(context, '社交通道'),
+          _buildTelegramBotTile(context, ref),
+          _buildDiscordBotTile(context, ref),
+          _buildFeishuBotTile(context, ref),
+          _buildWebhookChannelTile(context, ref),
+
+          const Divider(),
+
           // 关于
           _buildSectionHeader(context, '关于'),
           const ListTile(title: Text('版本'), subtitle: Text('1.0.0')),
+          _buildCreditsTile(context, ref),
         ],
       ),
     );
@@ -500,6 +547,7 @@ class SettingsPage extends ConsumerWidget {
       data: (channels) {
         return Column(
           children: [
+            _buildDwChainlessCard(context, ref, channels),
             for (final channel in channels)
               _buildChannelTile(context, ref, channel),
             Padding(
@@ -525,6 +573,1828 @@ class SettingsPage extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  /// 找到已接入 DW Chainless 中转站的渠道（按 Base URL 域名匹配）。
+  ModelChannel? _findDwChainlessChannel(List<ModelChannel> channels) {
+    for (final channel in channels) {
+      if (channel.baseUrl.toLowerCase().contains('api.dwchainless.com')) {
+        return channel;
+      }
+    }
+    return null;
+  }
+
+  /// 打开外部链接；失败时回退为复制链接到剪贴板，避免用户丢失目标地址。
+  Future<void> _openExternalUrl(
+    BuildContext context,
+    WidgetRef ref,
+    String url,
+  ) async {
+    final opened = await ref.read(externalUrlOpenerProvider).open(url);
+    if (!context.mounted) return;
+    if (opened) return;
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text('无法打开链接，已复制到剪贴板：$url')));
+  }
+
+  /// DW Chainless 中转站推广卡片：展示接入状态、无 Key 注册引导和一键接入。
+  Widget _buildDwChainlessCard(
+    BuildContext context,
+    WidgetRef ref,
+    List<ModelChannel> channels,
+  ) {
+    final preset = findModelProviderPreset('dwchainless');
+    final channel = _findDwChainlessChannel(channels);
+    final hasKey = channel != null && channel.apiKeyEncrypted.isNotEmpty;
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            scheme.primaryContainer.withValues(alpha: 0.55),
+            scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: scheme.primary,
+                child: Icon(Icons.hub, size: 20, color: scheme.onPrimary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'DW Chainless 中转站',
+                      style: textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      '一个 API Key 接入聚合主流模型',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                channel == null
+                    ? Icons.bolt_outlined
+                    : hasKey
+                    ? Icons.check_circle
+                    : Icons.error_outline,
+                color: channel == null
+                    ? scheme.primary
+                    : hasKey
+                    ? Colors.green[700]
+                    : scheme.error,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            channel == null
+                ? '尚未接入：先去注册获取 API Key，再点“一键接入”即可开始使用。'
+                : hasKey
+                ? '已接入「${channel.name}」，可直接添加模型或自动获取模型列表。'
+                : '已添加「${channel.name}」但尚未填写 API Key，请补充后使用。',
+            style: textTheme.bodySmall?.copyWith(color: scheme.onSurface),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (!hasKey)
+                FilledButton.icon(
+                  icon: const Icon(Icons.person_add_alt_1, size: 18),
+                  label: const Text('去注册获取 Key'),
+                  onPressed: () {
+                    final signUpUrl =
+                        preset?.signUpUrl ??
+                        'https://api.dwchainless.com/sign-up';
+                    _openExternalUrl(context, ref, signUpUrl);
+                  },
+                ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.add_link, size: 18),
+                label: const Text('一键接入'),
+                onPressed: () => _showChannelEditDialog(
+                  context,
+                  ref,
+                  initialPresetId: preset?.id,
+                ),
+              ),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('访问官网'),
+                onPressed: () => _openExternalUrl(
+                  context,
+                  ref,
+                  preset?.docsUrl ?? 'https://api.dwchainless.com/',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ====== 社交通道 / Telegram Bot ======
+
+  Widget _buildTelegramBotTile(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(telegramBotProvider);
+    final subtitle = state.running
+        ? '运行中${state.botUsername != null ? ' · @${state.botUsername}' : ''}'
+        : state.lastError != null
+        ? '上次错误：${state.lastError}'
+        : '未启动 · 配置 Bot Token 后可在 Telegram 中与 AI 对话';
+    return ListTile(
+      leading: Icon(
+        state.running ? Icons.smart_toy : Icons.smart_toy_outlined,
+        color: state.running ? Colors.green[700] : null,
+      ),
+      title: const Text('Telegram Bot'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showTelegramBotDialog(context, ref),
+    );
+  }
+
+  void _showTelegramBotDialog(BuildContext context, WidgetRef ref) {
+    final state = ref.read(telegramBotProvider);
+    final tokenCtrl = TextEditingController();
+    var busy = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Telegram Bot 社交通道'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: tokenCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Bot Token',
+                    hintText: '123456:ABC...',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '在 @BotFather 创建 Bot 后填入 Token。启动后 Bot 会通过长轮询接收消息，用当前默认聊天模型回复。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (state.lastError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '上次错误：${state.lastError}',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await ref
+                    .read(telegramBotProvider.notifier)
+                    .saveToken(tokenCtrl.text);
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存 Token'),
+            ),
+            if (!state.running)
+              FilledButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        final token = tokenCtrl.text.trim();
+                        if (token.isNotEmpty) {
+                          await ref
+                              .read(telegramBotProvider.notifier)
+                              .saveToken(token);
+                        }
+                        final error = await ref
+                            .read(telegramBotProvider.notifier)
+                            .start();
+                        if (!ctx.mounted) return;
+                        setDialogState(() => busy = false);
+                        if (error != null) {
+                          ScaffoldMessenger.of(ctx)
+                            ..clearSnackBars()
+                            ..showSnackBar(SnackBar(content: Text(error)));
+                        } else {
+                          Navigator.of(ctx).pop();
+                        }
+                      },
+                child: const Text('启动 Bot'),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  await ref.read(telegramBotProvider.notifier).stop();
+                  if (!ctx.mounted) return;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('停止 Bot'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ====== S3 云备份 ======
+
+  Widget _buildS3BackupTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(s3BackupSettingsProvider);
+    final subtitle = settings.isConfigured
+        ? '已配置 ${settings.endpoint} / ${settings.bucket}'
+        : '未配置 · 导出包加密上传到 S3 兼容存储';
+    return ListTile(
+      leading: Icon(
+        settings.isConfigured
+            ? Icons.cloud_done_outlined
+            : Icons.cloud_outlined,
+        color: settings.isConfigured ? Colors.orange[700] : null,
+      ),
+      title: const Text('S3 云备份'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showS3BackupDialog(context, ref),
+    );
+  }
+
+  void _showS3BackupDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(s3BackupSettingsProvider);
+    final endpointCtrl = TextEditingController(text: current.endpoint);
+    final regionCtrl = TextEditingController(text: current.region);
+    final accessCtrl = TextEditingController(text: current.accessKey);
+    final secretCtrl = TextEditingController(text: current.secretKey);
+    final bucketCtrl = TextEditingController(text: current.bucket);
+    var busy = false;
+
+    S3BackupConfig s3Config(String passphrase) => S3BackupConfig(
+      endpoint: endpointCtrl.text,
+      region: regionCtrl.text,
+      accessKey: accessCtrl.text,
+      secretKey: secretCtrl.text,
+      bucket: bucketCtrl.text,
+      passphrase: passphrase,
+    );
+
+    Future<void> backupNow(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持 S3 备份');
+        return;
+      }
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final result = await DataExportService(
+          rootDirectory: root,
+          listAttachments: () async {
+            final rows = await ref
+                .read(attachmentDaoProvider)
+                .getAllAttachments();
+            return rows
+                .map(
+                  (row) => ExportableAttachment(
+                    id: row.id,
+                    messageId: row.messageId,
+                    fileType: row.fileType,
+                    localPath: row.localPath,
+                    fileName: row.fileName,
+                    fileSize: row.fileSize,
+                  ),
+                )
+                .toList(growable: false);
+          },
+          exportLocalDatabase: ({required includeAudioFiles}) {
+            return LocalDatabaseSnapshotService(
+              database: ref.read(databaseProvider),
+              rootDirectory: root,
+            ).exportSnapshot(includeAudioFiles: includeAudioFiles);
+          },
+        ).exportLocalData(includeAudioFiles: true);
+
+        await const S3BackupService().uploadBackup(
+          exportFile: result.file,
+          config: s3Config(passphrase),
+        );
+        if (!context.mounted) return;
+        _showArchiveSnack(
+          context,
+          'S3 备份已上传：${result.file.uri.pathSegments.last}',
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, 'S3 备份失败：$e');
+      }
+    }
+
+    Future<void> restoreFromS3(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持 S3 恢复');
+        return;
+      }
+      try {
+        final service = const S3BackupService();
+        final entries = await service.listBackups(s3Config(passphrase));
+        if (!context.mounted) return;
+        if (entries.isEmpty) {
+          _showArchiveSnack(context, '远端没有可恢复的备份');
+          return;
+        }
+        final choice = await showDialog<String>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('选择要恢复的备份'),
+            children: [
+              for (final entry in entries)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(entry.key),
+                  child: Text(
+                    '${entry.key} · ${(entry.size / 1024).toStringAsFixed(1)} KB',
+                  ),
+                ),
+            ],
+          ),
+        );
+        if (choice == null || !context.mounted) return;
+
+        final root = await getApplicationDocumentsDirectory();
+        final tmp = Directory(
+          p.join((await getTemporaryDirectory()).path, 's3_restore'),
+        );
+        final downloaded = await service.downloadBackup(
+          key: choice,
+          config: s3Config(passphrase),
+          downloadDirectory: tmp,
+        );
+        final importResult = await DataImportService(
+          rootDirectory: root,
+          localDatabaseSnapshotService: LocalDatabaseSnapshotService(
+            database: ref.read(databaseProvider),
+            rootDirectory: root,
+          ),
+        ).importExport(downloaded, overwriteExisting: false);
+        if (!context.mounted) return;
+        _showArchiveSnack(context, '已恢复：${importResult.summary}');
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, 'S3 恢复失败：$e');
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('S3 云备份'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: endpointCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'S3 端点',
+                    hintText:
+                        'https://s3.us-east-1.amazonaws.com 或 MinIO/R2/COS',
+                  ),
+                ),
+                TextField(
+                  controller: regionCtrl,
+                  decoration: const InputDecoration(labelText: 'Region'),
+                ),
+                TextField(
+                  controller: accessCtrl,
+                  decoration: const InputDecoration(labelText: 'Access Key'),
+                ),
+                TextField(
+                  controller: secretCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Secret Key'),
+                ),
+                TextField(
+                  controller: bucketCtrl,
+                  decoration: const InputDecoration(labelText: '存储桶'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '备份口令用于端到端加密，不会保存在本机；每次备份 / 恢复都需要输入，请务必牢记。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                ref
+                    .read(s3BackupSettingsProvider.notifier)
+                    .save(
+                      S3BackupSettings(
+                        endpoint: endpointCtrl.text,
+                        region: regionCtrl.text,
+                        accessKey: accessCtrl.text,
+                        secretKey: secretCtrl.text,
+                        bucket: bucketCtrl.text,
+                      ),
+                    );
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final pass = await _askBackupPassphrase(ctx);
+                      if (pass == null || !ctx.mounted) return;
+                      setDialogState(() => busy = true);
+                      await backupNow(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => busy = false);
+                    },
+              child: const Text('立即备份'),
+            ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final pass = await _askBackupPassphrase(ctx);
+                      if (pass == null || !ctx.mounted) return;
+                      setDialogState(() => busy = true);
+                      await restoreFromS3(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => busy = false);
+                    },
+              child: const Text('从云端恢复'),
+            ),
+            if (current.isConfigured)
+              TextButton(
+                onPressed: () {
+                  ref.read(s3BackupSettingsProvider.notifier).clear();
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('清除配置'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _askBackupPassphrase(BuildContext ctx) async {
+    final passCtrl = TextEditingController();
+    return showDialog<String>(
+      context: ctx,
+      builder: (pctx) => AlertDialog(
+        title: const Text('输入备份口令'),
+        content: TextField(
+          controller: passCtrl,
+          obscureText: true,
+          decoration: const InputDecoration(hintText: '至少 8 位'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(pctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(pctx).pop(passCtrl.text.trim()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ====== OneDrive 云盘备份 ======
+
+  Widget _buildOneDriveBackupTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(oneDriveBackupSettingsProvider);
+    return ListTile(
+      leading: Icon(
+        settings.isConfigured
+            ? Icons.cloud_done_outlined
+            : Icons.cloud_outlined,
+        color: settings.isConfigured ? Colors.blue[700] : null,
+      ),
+      title: const Text('OneDrive 云盘备份'),
+      subtitle: Text(
+        settings.isConfigured
+            ? '已配置 · ${settings.folder}'
+            : '未配置 · 导出包加密上传到 OneDrive',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showOneDriveBackupDialog(context, ref),
+    );
+  }
+
+  void _showOneDriveBackupDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(oneDriveBackupSettingsProvider);
+    final tokenCtrl = TextEditingController(text: current.accessToken);
+    final folderCtrl = TextEditingController(text: current.folder);
+    var busy = false;
+
+    OneDriveBackupConfig odConfig(String passphrase) => OneDriveBackupConfig(
+      accessToken: tokenCtrl.text,
+      folder: folderCtrl.text,
+      passphrase: passphrase,
+    );
+
+    Future<void> backupNow(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持 OneDrive 备份');
+        return;
+      }
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final result = await DataExportService(
+          rootDirectory: root,
+          listAttachments: () async {
+            final rows = await ref
+                .read(attachmentDaoProvider)
+                .getAllAttachments();
+            return rows
+                .map(
+                  (row) => ExportableAttachment(
+                    id: row.id,
+                    messageId: row.messageId,
+                    fileType: row.fileType,
+                    localPath: row.localPath,
+                    fileName: row.fileName,
+                    fileSize: row.fileSize,
+                  ),
+                )
+                .toList(growable: false);
+          },
+          exportLocalDatabase: ({required includeAudioFiles}) {
+            return LocalDatabaseSnapshotService(
+              database: ref.read(databaseProvider),
+              rootDirectory: root,
+            ).exportSnapshot(includeAudioFiles: includeAudioFiles);
+          },
+        ).exportLocalData(includeAudioFiles: true);
+
+        await OneDriveBackupService().uploadBackup(
+          exportFile: result.file,
+          config: odConfig(passphrase),
+        );
+        if (!context.mounted) return;
+        _showArchiveSnack(
+          context,
+          'OneDrive 备份已上传：${result.file.uri.pathSegments.last}',
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, 'OneDrive 备份失败：$e');
+      }
+    }
+
+    Future<void> restoreFromOneDrive(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持 OneDrive 恢复');
+        return;
+      }
+      try {
+        final service = OneDriveBackupService();
+        final entries = await service.listBackups(odConfig(passphrase));
+        if (!context.mounted) return;
+        if (entries.isEmpty) {
+          _showArchiveSnack(context, '远端没有可恢复的备份');
+          return;
+        }
+        final choice = await showDialog<String>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('选择要恢复的备份'),
+            children: [
+              for (final entry in entries)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(entry.name),
+                  child: Text(
+                    '${entry.name} · ${(entry.size / 1024).toStringAsFixed(1)} KB',
+                  ),
+                ),
+            ],
+          ),
+        );
+        if (choice == null || !context.mounted) return;
+
+        final root = await getApplicationDocumentsDirectory();
+        final tmp = Directory(
+          p.join((await getTemporaryDirectory()).path, 'onedrive_restore'),
+        );
+        final downloaded = await service.downloadBackup(
+          name: choice,
+          config: odConfig(passphrase),
+          downloadDirectory: tmp,
+        );
+        final importResult = await DataImportService(
+          rootDirectory: root,
+          localDatabaseSnapshotService: LocalDatabaseSnapshotService(
+            database: ref.read(databaseProvider),
+            rootDirectory: root,
+          ),
+        ).importExport(downloaded, overwriteExisting: false);
+        if (!context.mounted) return;
+        _showArchiveSnack(context, '已恢复：${importResult.summary}');
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, 'OneDrive 恢复失败：$e');
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('OneDrive 云盘备份'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: tokenCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Graph Access Token',
+                    hintText: '需在应用内 OAuth 或另行获取',
+                  ),
+                ),
+                TextField(
+                  controller: folderCtrl,
+                  decoration: const InputDecoration(labelText: '备份目录'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '备份口令用于端到端加密，不会保存在本机；每次备份 / 恢复都需要输入，请务必牢记。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                ref
+                    .read(oneDriveBackupSettingsProvider.notifier)
+                    .save(
+                      OneDriveBackupSettings(
+                        accessToken: tokenCtrl.text,
+                        folder: folderCtrl.text,
+                      ),
+                    );
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final pass = await _askBackupPassphrase(ctx);
+                      if (pass == null || !ctx.mounted) return;
+                      setDialogState(() => busy = true);
+                      await backupNow(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => busy = false);
+                    },
+              child: const Text('立即备份'),
+            ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final pass = await _askBackupPassphrase(ctx);
+                      if (pass == null || !ctx.mounted) return;
+                      setDialogState(() => busy = true);
+                      await restoreFromOneDrive(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => busy = false);
+                    },
+              child: const Text('从云端恢复'),
+            ),
+            if (current.isConfigured)
+              TextButton(
+                onPressed: () {
+                  ref.read(oneDriveBackupSettingsProvider.notifier).clear();
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('清除配置'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ====== Notion 同步 ======
+
+  Widget _buildNotionSyncTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(notionSyncSettingsProvider);
+    final subtitle = settings.isConfigured
+        ? '已配置 · 可导出会话到 Notion'
+        : '未配置 · 同步会话到 Notion 页面';
+    return ListTile(
+      leading: Icon(
+        settings.isConfigured ? Icons.article_outlined : Icons.article,
+        color: settings.isConfigured ? Colors.blue[700] : null,
+      ),
+      title: const Text('Notion 同步'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showNotionSyncDialog(context, ref),
+    );
+  }
+
+  void _showNotionSyncDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(notionSyncSettingsProvider);
+    final tokenCtrl = TextEditingController(text: current.token);
+    final parentCtrl = TextEditingController(text: current.parentPageId);
+    var busy = false;
+
+    Future<void> exportAllToNotion() async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持 Notion 同步');
+        return;
+      }
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final archive = MarkdownConversationArchive(rootDirectory: root);
+        final sessions = await ref.read(sessionDaoProvider).getAllSessions();
+        final service = const NotionSyncService();
+        var exported = 0;
+        for (final session in sessions) {
+          final file = archive.conversationFile(session.id);
+          if (!await file.exists()) continue;
+          final content = await file.readAsString();
+          if (content.trim().isEmpty) continue;
+          await service.exportConversation(
+            token: tokenCtrl.text,
+            parentPageId: parentCtrl.text,
+            title: session.title ?? 'SimiChat 会话',
+            markdownContent: content,
+          );
+          exported++;
+        }
+        if (!context.mounted) return;
+        _showArchiveSnack(
+          context,
+          exported == 0 ? '没有可导出的会话' : '已导出 $exported 个会话到 Notion',
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, 'Notion 同步失败：$e');
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Notion 同步'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: tokenCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Integration Token',
+                    hintText: 'ntn_...',
+                  ),
+                ),
+                TextField(
+                  controller: parentCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '父页面 ID 或 URL',
+                    hintText:
+                        'https://www.notion.so/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '在 Notion 集成页面创建 Integration 并连接目标页面后，把 Token 和父页面 ID 填到这里，即可把会话 Markdown 导出为 Notion 子页面。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                ref
+                    .read(notionSyncSettingsProvider.notifier)
+                    .save(
+                      NotionSyncSettings(
+                        token: tokenCtrl.text,
+                        parentPageId: parentCtrl.text,
+                      ),
+                    );
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDialogState(() => busy = true);
+                      await exportAllToNotion();
+                      if (!ctx.mounted) return;
+                      setDialogState(() => busy = false);
+                    },
+              child: const Text('导出全部会话'),
+            ),
+            if (current.isConfigured)
+              TextButton(
+                onPressed: () {
+                  ref.read(notionSyncSettingsProvider.notifier).clear();
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('清除配置'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ====== 语雀 / 思源同步 ======
+
+  /// 读取全部会话 Markdown 并调用 [exportOne]，返回成功导出数。
+  Future<int> _exportAllSessionsToNoteSync(
+    WidgetRef ref, {
+    required Future<void> Function(String title, String markdown) exportOne,
+  }) async {
+    final root = await getApplicationDocumentsDirectory();
+    final archive = MarkdownConversationArchive(rootDirectory: root);
+    final sessions = await ref.read(sessionDaoProvider).getAllSessions();
+    var exported = 0;
+    for (final session in sessions) {
+      final file = archive.conversationFile(session.id);
+      if (!await file.exists()) continue;
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) continue;
+      await exportOne(session.title ?? 'SimiChat 会话', content);
+      exported++;
+    }
+    return exported;
+  }
+
+  Widget _buildYuqueSyncTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(yuqueSyncProvider);
+    return ListTile(
+      leading: const Icon(Icons.book_outlined),
+      title: const Text('语雀同步'),
+      subtitle: Text(
+        settings.isConfigured ? '已配置 · ${settings.namespace}' : '未配置 · 同步会话到语雀',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showYuqueSyncDialog(context, ref),
+    );
+  }
+
+  void _showYuqueSyncDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(yuqueSyncProvider);
+    final tokenCtrl = TextEditingController(text: current.token);
+    final namespaceCtrl = TextEditingController(text: current.namespace);
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('语雀同步'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: tokenCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '语雀 Token',
+                  hintText: '个人令牌',
+                ),
+              ),
+              TextField(
+                controller: namespaceCtrl,
+                decoration: const InputDecoration(
+                  labelText: '仓库 namespace',
+                  hintText: 'login/repo',
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '在语雀「设置 → Token」创建令牌，并把仓库 namespace（如 username/repo）填入这里，即可把会话 Markdown 导出为语雀文档。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              ref
+                  .read(yuqueSyncProvider.notifier)
+                  .save(
+                    YuqueSyncSettings(
+                      token: tokenCtrl.text,
+                      namespace: namespaceCtrl.text,
+                    ),
+                  );
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('保存配置'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              try {
+                final exported = await _exportAllSessionsToNoteSync(
+                  ref,
+                  exportOne: (title, markdown) =>
+                      const YuqueSyncService().exportConversation(
+                        token: tokenCtrl.text,
+                        namespace: namespaceCtrl.text,
+                        title: title,
+                        markdownContent: markdown,
+                      ),
+                );
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx)
+                  ..clearSnackBars()
+                  ..showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        exported == 0 ? '没有可导出的会话' : '已导出 $exported 个会话到语雀',
+                      ),
+                    ),
+                  );
+              } catch (e) {
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx)
+                  ..clearSnackBars()
+                  ..showSnackBar(SnackBar(content: Text('语雀同步失败：$e')));
+              }
+            },
+            child: const Text('导出全部会话'),
+          ),
+          if (current.isConfigured)
+            TextButton(
+              onPressed: () {
+                ref.read(yuqueSyncProvider.notifier).clear();
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('清除配置'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSiyuanSyncTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(siyuanSyncProvider);
+    return ListTile(
+      leading: const Icon(Icons.edit_note),
+      title: const Text('思源同步'),
+      subtitle: Text(
+        settings.isConfigured ? '已配置 · ${settings.baseUrl}' : '未配置 · 同步会话到思源笔记',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showSiyuanSyncDialog(context, ref),
+    );
+  }
+
+  void _showSiyuanSyncDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(siyuanSyncProvider);
+    final baseUrlCtrl = TextEditingController(text: current.baseUrl);
+    final tokenCtrl = TextEditingController(text: current.token);
+    final notebookCtrl = TextEditingController(text: current.notebook);
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('思源同步'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: baseUrlCtrl,
+                decoration: const InputDecoration(
+                  labelText: '思源 API 地址',
+                  hintText: 'http://127.0.0.1:6806',
+                ),
+              ),
+              TextField(
+                controller: tokenCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'API Token'),
+              ),
+              TextField(
+                controller: notebookCtrl,
+                decoration: const InputDecoration(labelText: '笔记本 ID'),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '在思源「设置 → 关于 → API Token」获取令牌，填入笔记本 ID，即可把会话 Markdown 创建为思源文档。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              ref
+                  .read(siyuanSyncProvider.notifier)
+                  .save(
+                    SiyuanSyncSettings(
+                      baseUrl: baseUrlCtrl.text,
+                      token: tokenCtrl.text,
+                      notebook: notebookCtrl.text,
+                    ),
+                  );
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('保存配置'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              try {
+                final exported = await _exportAllSessionsToNoteSync(
+                  ref,
+                  exportOne: (title, markdown) =>
+                      SiyuanSyncService(
+                        apiBaseUrl: baseUrlCtrl.text,
+                      ).exportConversation(
+                        token: tokenCtrl.text,
+                        notebook: notebookCtrl.text,
+                        title: title,
+                        markdownContent: markdown,
+                      ),
+                );
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx)
+                  ..clearSnackBars()
+                  ..showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        exported == 0 ? '没有可导出的会话' : '已导出 $exported 个会话到思源',
+                      ),
+                    ),
+                  );
+              } catch (e) {
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx)
+                  ..clearSnackBars()
+                  ..showSnackBar(SnackBar(content: Text('思源同步失败：$e')));
+              }
+            },
+            child: const Text('导出全部会话'),
+          ),
+          if (current.isConfigured)
+            TextButton(
+              onPressed: () {
+                ref.read(siyuanSyncProvider.notifier).clear();
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('清除配置'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDiscordBotTile(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(discordBotProvider);
+    final subtitle = state.running
+        ? '运行中${state.botUsername != null ? ' · ${state.botUsername}' : ''}'
+        : state.lastError != null
+        ? '上次错误：${state.lastError}'
+        : '未启动 · 配置 Bot Token 后可在 Discord 中与 AI 对话';
+    return ListTile(
+      leading: Icon(
+        state.running ? Icons.chat_bubble : Icons.chat_bubble_outline,
+        color: state.running ? Colors.indigo[700] : null,
+      ),
+      title: const Text('Discord Bot'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showDiscordBotDialog(context, ref),
+    );
+  }
+
+  void _showDiscordBotDialog(BuildContext context, WidgetRef ref) {
+    final state = ref.read(discordBotProvider);
+    final tokenCtrl = TextEditingController();
+    var busy = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Discord Bot 社交通道'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: tokenCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Bot Token',
+                    hintText: 'Bot token from Discord Developer Portal',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '在 Discord Developer Portal 创建应用并添加 Bot 后填入 Token。启动后 Bot 通过 Gateway 接收消息，用当前默认聊天模型回复。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (state.lastError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '上次错误：${state.lastError}',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await ref
+                    .read(discordBotProvider.notifier)
+                    .saveToken(tokenCtrl.text);
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存 Token'),
+            ),
+            if (!state.running)
+              FilledButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        final token = tokenCtrl.text.trim();
+                        if (token.isNotEmpty) {
+                          await ref
+                              .read(discordBotProvider.notifier)
+                              .saveToken(token);
+                        }
+                        final error = await ref
+                            .read(discordBotProvider.notifier)
+                            .start();
+                        if (!ctx.mounted) return;
+                        setDialogState(() => busy = false);
+                        if (error != null) {
+                          ScaffoldMessenger.of(ctx)
+                            ..clearSnackBars()
+                            ..showSnackBar(SnackBar(content: Text(error)));
+                        } else {
+                          Navigator.of(ctx).pop();
+                        }
+                      },
+                child: const Text('启动 Bot'),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  await ref.read(discordBotProvider.notifier).stop();
+                  if (!ctx.mounted) return;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('停止 Bot'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeishuBotTile(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(feishuBotProvider);
+    final subtitle = state.running
+        ? '运行中 · 回调地址 ${state.webhookBase}/feishu/webhook'
+        : state.lastError != null
+        ? '上次错误：${state.lastError}'
+        : '未启动 · 配置 App ID / Secret 后接收飞书消息';
+    return ListTile(
+      leading: Icon(
+        state.running ? Icons.forward_to_inbox : Icons.outbox_outlined,
+        color: state.running ? Colors.teal[700] : null,
+      ),
+      title: const Text('飞书 Bot'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showFeishuBotDialog(context, ref),
+    );
+  }
+
+  void _showFeishuBotDialog(BuildContext context, WidgetRef ref) {
+    final state = ref.read(feishuBotProvider);
+    final appIdCtrl = TextEditingController();
+    final secretCtrl = TextEditingController();
+    var busy = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('飞书 Bot 社交通道'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: appIdCtrl,
+                  decoration: const InputDecoration(labelText: 'App ID'),
+                ),
+                TextField(
+                  controller: secretCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'App Secret'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '在飞书开放平台创建企业自建应用并启用「机器人」后，填入 App ID / Secret。启动后应用在本机开一个 webhook 收件箱，请把事件回调 URL 配置为下方地址的公网隧道，即可在飞书中与 AI 对话。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (state.running)
+                  Text(
+                    '回调地址：${state.webhookBase}/feishu/webhook',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(ctx).colorScheme.primary,
+                    ),
+                  ),
+                if (state.lastError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '上次错误：${state.lastError}',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await ref
+                    .read(feishuBotProvider.notifier)
+                    .saveCredentials(appIdCtrl.text, secretCtrl.text);
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            if (!state.running)
+              FilledButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        if (appIdCtrl.text.trim().isNotEmpty ||
+                            secretCtrl.text.trim().isNotEmpty) {
+                          await ref
+                              .read(feishuBotProvider.notifier)
+                              .saveCredentials(appIdCtrl.text, secretCtrl.text);
+                        }
+                        final error = await ref
+                            .read(feishuBotProvider.notifier)
+                            .start();
+                        if (!ctx.mounted) return;
+                        setDialogState(() => busy = false);
+                        if (error != null) {
+                          ScaffoldMessenger.of(ctx)
+                            ..clearSnackBars()
+                            ..showSnackBar(SnackBar(content: Text(error)));
+                        } else {
+                          Navigator.of(ctx).pop();
+                        }
+                      },
+                child: const Text('启动 Bot'),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  await ref.read(feishuBotProvider.notifier).stop();
+                  if (!ctx.mounted) return;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('停止 Bot'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWebhookChannelTile(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(webhookBotProvider);
+    final label = state.kind?.label ?? '未选择';
+    final subtitle = state.running
+        ? '运行中 · $label · 回调 ${state.webhookBase}/webhook'
+        : state.lastError != null
+        ? '上次错误：${state.lastError}'
+        : 'WhatsApp / Slack / 微信公众号 / QQ 一键接入';
+    return ListTile(
+      leading: Icon(
+        state.running ? Icons.hub : Icons.hub_outlined,
+        color: state.running ? Colors.purple[700] : null,
+      ),
+      title: const Text('Webhook 社交通道'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showWebhookChannelDialog(context, ref),
+    );
+  }
+
+  void _showWebhookChannelDialog(BuildContext context, WidgetRef ref) {
+    final state = ref.read(webhookBotProvider);
+    final config = ref.read(webhookBotProvider.notifier);
+    var kind = WebhookChannelKind.whatsapp;
+    final tokenCtrl = TextEditingController();
+    final secondaryCtrl = TextEditingController();
+    var busy = false;
+
+    Future<void> runStart(StateSetter setDialogState) async {
+      setDialogState(() => busy = true);
+      await config.saveConfig(
+        WebhookChannelConfig(
+          kind: kind,
+          token: tokenCtrl.text,
+          secondary: secondaryCtrl.text,
+        ),
+      );
+      final error = await config.start();
+      if (!context.mounted) return;
+      setDialogState(() => busy = false);
+      if (error != null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text(error)));
+      } else {
+        Navigator.of(context).pop();
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Webhook 社交通道'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<WebhookChannelKind>(
+                  initialValue: kind,
+                  decoration: const InputDecoration(labelText: '平台'),
+                  items: [
+                    for (final k in WebhookChannelKind.values)
+                      DropdownMenuItem(value: k, child: Text(k.label)),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) kind = v;
+                  },
+                ),
+                TextField(
+                  controller: tokenCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: kind == WebhookChannelKind.wechatMp
+                        ? 'AppID'
+                        : kind == WebhookChannelKind.whatsapp
+                        ? 'Access Token'
+                        : 'Bot Token',
+                  ),
+                ),
+                if (kind == WebhookChannelKind.wechatMp ||
+                    kind == WebhookChannelKind.whatsapp)
+                  TextField(
+                    controller: secondaryCtrl,
+                    obscureText: kind == WebhookChannelKind.wechatMp,
+                    decoration: InputDecoration(
+                      labelText: kind == WebhookChannelKind.wechatMp
+                          ? 'AppSecret'
+                          : 'Phone Number ID',
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                const Text(
+                  '在对应开放平台创建应用并启用 Bot 后填入凭据。启动后应用在本机开 webhook 收件箱，请把平台事件回调 URL 配置为该地址的公网隧道。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (state.running)
+                  Text(
+                    '回调地址：${state.webhookBase}/webhook',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(ctx).colorScheme.primary,
+                    ),
+                  ),
+                if (state.lastError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '上次错误：${state.lastError}',
+                    style: const TextStyle(fontSize: 12, color: Colors.red),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await config.saveConfig(
+                  WebhookChannelConfig(
+                    kind: kind,
+                    token: tokenCtrl.text,
+                    secondary: secondaryCtrl.text,
+                  ),
+                );
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            if (!state.running)
+              FilledButton(
+                onPressed: busy ? null : () => runStart(setState),
+                child: const Text('启动 Bot'),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  await config.stop();
+                  if (!ctx.mounted) return;
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('停止 Bot'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ====== WebDAV 云备份 ======
+
+  Widget _buildWebDavBackupTile(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(webDavBackupSettingsProvider);
+    final subtitle = settings.isConfigured
+        ? '已配置 ${settings.baseUrl}'
+        : '未配置 · 导出包加密上传到 WebDAV 并可恢复';
+    return ListTile(
+      leading: Icon(
+        settings.isConfigured
+            ? Icons.cloud_done_outlined
+            : Icons.cloud_outlined,
+        color: settings.isConfigured ? Colors.green[700] : null,
+      ),
+      title: const Text('云备份 (WebDAV)'),
+      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showWebDavBackupDialog(context, ref),
+    );
+  }
+
+  void _showWebDavBackupDialog(BuildContext context, WidgetRef ref) {
+    final current = ref.read(webDavBackupSettingsProvider);
+    final baseUrlCtrl = TextEditingController(text: current.baseUrl);
+    final usernameCtrl = TextEditingController(text: current.username);
+    final passwordCtrl = TextEditingController(text: current.password);
+    var isBusy = false;
+
+    Future<void> backupNow(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持云备份');
+        return;
+      }
+      try {
+        final root = await getApplicationDocumentsDirectory();
+        final result = await DataExportService(
+          rootDirectory: root,
+          listAttachments: () async {
+            final rows = await ref
+                .read(attachmentDaoProvider)
+                .getAllAttachments();
+            return rows
+                .map(
+                  (row) => ExportableAttachment(
+                    id: row.id,
+                    messageId: row.messageId,
+                    fileType: row.fileType,
+                    localPath: row.localPath,
+                    fileName: row.fileName,
+                    fileSize: row.fileSize,
+                  ),
+                )
+                .toList(growable: false);
+          },
+          exportLocalDatabase: ({required includeAudioFiles}) {
+            return LocalDatabaseSnapshotService(
+              database: ref.read(databaseProvider),
+              rootDirectory: root,
+            ).exportSnapshot(includeAudioFiles: includeAudioFiles);
+          },
+        ).exportLocalData(includeAudioFiles: true);
+
+        await const WebDavBackupService().uploadBackup(
+          exportFile: result.file,
+          config: WebDavBackupConfig(
+            baseUrl: baseUrlCtrl.text,
+            username: usernameCtrl.text,
+            password: passwordCtrl.text,
+            passphrase: passphrase,
+          ),
+        );
+        if (!context.mounted) return;
+        _showArchiveSnack(
+          context,
+          '云备份已上传：${result.file.uri.pathSegments.last}',
+        );
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, '云备份失败：$e');
+      }
+    }
+
+    Future<void> restoreFromServer(String passphrase) async {
+      if (kIsWeb) {
+        _showArchiveSnack(context, '当前平台暂不支持云恢复');
+        return;
+      }
+      try {
+        final service = const WebDavBackupService();
+        final entries = await service.listBackups(
+          WebDavBackupConfig(
+            baseUrl: baseUrlCtrl.text,
+            username: usernameCtrl.text,
+            password: passwordCtrl.text,
+            passphrase: passphrase,
+          ),
+        );
+        if (!context.mounted) return;
+        if (entries.isEmpty) {
+          _showArchiveSnack(context, '远端没有可恢复的备份');
+          return;
+        }
+        final choice = await showDialog<String>(
+          context: context,
+          builder: (ctx) => SimpleDialog(
+            title: const Text('选择要恢复的备份'),
+            children: [
+              for (final entry in entries)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.of(ctx).pop(entry.name),
+                  child: Text(
+                    '${entry.name} · ${(entry.size / 1024).toStringAsFixed(1)} KB',
+                  ),
+                ),
+            ],
+          ),
+        );
+        if (choice == null || !context.mounted) return;
+
+        final root = await getApplicationDocumentsDirectory();
+        final tmp = Directory(
+          p.join((await getTemporaryDirectory()).path, 'webdav_restore'),
+        );
+        final downloaded = await service.downloadBackup(
+          name: choice,
+          config: WebDavBackupConfig(
+            baseUrl: baseUrlCtrl.text,
+            username: usernameCtrl.text,
+            password: passwordCtrl.text,
+            passphrase: passphrase,
+          ),
+          downloadDirectory: tmp,
+        );
+        final importResult = await DataImportService(
+          rootDirectory: root,
+          localDatabaseSnapshotService: LocalDatabaseSnapshotService(
+            database: ref.read(databaseProvider),
+            rootDirectory: root,
+          ),
+        ).importExport(downloaded, overwriteExisting: false);
+        if (!context.mounted) return;
+        _showArchiveSnack(context, '已恢复：${importResult.summary}');
+      } catch (e) {
+        if (!context.mounted) return;
+        _showArchiveSnack(context, '云恢复失败：$e');
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('云备份 (WebDAV)'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: baseUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'WebDAV 地址',
+                    hintText: 'https://dav.example.com/backup/simichat/',
+                  ),
+                ),
+                TextField(
+                  controller: usernameCtrl,
+                  decoration: const InputDecoration(labelText: '用户名'),
+                ),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '密码'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '备份口令用于端到端加密，不会保存在本机；每次备份 / 恢复都需要输入，请务必牢记。',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                ref
+                    .read(webDavBackupSettingsProvider.notifier)
+                    .save(
+                      WebDavBackupSettings(
+                        baseUrl: baseUrlCtrl.text,
+                        username: usernameCtrl.text,
+                        password: passwordCtrl.text,
+                      ),
+                    );
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('保存配置'),
+            ),
+            FilledButton(
+              onPressed: isBusy
+                  ? null
+                  : () async {
+                      final passCtrl = TextEditingController();
+                      final pass = await showDialog<String>(
+                        context: context,
+                        builder: (pctx) => AlertDialog(
+                          title: const Text('输入备份口令'),
+                          content: TextField(
+                            controller: passCtrl,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              hintText: '至少 8 位',
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(pctx).pop(),
+                              child: const Text('取消'),
+                            ),
+                            FilledButton(
+                              onPressed: () =>
+                                  Navigator.of(pctx).pop(passCtrl.text.trim()),
+                              child: const Text('开始备份'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (pass == null || pass.isEmpty || !ctx.mounted) return;
+                      setDialogState(() => isBusy = true);
+                      await backupNow(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => isBusy = false);
+                    },
+              child: const Text('立即备份'),
+            ),
+            TextButton(
+              onPressed: isBusy
+                  ? null
+                  : () async {
+                      final passCtrl = TextEditingController();
+                      final pass = await showDialog<String>(
+                        context: context,
+                        builder: (pctx) => AlertDialog(
+                          title: const Text('输入备份口令'),
+                          content: TextField(
+                            controller: passCtrl,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              hintText: '至少 8 位',
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(pctx).pop(),
+                              child: const Text('取消'),
+                            ),
+                            FilledButton(
+                              onPressed: () =>
+                                  Navigator.of(pctx).pop(passCtrl.text.trim()),
+                              child: const Text('从云端恢复'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (pass == null || pass.isEmpty || !ctx.mounted) return;
+                      setDialogState(() => isBusy = true);
+                      await restoreFromServer(pass);
+                      if (!ctx.mounted) return;
+                      setDialogState(() => isBusy = false);
+                    },
+              child: const Text('从云端恢复'),
+            ),
+            if (current.isConfigured)
+              TextButton(
+                onPressed: () {
+                  ref.read(webDavBackupSettingsProvider.notifier).clear();
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('清除配置'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 关于区：鸣谢为应用提供模型接入能力的中转站。
+  Widget _buildCreditsTile(BuildContext context, WidgetRef ref) {
+    const homeUrl = 'https://api.dwchainless.com/';
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: scheme.primaryContainer,
+        child: Icon(Icons.hub, size: 20, color: scheme.primary),
+      ),
+      title: const Text('鸣谢 · DW Chainless 中转站'),
+      subtitle: const Text(
+        '为本应用提供 OpenAI 兼容模型接入服务\nhttps://api.dwchainless.com/',
+      ),
+      isThreeLine: true,
+      trailing: const Icon(Icons.open_in_new),
+      onTap: () => _openExternalUrl(context, ref, homeUrl),
     );
   }
 
@@ -1520,6 +3390,7 @@ class SettingsPage extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref, {
     ModelChannel? channel,
+    String? initialPresetId,
   }) {
     final nameCtrl = TextEditingController(text: channel?.name ?? '');
     final urlCtrl = TextEditingController(text: channel?.baseUrl ?? '');
@@ -1527,6 +3398,17 @@ class SettingsPage extends ConsumerWidget {
     String protocol = channel?.protocol ?? 'openai_chat';
     String? selectedPresetId;
     bool obscureKey = true;
+
+    // 支持一键接入：预选厂商预设并自动填充名称 / Base URL / 协议。
+    if (channel == null && initialPresetId != null) {
+      final preset = findModelProviderPreset(initialPresetId);
+      if (preset != null) {
+        selectedPresetId = preset.id;
+        nameCtrl.text = preset.name;
+        urlCtrl.text = preset.baseUrl;
+        protocol = preset.protocol;
+      }
+    }
 
     showDialog(
       context: context,
@@ -1607,8 +3489,12 @@ class SettingsPage extends ConsumerWidget {
                       controller: keyCtrl,
                       obscureText: obscureKey,
                       decoration: InputDecoration(
-                        labelText: 'API Key',
-                        hintText: channel != null ? '留空则不修改' : '请输入 API Key',
+                        labelText: modelProtocolRequiresApiKey(protocol)
+                            ? 'API Key'
+                            : 'API Key（可选）',
+                        hintText: modelProtocolRequiresApiKey(protocol)
+                            ? (channel != null ? '留空则不修改' : '请输入 API Key')
+                            : '本地 Ollama 通常留空；仅反向代理鉴权时填写',
                         suffixIcon: IconButton(
                           icon: Icon(
                             obscureKey
@@ -1667,15 +3553,20 @@ class SettingsPage extends ConsumerWidget {
                             final encryptedKey = KeyEncryptor.encrypt(apiKey);
                             final isNew = channel == null;
                             final channelId = channel?.id ?? const Uuid().v4();
+                            final requiresApiKey = modelProtocolRequiresApiKey(
+                              protocol,
+                            );
 
                             if (name.isEmpty ||
                                 baseUrl.isEmpty ||
-                                (isNew && apiKey.isEmpty)) {
+                                (isNew && requiresApiKey && apiKey.isEmpty)) {
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
+                                  SnackBar(
                                     content: Text(
-                                      '请完整填写渠道名称、Base URL 和 API Key',
+                                      requiresApiKey
+                                          ? '请完整填写渠道名称、Base URL 和 API Key'
+                                          : '请完整填写渠道名称和 Base URL',
                                     ),
                                   ),
                                 );
@@ -1877,7 +3768,7 @@ class SettingsPage extends ConsumerWidget {
 
     var loadingDismissed = false;
     try {
-      final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+      final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
       final models = await ModelFetcher.fetchModelInfos(
         protocol: channel.protocol,
         baseUrl: channel.baseUrl,
@@ -1925,7 +3816,13 @@ class SettingsPage extends ConsumerWidget {
 
       // 显示模型选择对话框
       if (context.mounted) {
-        _showFetchResultDialog(context, ref, channel.id, newModels);
+        _showFetchResultDialog(
+          context,
+          ref,
+          channel.id,
+          newModels,
+          preferredModel: channel.protocol == 'ollama' ? 'gemma4' : null,
+        );
       }
     } catch (e) {
       if (!loadingDismissed && context.mounted) Navigator.pop(context);
@@ -1941,9 +3838,13 @@ class SettingsPage extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     String channelId,
-    List<FetchedModel> models,
-  ) {
-    final selected = models.map((m) => m.id).toSet();
+    List<FetchedModel> models, {
+    String? preferredModel,
+  }) {
+    final selected = ModelFetcher.defaultSelectedModelIds(
+      models,
+      preferredModel: preferredModel,
+    );
 
     showDialog(
       context: context,
@@ -2059,7 +3960,7 @@ class SettingsPage extends ConsumerWidget {
     );
 
     try {
-      final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+      final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
       final result = await _runModelTest(
         protocol: channel.protocol,
         baseUrl: channel.baseUrl,
@@ -2242,7 +4143,7 @@ class SettingsPage extends ConsumerWidget {
     );
 
     try {
-      final apiKey = KeyEncryptor.decrypt(channel.apiKeyEncrypted);
+      final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
 
       // 逐个测试（并行会太重）
       for (int i = 0; i < models.length; i++) {
@@ -2587,6 +4488,436 @@ class SettingsPage extends ConsumerWidget {
         ref,
         hasTtsEngine: hasTtsEngine,
         config: ttsConfig,
+      ),
+    );
+  }
+
+  // ====== 数字孪生 / 镜像数字人 v1 ======
+
+  Widget _buildDigitalTwinTile(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(userProfileProvider);
+    final hasProfile = profile?.hasContent == true;
+    return ListTile(
+      leading: const Icon(Icons.face_retouching_natural),
+      title: const Text('数字孪生 / 镜像数字人'),
+      subtitle: Text(
+        hasProfile ? '已根据画像生成人格配置 · 可预览' : '先完善用户画像后可生成镜像人格',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showDigitalTwinDialog(context, ref, profile),
+    );
+  }
+
+  void _showDigitalTwinDialog(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? profile,
+  ) {
+    final persona = const PersonaProfileGenerator().fromUserProfile(
+      profile ?? UserProfile.empty(),
+    );
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('数字孪生 / 镜像数字人'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '镜像数字人 v1：把本地用户画像（风格 / 作息 / 偏好 / 目标 / 任务）蒸馏成可注入的人格配置，'
+                '用于「替身回复」。替身回复必须由用户显式授权，且全程保留审计。',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '人格配置预览',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  persona.isEmpty
+                      ? '画像信号不足，暂无可生成的人格配置。'
+                      : persona.buildPersonaSystemPrompt(),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              const Divider(height: 24),
+              // 替身回复授权开关。
+              Consumer(
+                builder: (ctx, ref, _) {
+                  final auth = ref.watch(personaAuthorizationProvider);
+                  return SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('启用替身回复'),
+                    subtitle: Text(
+                      auth.isAuthorized
+                          ? '已授权${auth.authorizedAtIso != null ? ' · ${auth.authorizedAtIso!.substring(0, 10)}' : ''}'
+                          : '代表用户本人以镜像人格发言，须显式授权',
+                    ),
+                    value: auth.isAuthorized,
+                    onChanged: (value) async {
+                      if (value) {
+                        final confirmed = await showDialog<bool>(
+                          context: ctx,
+                          builder: (pctx) => AlertDialog(
+                            title: const Text('授权替身回复'),
+                            content: const Text(
+                              '启用后，AI 将以你的口吻代表你发言。请确认你清楚这一行为并愿意授权。',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(pctx).pop(false),
+                                child: const Text('取消'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.of(pctx).pop(true),
+                                child: const Text('确认授权'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true && ctx.mounted) {
+                          await ref
+                              .read(personaAuthorizationProvider.notifier)
+                              .authorize();
+                          try {
+                            await ref
+                                .read(personaAuditLogDaoProvider)
+                                .insertLog(
+                                  eventType: PersonaAuditEventType.authorize,
+                                  summary: '用户显式授权替身回复',
+                                );
+                          } catch (_) {}
+                        }
+                      } else {
+                        await ref
+                            .read(personaAuthorizationProvider.notifier)
+                            .revoke();
+                        try {
+                          await ref
+                              .read(personaAuditLogDaoProvider)
+                              .insertLog(
+                                eventType: PersonaAuditEventType.revoke,
+                                summary: '用户撤销替身回复授权',
+                              );
+                        } catch (_) {}
+                      }
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final logs = await ref
+                  .read(personaAuditLogDaoProvider)
+                  .getRecentLogs(limit: 100);
+              if (!ctx.mounted) return;
+              await showDialog<void>(
+                context: ctx,
+                builder: (dctx) => AlertDialog(
+                  title: const Text('替身审计日志'),
+                  content: SizedBox(
+                    width: double.maxFinite,
+                    child: logs.isEmpty
+                        ? const Text('暂无审计记录')
+                        : ListView(
+                            shrinkWrap: true,
+                            children: [
+                              for (final log in logs)
+                                ListTile(
+                                  dense: true,
+                                  leading: const Icon(
+                                    Icons.policy_outlined,
+                                    size: 18,
+                                  ),
+                                  title: Text(_auditEventLabel(log.eventType)),
+                                  subtitle: Text(
+                                    '${_formatAuditTime(log.createdAt)}${log.summary.isEmpty ? '' : ' · ${log.summary}'}',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                          ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () async {
+                        await ref.read(personaAuditLogDaoProvider).clearLogs();
+                        if (!dctx.mounted) return;
+                        Navigator.of(dctx).pop();
+                      },
+                      child: const Text('清空日志'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(dctx).pop(),
+                      child: const Text('关闭'),
+                    ),
+                  ],
+                ),
+              );
+            },
+            child: const Text('审计日志'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _auditEventLabel(String eventType) {
+    switch (eventType) {
+      case PersonaAuditEventType.authorize:
+        return '授权替身回复';
+      case PersonaAuditEventType.revoke:
+        return '撤销替身回复';
+      case PersonaAuditEventType.personaReply:
+        return '替身回复';
+      default:
+        return eventType;
+    }
+  }
+
+  String _formatAuditTime(int ms) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+  }
+
+  // ====== 数字人直播 v1 ======
+
+  Widget _buildLiveStreamTile(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(userProfileProvider);
+    final hasProfile = profile?.hasContent == true;
+    return ListTile(
+      leading: const Icon(Icons.live_tv_outlined),
+      title: const Text('数字人直播'),
+      subtitle: Text(
+        hasProfile ? '从镜像人格生成直播脚本 · 可配置 RTMP 目标' : '先完善用户画像后可生成直播脚本',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showLiveStreamDialog(context, ref, profile),
+    );
+  }
+
+  void _showLiveStreamDialog(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? profile,
+  ) {
+    final platformCtrl = TextEditingController();
+    final rtmpCtrl = TextEditingController();
+    final keyCtrl = TextEditingController();
+    final topicCtrl = TextEditingController();
+    String? scriptPreview;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('数字人直播'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: platformCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '平台',
+                    hintText: '如 YouTube / 抖音 / Twitch',
+                  ),
+                ),
+                TextField(
+                  controller: rtmpCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'RTMP 推流地址',
+                    hintText: 'rtmp://a.rtmp.youtube.com/live2',
+                  ),
+                ),
+                TextField(
+                  controller: keyCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '串流密钥'),
+                ),
+                TextField(
+                  controller: topicCtrl,
+                  decoration: const InputDecoration(labelText: '本次直播主题（可选）'),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  '从镜像人格生成直播脚本（开场 / 话题 / 结束）。实际推流请在 OBS 等工具中指向上述 RTMP 地址。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (scriptPreview != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(ctx).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      scriptPreview!,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                final persona = const PersonaProfileGenerator().fromUserProfile(
+                  profile ?? UserProfile.empty(),
+                );
+                if (persona.isEmpty) {
+                  ScaffoldMessenger.of(ctx)
+                    ..clearSnackBars()
+                    ..showSnackBar(
+                      const SnackBar(content: Text('画像信号不足，暂无可生成直播脚本')),
+                    );
+                  return;
+                }
+                final script = const LiveStreamScriptGenerator().generate(
+                  persona,
+                  topic: topicCtrl.text,
+                );
+                setState(() => scriptPreview = script.toMarkdown());
+              },
+              child: const Text('生成直播脚本'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final persona = const PersonaProfileGenerator().fromUserProfile(
+                  profile ?? UserProfile.empty(),
+                );
+                try {
+                  const service = LiveStreamService();
+                  final config = LiveStreamConfig(
+                    platform: platformCtrl.text,
+                    rtmpUrl: rtmpCtrl.text,
+                    streamKey: keyCtrl.text,
+                  );
+                  final session = service.startSession(
+                    config: config,
+                    persona: persona,
+                    topic: topicCtrl.text,
+                  );
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(ctx)
+                    ..clearSnackBars()
+                    ..showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '已记录开播会话：${session.platform} · ${session.topic}',
+                        ),
+                      ),
+                    );
+                  Navigator.of(ctx).pop();
+                } catch (e) {
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(ctx)
+                    ..clearSnackBars()
+                    ..showSnackBar(SnackBar(content: Text('$e')));
+                }
+              },
+              child: const Text('记录开播会话'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ====== 图片生成 ======
+
+  Widget _buildImageGenerationTile(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(imageGenerationConfigProvider);
+    return ListTile(
+      leading: const Icon(Icons.auto_awesome_outlined),
+      title: const Text('图片生成配置'),
+      subtitle: Text(
+        '模型：${config.model}\n在聊天输入框输入描述后，点“✨”按钮生成图片',
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      ),
+      isThreeLine: true,
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showImageGenerationDialog(context, ref),
+    );
+  }
+
+  void _showImageGenerationDialog(BuildContext context, WidgetRef ref) {
+    final config = ref.read(imageGenerationConfigProvider);
+    final modelController = TextEditingController(text: config.model);
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('图片生成模型'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: modelController,
+                decoration: const InputDecoration(
+                  labelText: '模型名',
+                  hintText: '如 dall-e-3 / gpt-image-1 / 中继支持的其他图像模型',
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '使用当前渠道的 Base URL 与 API Key，通过 OpenAI 兼容 /v1/images/generations 生成；图片本地保存，不进入云端。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await ref
+                  .read(imageGenerationConfigProvider.notifier)
+                  .setModel(modelController.text.trim());
+              if (!ctx.mounted) return;
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('保存'),
+          ),
+        ],
       ),
     );
   }
@@ -5949,6 +8280,27 @@ class _ProviderPresetHint extends StatelessWidget {
               alignment: WrapAlignment.end,
               spacing: 8,
               children: [
+                if (preset.signUpUrl != null)
+                  TextButton.icon(
+                    onPressed: () async {
+                      final opened = await ProviderScope.containerOf(
+                        context,
+                      ).read(externalUrlOpenerProvider).open(preset.signUpUrl!);
+                      if (!context.mounted) return;
+                      if (opened) return;
+                      await Clipboard.setData(
+                        ClipboardData(text: preset.signUpUrl!),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context)
+                        ..clearSnackBars()
+                        ..showSnackBar(
+                          const SnackBar(content: Text('无法打开注册链接，已复制到剪贴板')),
+                        );
+                    },
+                    icon: const Icon(Icons.person_add_alt_1, size: 16),
+                    label: const Text('去注册'),
+                  ),
                 TextButton.icon(
                   onPressed: () async {
                     await Clipboard.setData(

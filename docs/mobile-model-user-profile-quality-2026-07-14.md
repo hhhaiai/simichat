@@ -63,13 +63,13 @@
 
 新增或扩展：
 
-- `test/core/model_user_profile_service_test.dart`
-- `test/shared/user_profile_provider_test.dart`
-- `test/shared/dreaming_background_runner_test.dart`
-- `test/shared/settings_page_user_profile_test.dart`
-- `test/core/structured_data_backup_test.dart`
-- `test/core/model_user_profile_live_quality_manifest_test.dart`
-- `test/core/dreaming_background_device_smoke_manifest_test.dart`
+- `test/model_user_profile_service_test.dart`
+- `test/user_profile_provider_test.dart`
+- `test/dreaming_background_runner_test.dart`
+- `test/settings_page_user_profile_test.dart`
+- `test/structured_data_backup_test.dart`
+- `test/model_user_profile_live_quality_manifest_test.dart`
+- `test/dreaming_background_device_smoke_manifest_test.dart`
 
 覆盖：
 

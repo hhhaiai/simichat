@@ -38,19 +38,19 @@
   - 保留 `simulateAudioFocusLossForTesting` 作为最小 listener 分支兜底，但当前设备 smoke 已不再依赖直接调用原播放 listener。
   - 新增 Android 外部包抢占焦点 smoke：脚本临时生成并安装独立 helper APK `top.simitalk.aichat.audiofocusstealer`，integration test 先让 SimiChat 走正式焦点请求播放 9 秒静音 WAV，输出 `SIMICHAT_EXTERNAL_AUDIO_FOCUS_READY` 后脚本启动 helper；helper 从另一个包请求 `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE` 并保持 6 秒，验证 SimiChat 收到 stopped、无 completed、无 error；脚本退出会卸载 helper 包并恢复 `pubspec.yaml` / `pubspec.lock`。
   - 新增 Android 音频焦点 suite：`scripts/smoke_android_audio_focus_suite.sh` 会顺序运行 debug-only competing AudioFocus smoke、外部 helper APK 抢占 smoke，并在成功或失败后按需恢复普通 Android release，避免单条 integration smoke 后设备停留在 debug 包。
-- `test/core/microphone_permission_manifest_test.dart`
+- `test/microphone_permission_manifest_test.dart`
   - 增加静态回归，锁定三条 direct-channel 原生音频 smoke 使用 `_buildSilentWav` / zero-filled PCM，不再引入 `dart:math` / `math.sin` 正弦波。
   - 增加静态回归，锁定 Android 原生播放器必须包含 `AudioFocusRequest`、`AudioManager`、`OnAudioFocusChangeListener`、`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`、`requestAudioFocus`、`abandonAudioFocus`、`skipAudioFocusRequest`、`simulateAudioFocusLossForTesting` 和 `ApplicationInfo.FLAG_DEBUGGABLE` 等关键路径。
   - 增加静态回归，锁定 iOS 原生播放器必须监听 `AVAudioSession.interruptionNotification`、识别 interruption began、停止播放并释放音频会话。
-- `test/core/text_to_speech_service_test.dart`
+- `test/text_to_speech_service_test.dart`
   - 增加 Dart MethodChannel 回归：正式 `playFile()` 不带 `skipAudioFocusRequest`，只有 `playFileForTesting(..., skipAudioFocusRequest: true)` 会传测试参数。
   - 增加音频焦点拒绝错误映射回归，确保原生侧返回 `AUDIO_FOCUS_DENIED` 且 message 缺失时，Dart 侧仍给出“无法获取音频播放焦点”的明确提示。
 
 ## 验证
 
-- `flutter --no-version-check test --no-pub --no-test-assets test/core/microphone_permission_manifest_test.dart test/core/text_to_speech_service_test.dart -r expanded`
+- `flutter --no-version-check test --no-pub --no-test-assets test/microphone_permission_manifest_test.dart test/text_to_speech_service_test.dart -r expanded`
   - 结果：17 个测试全部通过。
-- `flutter --no-version-check test --no-pub --no-test-assets test/core/microphone_permission_manifest_test.dart -r expanded`
+- `flutter --no-version-check test --no-pub --no-test-assets test/microphone_permission_manifest_test.dart -r expanded`
   - 结果：8 个测试全部通过；静态约束已锁定 `requestCompetingAudioFocusForTesting` / `abandonCompetingAudioFocusForTesting` debug-only 竞争焦点入口。
 - `flutter --no-version-check test --no-pub --no-test-assets -r expanded`
   - 结果：335 个测试全部通过。

@@ -8,6 +8,10 @@ class ModelProviderPreset {
   final bool openAiCompatible;
   final List<String> recommendedModels;
 
+  /// 面向需要注册才能使用的渠道预设：没有 Key 时引导用户去该地址注册。
+  /// 为空表示该预设无需注册（如本地 Ollama 或已有官方账号即可开通）。
+  final String? signUpUrl;
+
   const ModelProviderPreset({
     required this.id,
     required this.name,
@@ -17,8 +21,15 @@ class ModelProviderPreset {
     required this.docsUrl,
     required this.openAiCompatible,
     this.recommendedModels = const [],
+    this.signUpUrl,
   });
 }
+
+/// 返回协议是否必须配置 API Key。
+///
+/// 本地 Ollama 默认不需要密钥；保留独立判断函数，避免设置页、批量导入
+/// 和其他接入入口各自维护一份不一致的协议判断。
+bool modelProtocolRequiresApiKey(String protocol) => protocol != 'ollama';
 
 const kModelProviderPresets = [
   ModelProviderPreset(
@@ -30,6 +41,18 @@ const kModelProviderPresets = [
     docsUrl: 'https://platform.openai.com/docs',
     openAiCompatible: true,
     recommendedModels: ['gpt-4o-mini', 'gpt-4.1-mini'],
+  ),
+  ModelProviderPreset(
+    id: 'dwchainless',
+    name: 'DW Chainless 中转站',
+    protocol: 'openai_chat',
+    baseUrl: 'https://api.dwchainless.com/v1',
+    description:
+        'DW Chainless OpenAI 兼容中转站，一个 API Key 即可接入聚合的主流模型，无需分别申请各厂商密钥。',
+    docsUrl: 'https://api.dwchainless.com/',
+    signUpUrl: 'https://api.dwchainless.com/sign-up',
+    openAiCompatible: true,
+    recommendedModels: ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus'],
   ),
   ModelProviderPreset(
     id: 'anthropic',
@@ -232,6 +255,7 @@ const kModelProviderPresets = [
     description: '本地 Ollama 服务，不需要云端 API Key。',
     docsUrl: 'https://ollama.com',
     openAiCompatible: false,
+    recommendedModels: ['gemma4', 'qwen3:4b', 'llama3.2:3b'],
   ),
 ];
 

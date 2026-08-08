@@ -14,6 +14,7 @@ import 'dao/dreaming_dao.dart';
 import 'dao/prompt_dao.dart';
 import 'dao/mcp_dao.dart';
 import 'dao/skill_dao.dart';
+import 'dao/persona_audit_log_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -30,6 +31,7 @@ part 'app_database.g.dart';
     Prompts,
     McpServers,
     Skills,
+    PersonaAuditLogs,
   ],
   daos: [
     SessionDao,
@@ -41,6 +43,7 @@ part 'app_database.g.dart';
     PromptDao,
     McpDao,
     SkillDao,
+    PersonaAuditLogDao,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -48,7 +51,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -92,6 +95,9 @@ class AppDatabase extends _$AppDatabase {
       if (from < 7) {
         await m.createTable(dreamingJobs);
         await m.createTable(dreamingReports);
+      }
+      if (from < 8) {
+        await m.createTable(personaAuditLogs);
       }
     },
   );

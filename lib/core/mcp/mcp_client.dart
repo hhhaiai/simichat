@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../search/web_search_service.dart';
+
 const kMcpTransportAppNative = 'app_native';
 const kMcpTransportStdio = 'stdio';
 const kMcpTransportSse = 'sse';
@@ -178,9 +180,13 @@ abstract class McpTransport {
 ///
 /// 这是移动端默认可用的 MCP Runtime 基线；PC 端也可用同一套能力。
 class AppNativeMcpTransport implements McpTransport {
-  AppNativeMcpTransport({this.serverId = kAppNativeMcpServerId});
+  AppNativeMcpTransport({
+    this.serverId = kAppNativeMcpServerId,
+    WebSearchService? webSearch,
+  }) : _webSearch = webSearch;
 
   final String serverId;
+  final WebSearchService? _webSearch;
   void Function(Map<String, dynamic>)? _onMessage;
   bool _connected = false;
 
@@ -264,6 +270,18 @@ class AppNativeMcpTransport implements McpTransport {
         'description': '返回当前 SimiChat 内建 MCP Runtime 状态。',
         'inputSchema': {'type': 'object', 'properties': {}},
       },
+      {
+        'name': 'simichat.web_search',
+        'description':
+            '搜索互联网（DuckDuckGo Instant Answer，无需 API Key），返回相关摘要与链接，可用于检索增强回答。',
+        'inputSchema': {
+          'type': 'object',
+          'properties': {
+            'query': {'type': 'string', 'description': '搜索关键词'},
+          },
+          'required': ['query'],
+        },
+      },
     ];
   }
 
@@ -278,7 +296,7 @@ class AppNativeMcpTransport implements McpTransport {
     ];
   }
 
-  Map<String, dynamic> _callTool(Map<String, dynamic> params) {
+  Future<Map<String, dynamic>> _callTool(Map<String, dynamic> params) async {
     final name = params['name'] as String?;
     final arguments =
         (params['arguments'] as Map?)?.cast<String, dynamic>() ??
@@ -306,6 +324,34 @@ class AppNativeMcpTransport implements McpTransport {
         });
       case 'simichat.runtime_info':
         return _textResult(_runtimeInfo());
+      case 'simichat.web_search':
+        final query = (arguments['query'] as String? ?? '').trim();
+        if (query.isEmpty) {
+          return {
+            'content': [
+              {'type': 'text', 'text': 'web_search 需要非空 query 参数'},
+            ],
+            'isError': true,
+          };
+        }
+        try {
+          final results = await (_webSearch ?? const WebSearchService()).search(
+            query,
+          );
+          return _textResult({
+            'query': query,
+            'resultCount': results.length,
+            'results': results.map((r) => r.toJson()).toList(),
+            'searchEngine': 'duckduckgo',
+          });
+        } on WebSearchException catch (e) {
+          return {
+            'content': [
+              {'type': 'text', 'text': '搜索失败：${e.message}'},
+            ],
+            'isError': true,
+          };
+        }
       default:
         return {
           'content': [

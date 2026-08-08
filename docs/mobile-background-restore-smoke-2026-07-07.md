@@ -39,16 +39,16 @@ REAL_BACKGROUND_TOGGLE=1 scripts/smoke_android_background_restore.sh 37101FDJH00
 ```bash
 bash -n scripts/smoke_android_background_restore.sh
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/release_send_smoke_manifest_test.dart \
+  test/release_send_smoke_manifest_test.dart \
   --name "Android background restore smoke has explicit safety gates"
 REAL_BACKGROUND_TOGGLE=1 scripts/smoke_android_background_restore.sh 37101FDJH0077P
 scripts/smoke_android_release_install_launch.sh 37101FDJH0077P
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/release_send_smoke_manifest_test.dart \
-  test/shared/connectivity_provider_test.dart \
-  test/shared/chat_page_offline_test.dart \
-  test/shared/chat_page_tts_playback_event_test.dart \
-  test/smoke/mobile_main_flow_smoke_test.dart
+  test/release_send_smoke_manifest_test.dart \
+  test/connectivity_provider_test.dart \
+  test/chat_page_offline_test.dart \
+  test/chat_page_tts_playback_event_test.dart \
+  test/mobile_main_flow_smoke_test.dart
 flutter --no-version-check analyze
 git diff --check
 ```
@@ -61,7 +61,7 @@ git diff --check
   - 脚本发送 `KEYCODE_HOME`；
   - 脚本重新启动 `top.simitalk.aichat`；
   - `mobile background restore smoke keeps composer draft` 通过。
-- 影响面本地门禁通过：`test/core/release_send_smoke_manifest_test.dart`、`test/shared/connectivity_provider_test.dart`、`test/shared/chat_page_offline_test.dart`、`test/shared/chat_page_tts_playback_event_test.dart`、`test/smoke/mobile_main_flow_smoke_test.dart` 共 22 项通过；`flutter --no-version-check analyze` 无问题；`git diff --check` 无输出。
+- 影响面本地门禁通过：`test/release_send_smoke_manifest_test.dart`、`test/connectivity_provider_test.dart`、`test/chat_page_offline_test.dart`、`test/chat_page_tts_playback_event_test.dart`、`test/mobile_main_flow_smoke_test.dart` 共 22 项通过；`flutter --no-version-check analyze` 无问题；`git diff --check` 无输出。
 - 因 debug integration runner 会安装调试包，随后运行 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 恢复普通 release：
   - `app-release.apk` 31.5MB；
   - `adb install -r` 成功；

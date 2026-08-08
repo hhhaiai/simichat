@@ -98,6 +98,6 @@
 
 ## 当前测试覆盖
 
-- `test/core/model_context_budget_test.dart`：模型窗口预算、未知模型保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值。
-- `test/core/context_builder_test.dart`：预算模式可装入超过旧 20 条上限的历史，并在小预算下保留最新用户问题。
-- `test/shared/chat_provider_context_limit_test.dart`：常见上下文超限错误识别和用户提示。
+- `test/model_context_budget_test.dart`：模型窗口预算、未知模型保守回退、旧 OpenAI 小窗口模型保守预算、长上下文模型动态提高压缩阈值。
+- `test/context_builder_test.dart`：预算模式可装入超过旧 20 条上限的历史，并在小预算下保留最新用户问题。
+- `test/chat_provider_context_limit_test.dart`：常见上下文超限错误识别和用户提示。

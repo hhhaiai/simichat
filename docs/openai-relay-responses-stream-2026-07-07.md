@@ -27,7 +27,7 @@
 
 ## 回归测试
 
-- `test/core/openai_compatible_relay_server_test.dart`
+- `test/openai_compatible_relay_server_test.dart`
   - 新增 `POST /v1/responses safely degrades unsupported input items`：`input` 同时包含 `input_text` 与 `item_reference` 时，旧逻辑红灯返回 `400`；修复后返回 200，上游只看到正文和 `item_reference` 安全占位，响应不包含原始 reference id。
   - 将旧的 `POST /v1/responses rejects unsupported streaming safely` 替换为 `POST /v1/responses streams Responses-compatible SSE chunks`。
   - 红灯阶段旧实现返回 `400 unsupported_stream`。
@@ -45,18 +45,18 @@
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart \
+  test/openai_compatible_relay_server_test.dart \
   --plain-name "POST /v1/responses streams Responses-compatible SSE chunks"
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart \
+  test/openai_compatible_relay_server_test.dart \
   --name "POST /v1/responses safely degrades unsupported input items"
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart \
+  test/openai_compatible_relay_server_test.dart \
   --plain-name "POST /v1/responses streams safe failed event on upstream error"
 dart format lib/core/relay/openai_compatible_relay_server.dart \
-  test/core/openai_compatible_relay_server_test.dart
+  test/openai_compatible_relay_server_test.dart
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart
+  test/openai_compatible_relay_server_test.dart
 ```
 
 结果：
@@ -68,7 +68,7 @@ flutter --no-version-check test --no-pub -r expanded \
 - 二次修复后目标用例通过。
 - 三次红灯：继续补 `response.in_progress` 事件断言后，旧事件序列在 `response.created` 后直接进入 `response.output_item.added`，目标用例失败；修复后目标用例通过。
 - 四次红灯：新增上游流式异常用例后，旧实现只输出到最后一个 delta，缺少 `response.failed` / `[DONE]`；修复后目标用例通过。
-- 当前 `test/core/openai_compatible_relay_server_test.dart` 全文件 24 项通过。
+- 当前 `test/openai_compatible_relay_server_test.dart` 全文件 24 项通过。
 
 ## 边界
 

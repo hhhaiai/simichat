@@ -178,7 +178,7 @@ Pixel 8 当前已处于 Android release 正式包运行状态；本轮未触碰 
 ### 验证
 
 ```bash
-./scripts/smoke_full_stability_gate.sh test/core/dreaming_service_test.dart -r expanded
+./scripts/smoke_full_stability_gate.sh test/dreaming_service_test.dart -r expanded
 ./scripts/benchmark_dreaming.sh -r expanded
 flutter --no-version-check analyze --no-pub
 ./scripts/smoke_full_stability_gate.sh -r expanded
@@ -186,7 +186,7 @@ flutter --no-version-check analyze --no-pub
 
 结果：
 
-- `test/core/dreaming_service_test.dart` 3 个测试通过，新增覆盖超过 `maxMessages` 时 `isTruncated=true`、`messageLimit=2`、只处理限定消息数、Markdown 出现截断提示、JSON 往返保留字段。
+- `test/dreaming_service_test.dart` 3 个测试通过，新增覆盖超过 `maxMessages` 时 `isTruncated=true`、`messageLimit=2`、只处理限定消息数、Markdown 出现截断提示、JSON 往返保留字段。
 - Dreaming 1000 条消息基准通过：`run_ms=41`，`digest_elapsed_ms=39`，`memory_candidates=40`，`has_content=true`。
 - `flutter --no-version-check analyze --no-pub` 通过，无问题。
 - 全量门禁通过：`345` 个测试全部通过。
@@ -214,14 +214,14 @@ Dreaming 在超长日对话场景下现在不会“静默只整理部分内容�
 ### 验证
 
 ```bash
-./scripts/smoke_full_stability_gate.sh test/core/reflection_service_test.dart -r expanded
+./scripts/smoke_full_stability_gate.sh test/reflection_service_test.dart -r expanded
 flutter --no-version-check analyze --no-pub
 ./scripts/smoke_full_stability_gate.sh -r expanded
 ```
 
 结果：
 
-- `test/core/reflection_service_test.dart` 5 个测试通过，新增覆盖截断来源会进入 Reflection 字段、Markdown、JSON 往返和 `buildAssistantReflectionSystemPrompt()` 短期提示。
+- `test/reflection_service_test.dart` 5 个测试通过，新增覆盖截断来源会进入 Reflection 字段、Markdown、JSON 往返和 `buildAssistantReflectionSystemPrompt()` 短期提示。
 - `flutter --no-version-check analyze --no-pub` 通过，无问题。
 - 全量门禁通过：`346` 个测试全部通过。
 
@@ -244,7 +244,7 @@ flutter --no-version-check analyze --no-pub
 ### 验证
 
 ```bash
-./scripts/smoke_full_stability_gate.sh test/core/dreaming_service_test.dart -r expanded
+./scripts/smoke_full_stability_gate.sh test/dreaming_service_test.dart -r expanded
 ./scripts/benchmark_dreaming.sh -r expanded
 flutter --no-version-check analyze --no-pub
 ./scripts/smoke_full_stability_gate.sh -r expanded
@@ -252,7 +252,7 @@ flutter --no-version-check analyze --no-pub
 
 结果：
 
-- `test/core/dreaming_service_test.dart` 3 个测试通过，截断用例确认只保留最近消息。
+- `test/dreaming_service_test.dart` 3 个测试通过，截断用例确认只保留最近消息。
 - Dreaming 1000 条消息基准通过：`run_ms=48`，`digest_elapsed_ms=45`，`memory_candidates=40`。
 - `flutter --no-version-check analyze --no-pub` 通过。
 - 全量门禁通过：`346` 个测试全部通过。

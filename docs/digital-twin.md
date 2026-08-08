@@ -106,9 +106,9 @@ UserProfile
 
 ### 4.4 验证
 
-- `test/core/user_profile_test.dart`：画像维度抽取、敏感内容跳过、编辑 / 删除控制、偏好冲突检测、画像差异对比、单项差异应用 / 忽略、画像 / 控制 / 历史 JSON 往返。
-- `test/shared/user_profile_provider_test.dart`：画像本地持久化与清除、编辑 / 删除控制持久化、待确认画像变更提案 / 采纳 / 拒绝、待确认画像变更逐项采纳 / 忽略、恢复历史快照、历史最多 20 条与清空。
-- `test/shared/settings_page_user_profile_test.dart`：设置页查看、重建、编辑、删除画像、历史写入、差异展示、恢复历史版本、整包采纳待确认画像变更、逐项采纳 / 忽略待确认画像变更、详情弹窗展示全部待确认项并处理卡片未展示项。
+- `test/user_profile_test.dart`：画像维度抽取、敏感内容跳过、编辑 / 删除控制、偏好冲突检测、画像差异对比、单项差异应用 / 忽略、画像 / 控制 / 历史 JSON 往返。
+- `test/user_profile_provider_test.dart`：画像本地持久化与清除、编辑 / 删除控制持久化、待确认画像变更提案 / 采纳 / 拒绝、待确认画像变更逐项采纳 / 忽略、恢复历史快照、历史最多 20 条与清空。
+- `test/settings_page_user_profile_test.dart`：设置页查看、重建、编辑、删除画像、历史写入、差异展示、恢复历史版本、整包采纳待确认画像变更、逐项采纳 / 忽略待确认画像变更、详情弹窗展示全部待确认项并处理卡片未展示项。
 - `scripts/benchmark_user_profile.sh`：1000 条 Key Points + 画像控制构建性能基线。
 
 

@@ -13,6 +13,29 @@ class FetchedModel {
 
 /// 从 API 获取可用模型列表。
 class ModelFetcher {
+  /// 计算“获取模型”弹窗的默认勾选集合。
+  ///
+  /// 云端渠道保持旧行为：默认勾选所有新模型。Ollama 传入
+  /// [preferredModel] 后，只默认勾选该模型及其 Ollama tag 变体
+  /// （例如 `gemma4` / `gemma4:latest` / `gemma4:27b`），用户仍可手动调整。
+  static Set<String> defaultSelectedModelIds(
+    List<FetchedModel> models, {
+    String? preferredModel,
+  }) {
+    final preferred = preferredModel?.trim().toLowerCase();
+    if (preferred == null || preferred.isEmpty) {
+      return models.map((model) => model.id).toSet();
+    }
+
+    return models
+        .where((model) {
+          final id = model.id.trim().toLowerCase();
+          return id == preferred || id.startsWith('$preferred:');
+        })
+        .map((model) => model.id)
+        .toSet();
+  }
+
   static Dio _createDio() {
     final dio = createDio();
     dio.options.connectTimeout = const Duration(seconds: 15);
@@ -149,11 +172,18 @@ class ModelFetcher {
   /// 获取 Ollama 模型列表
   static Future<List<String>> fetchOllamaModels({
     required String baseUrl,
+    String apiKey = '',
   }) async {
     final dio = _createDio();
     final url = '${normalizeUrl(baseUrl)}/api/tags';
     try {
-      final response = await dio.get(url);
+      final token = apiKey.trim();
+      final response = await dio.get(
+        url,
+        options: token.isEmpty
+            ? null
+            : Options(headers: {'Authorization': 'Bearer $token'}),
+      );
       final data = response.data as Map<String, dynamic>;
       final models = data['models'] as List?;
       if (models == null) return [];
@@ -194,7 +224,7 @@ class ModelFetcher {
             .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
             .toList();
       case 'ollama':
-        return (await fetchOllamaModels(baseUrl: baseUrl))
+        return (await fetchOllamaModels(baseUrl: baseUrl, apiKey: apiKey))
             .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
             .toList();
       default:

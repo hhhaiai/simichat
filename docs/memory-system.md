@@ -150,7 +150,7 @@ MemoryPoint
 - 排序分数综合：关键词重叠、语义向量 cosine similarity、置信度、同会话加权、最近使用加权。
 - 无关键词重叠且语义相似度过低的记忆会降权，避免无关记忆污染系统提示词。
 - `buildLocalSemanticVector()` 和 `cosineSimilarity()` 为纯本地函数，便于测试和后续替换为真实 embedding。
-- 性能脚本：`scripts/benchmark_key_point_memory.sh` 运行 `test/benchmark/key_point_memory_benchmark.dart`，当前覆盖 5000 条 Key Points、20 次召回。
+- 性能脚本：`scripts/benchmark_key_point_memory.sh` 运行 `test/key_point_memory_benchmark.dart`，当前覆盖 5000 条 Key Points、20 次召回。
 
 边界：
 
@@ -203,7 +203,7 @@ MemoryPoint
 - insert / update / delete 触发器继续维护后续原始消息变更；`summary`、`model_switch` 等非原始消息不进入 FTS。
 - 语义索引不靠 SQLite 触发器生成向量；`MessageDao.insertMessage()` / `deleteMessage()` 会在主写入 / 删除路径同步维护语义索引，历史数据、外部修改或异常状态可通过检查发现缺失 / 过期，再由预热 / 修复重建。
 - 设置页入口只展示数量、状态和耗时，不展示搜索词、消息正文、语义向量、完整本地路径或密钥。
-- `scripts/benchmark_search_index.sh` 运行 `test/benchmark/search_index_benchmark.dart`，用于记录本地搜索索引在 2000 条消息下的插入、FTS 预热、语义索引预热和搜索耗时。
+- `scripts/benchmark_search_index.sh` 运行 `test/search_index_benchmark.dart`，用于记录本地搜索索引在 2000 条消息下的插入、FTS 预热、语义索引预热和搜索耗时。
 
 ## 6. 无限上下文
 

@@ -45,18 +45,18 @@
 
 ## 回归测试
 
-- `test/shared/chat_page_offline_test.dart`
+- `test/chat_page_offline_test.dart`
   - 构造内存 SQLite、一个可用模型和一个会话。
   - 覆盖 `isOnlineProvider=false`。
   - 输入 `offline draft 20260706` 后点击发送。
   - 断言：输入仍可见、离线提示出现、会话消息表仍为空、无 Flutter 异常。
   - 新增联网恢复用例：用 `connectivityProvider` 流模拟 `none -> wifi`，断言恢复提示出现、草稿仍保留、数据库仍未写入失败消息。
   - 新增会话隔离用例：A 会话离线发送被阻断后切到 B 会话并输入 B 草稿，模拟网络恢复，断言不会在 B 会话误弹 A 会话的恢复提示，两个会话数据库都不写入失败消息。
-- `test/shared/connectivity_provider_test.dart`
+- `test/connectivity_provider_test.dart`
   - 覆盖空列表、仅 `none`、单一 Wi-Fi、`none + mobile` 混合状态的在线判断。
   - 用 fake `ConnectivityMonitor` 验证 Provider 会先发出 `checkConnectivity()` 初始结果，再响应后续变化流。
   - 用 fake `ConnectivityMonitor` 验证初始探测抛错后仍会继续监听变化流，并在后续 `none` 事件到来后更新为离线。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile network loss cancels active streaming response`：模拟当前会话处于流式输出中，`connectivityProvider` 发出 `none` 后必须清空流式状态、展示断网错误条和断网停止提示，且不写入后台中断持久化 marker；恢复 Wi-Fi 后展示手动重试提示。
   - 新增 `mobile network loss cancels all streaming sessions`：当前会话和非当前会话都处于 streaming 时，断网会同时取消两条；联网恢复后显示 `重试全部`，仍不自动重发。
 - `integration_test/mobile_network_restore_smoke_test.dart`
@@ -71,16 +71,16 @@
 ## 验证记录
 
 ```bash
-flutter --no-version-check test --no-pub -r expanded test/shared/chat_page_offline_test.dart
-flutter --no-version-check test --no-pub -r expanded test/shared/connectivity_provider_test.dart
+flutter --no-version-check test --no-pub -r expanded test/chat_page_offline_test.dart
+flutter --no-version-check test --no-pub -r expanded test/connectivity_provider_test.dart
 flutter --no-version-check analyze
 flutter --no-version-check test --no-pub -r expanded \
-  test/shared/connectivity_provider_test.dart \
-  test/shared/chat_page_offline_test.dart \
-  test/shared/chat_page_tts_playback_event_test.dart \
-  test/smoke/mobile_main_flow_smoke_test.dart
+  test/connectivity_provider_test.dart \
+  test/chat_page_offline_test.dart \
+  test/chat_page_tts_playback_event_test.dart \
+  test/mobile_main_flow_smoke_test.dart
 flutter --no-version-check test --no-pub -r expanded \
-  test/smoke/mobile_main_flow_smoke_test.dart \
+  test/mobile_main_flow_smoke_test.dart \
   --name "mobile network loss"
 bash -n scripts/smoke_android_network_restore.sh
 REAL_NETWORK_TOGGLE=1 scripts/smoke_android_network_restore.sh 37101FDJH0077P
@@ -95,8 +95,8 @@ scripts/smoke_android_release_install_launch.sh 37101FDJH0077P
 - iOS release send 修复复跑前，`./scripts/smoke_ios_release_send.sh 00008110-0016349A3A20A01E` 被安装前解锁预检安全拒绝：`launch preflight did not prove the device is unlocked`，未覆盖安装 smoke 包。
 - 转向本地可验证的网络断开流式保护后，新增两条移动主流程测试。
 - 首轮目标测试先红灯于断言过窄：同屏同时存在错误条和 SnackBar action 两个 `重试`；业务状态已经正确，修正为 `findsWidgets` 后复跑通过。
-- 验证命令：`flutter --no-version-check test --no-pub -r expanded test/smoke/mobile_main_flow_smoke_test.dart --name "mobile network loss"`，2 项通过。
-- 配套回归：`flutter --no-version-check test --no-pub -r expanded test/shared/connectivity_provider_test.dart test/shared/chat_page_offline_test.dart test/core/release_send_smoke_manifest_test.dart`，16 项通过。
+- 验证命令：`flutter --no-version-check test --no-pub -r expanded test/mobile_main_flow_smoke_test.dart --name "mobile network loss"`，2 项通过。
+- 配套回归：`flutter --no-version-check test --no-pub -r expanded test/connectivity_provider_test.dart test/chat_page_offline_test.dart test/release_send_smoke_manifest_test.dart`，16 项通过。
 - 静态检查：`flutter --no-version-check analyze` 无问题。
 - 全量理论门禁：`./scripts/smoke_full_stability_gate.sh -r expanded`，379 项通过。
 - 卫生检查：`git diff --check` 无输出；正式 `pubspec.yaml` / `pubspec.lock` 不保留临时 `sqlite3.source=system` hook。
@@ -118,7 +118,7 @@ scripts/smoke_android_release_install_launch.sh 37101FDJH0077P
 - 首轮红灯来自过强的 loopback socket 断开断言：应用已经进入断网取消态，但设备内 mock 8 秒内未观察到 socket 关闭；取消传播已有独立 SSE / 后台慢流 smoke 覆盖，本 smoke 改为聚焦物理网络事件触发的 UI / 状态 / 数据库结果。
 - `REAL_NETWORK_TOGGLE=1 scripts/smoke_android_network_stream_cancel.sh 37101FDJH0077P` 通过：输出 READY 后断网，输出 INTERRUPTED 后恢复网络，测试验证 `networkStreamingInterruptedMessage`、恢复提示、仅 1 条 user 消息且无 assistant 半截回复。
 - 随后 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 恢复普通 release，31.5MB APK 覆盖安装并启动 pid `7197`；复核 Pixel 8 飞行模式关闭、Wi-Fi enabled、Active default network 为 `WIFI CONNECTED / IS_VALIDATED`。
-- 配套门禁：`test/core/release_send_smoke_manifest_test.dart` 10 项通过；`flutter --no-version-check analyze` 无问题；`./scripts/smoke_full_stability_gate.sh -r expanded` 380 项通过；`git diff --check` 无输出。
+- 配套门禁：`test/release_send_smoke_manifest_test.dart` 10 项通过；`flutter --no-version-check analyze` 无问题；`./scripts/smoke_full_stability_gate.sh -r expanded` 380 项通过；`git diff --check` 无输出。
 
 2026-07-07 补充 airplane streaming cancel 复跑：
 
@@ -134,7 +134,7 @@ scripts/smoke_android_release_install_launch.sh 37101FDJH0077P
 - harness 等待 `isOnlineProvider` 从在线变为离线，再恢复在线；结果写入应用 Documents：`ai_chat/release_network_smoke/ios-release-network-smoke.json`，包含 `SIMICHAT_RELEASE_NETWORK_READY`、离线提示 `当前网络不可用，已保留输入，联网后可重试` 和恢复提示 `网络已恢复，可发送保留的输入`。
 - 新增 `scripts/smoke_ios_release_network_restore.sh`，采用 iOS release-only 路径：安装 smoke 包前先执行 `assert_device_unlocked_for_launch`；Locked / timeout / 未证明解锁都在 build / install 前退出 2；构建时临时启用 `sqlite3.source=system`，退出时恢复 `pubspec.yaml` / `pubspec.lock`；安装 smoke 包后失败或成功都会默认恢复普通 release。
 - 本入口不物理切换 iPhone 网络，只做 release 包内 fake connectivity 门禁；真实 iOS Wi-Fi / 蜂窝 / 飞行模式切换仍待设备可用后补。
-- 验证：先红灯于缺少 `release_network_smoke_harness.dart` / `smoke_ios_release_network_restore.sh`；修复后 `bash -n scripts/smoke_ios_release_network_restore.sh` 通过，`flutter --no-version-check test --no-pub -r expanded test/core/release_send_smoke_manifest_test.dart --name "iOS release network restore smoke"` 通过，完整 `test/core/release_send_smoke_manifest_test.dart` 14 项通过，`flutter --no-version-check analyze` 无问题。本轮未触碰 people。
+- 验证：先红灯于缺少 `release_network_smoke_harness.dart` / `smoke_ios_release_network_restore.sh`；修复后 `bash -n scripts/smoke_ios_release_network_restore.sh` 通过，`flutter --no-version-check test --no-pub -r expanded test/release_send_smoke_manifest_test.dart --name "iOS release network restore smoke"` 通过，完整 `test/release_send_smoke_manifest_test.dart` 14 项通过，`flutter --no-version-check analyze` 无问题。本轮未触碰 people。
 
 ## 边界
 

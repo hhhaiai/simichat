@@ -121,7 +121,7 @@ class ModelChannelImportParser {
       throw ModelChannelImportParseException('$label 协议不支持: $protocol');
     }
     final apiKey = _readString(map, ['apiKey', 'api_key', 'key']) ?? '';
-    if (protocol != 'ollama' && apiKey.isEmpty) {
+    if (modelProtocolRequiresApiKey(protocol) && apiKey.isEmpty) {
       throw ModelChannelImportParseException('$label 缺少 apiKey');
     }
 

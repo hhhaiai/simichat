@@ -417,5 +417,5 @@ ModelTestHistoryItem
 - [x] OpenAI 兼容本地中转远端图片 URL 安全下载透传。
 - [x] OpenAI 兼容本地中转 Responses API 流式输出：`POST /v1/responses` 支持 `stream=true`，输出 `response.in_progress`、`response.output_item.added` / `response.content_part.added`、`response.output_text.delta` / `done`、`response.content_part.done`、`response.output_item.done`、`response.completed`、失败时 `response.failed` 和 `[DONE]`，`item_reference` 等非文本 input item 安全降级，不回显令牌、密钥、本机路径或多模态源 payload。
 - [x] OpenAI 兼容本地中转流式上游异常安全收口：`/v1/chat/completions` 与 `/v1/responses` 已开始输出 SSE 后若上游抛错，会返回安全流内错误 / failed 事件和 `[DONE]`，避免客户端悬挂且不泄露异常详情，并在审计中记录 `upstream_error`。
-- [x] Ollama 流式取消传播：`OllamaProtocol` 已支持 `CancelToken.whenCancel -> http.Client.close()`，取消导致的 client 异常会被视为正常停止；新增 `test/core/ollama_protocol_test.dart` 覆盖收到首个 NDJSON chunk 后取消并快速结束。
-- [x] 添加模型弹窗预设推荐快速填入：已保存渠道会按 `protocol + baseUrl` 反推内置厂商预设，展示推荐模型 chip，点击后填入模型名；`test/shared/settings_page_channel_import_test.dart` 覆盖 Kimi / Moonshot 渠道。
+- [x] Ollama 流式取消传播：`OllamaProtocol` 已支持 `CancelToken.whenCancel -> http.Client.close()`，取消导致的 client 异常会被视为正常停止；新增 `test/ollama_protocol_test.dart` 覆盖收到首个 NDJSON chunk 后取消并快速结束。
+- [x] 添加模型弹窗预设推荐快速填入：已保存渠道会按 `protocol + baseUrl` 反推内置厂商预设，展示推荐模型 chip，点击后填入模型名；`test/settings_page_channel_import_test.dart` 覆盖 Kimi / Moonshot 渠道。

@@ -29,7 +29,7 @@
 
 ## 回归测试
 
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile inactive lifecycle cancels active streaming response`。
   - 使用内存 SQLite 和 `ProviderContainer` 启动移动端 shell。
   - 手动把当前 active 会话置为：
@@ -45,34 +45,34 @@
   - 断言页面显示后台中断提示和 `重试` 按钮。
   - 模拟 `AppLifecycleState.resumed` 后，断言页面弹出一次 `已停止后台生成，可点“重试”继续` 提醒。
   - 断言后台切出会写入 SharedPreferences 单值兼容 marker 和列表 marker，恢复前台提示后两类 marker 均被消费。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile inactive lifecycle cancels all streaming sessions`。
   - 预置两个会话，让当前 active 会话和另一个非当前会话都处于 `isStreaming=true`。
   - 旧逻辑只取消 active 会话，红灯失败于非当前会话 `isStreaming` 仍为 true。
   - 修复后两条会话都会被置为 `backgroundStreamingInterruptedMessage`，SharedPreferences 列表 marker 保留两条 ID，恢复前台提示 `已停止 2 个后台生成，可点“重试全部”继续` 并提供 `重试全部` action。
-- `test/shared/chat_provider_retry_test.dart`
+- `test/chat_provider_retry_test.dart`
   - 新增 `retry loads last user message even before messages provider`。
   - 不预先 watch `messagesProvider`，只通过一个按钮调用 `retryLastUserMessage()`；旧逻辑红灯保持后台中断错误态，修复后会直接查 DAO 并进入发送路径，在无模型配置场景下转换为 `请先选择一个模型`，证明用户主动重试不再静默无效。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile startup restores persisted background retry marker`。
   - 使用 `SharedPreferences.setMockInitialValues()` 预置 `kBackgroundInterruptedSessionStorageKey=<sessionId>`。
   - 启动应用后，验证自动选择当前会话、恢复错误条、弹出 `已恢复上次后台中断，可点“重试”继续`，并消费 marker。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile startup switches to persisted background retry session`。
   - 预置两个会话，并把非 marker 会话设为最新，复现冷启动自动选择最新会话后忽略 marker 的旧行为。
   - 启动应用后，验证会切回 marker 指向的会话、恢复后台中断错误条、弹出冷启动重试提示，并消费 marker。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile startup clears stale background retry marker`。
   - 预置 `kBackgroundInterruptedSessionStorageKey` 指向已删除 / 不存在的会话，同时数据库里保留一个正常会话。
   - 启动应用后，验证仍停留在正常会话，不显示后台中断错误条和冷启动重试 SnackBar，并清理 SharedPreferences marker。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile inactive lifecycle sanitizes background retry markers`。
   - 在应用启动后、后台切出前向 SharedPreferences 写入脏列表 marker（空字符串、空白字符串、带空白的会话 ID）。
   - 模拟 `AppLifecycleState.inactive` 后，验证写入侧会把列表清洗成唯一有效会话 ID，并保留旧单值兼容 marker。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile resume waits for delayed background retry marker cleanup`。
   - 通过测试专用延迟模拟后台 marker 写入慢于快速恢复前台；旧逻辑会在清理后又写回 stale marker，修复后恢复前台清理会等待 pending persist 完成，最终两类 marker 都为空。
-- `test/smoke/mobile_main_flow_smoke_test.dart`
+- `test/mobile_main_flow_smoke_test.dart`
   - 新增 `mobile startup restores multiple background retry markers`。
   - 预置 `kBackgroundInterruptedSessionsStorageKey` 为两个有效会话 + 一个缺失会话，并混入重复 ID、空字符串和空白字符串，让非 marker 会话成为最新自动选中候选。
   - 启动应用后，验证会切到第一条有效待重试会话，SnackBar 明确显示已恢复 2 个后台中断会话并提供 `重试全部` action；两条有效唯一会话的 `streamStateProvider` 都恢复后台中断错误态。点击 `重试全部` 后，在无模型配置场景下两条会话都转为 `请先选择一个模型`，证明批量重试必须由用户显式授权触发且能覆盖所有恢复项；继续切到第二条会话，验证错误条已更新；重复 / 空 ID 不污染恢复数量，缺失会话被跳过，单值兼容 marker 和列表 marker 都被清理。
@@ -81,20 +81,20 @@
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/smoke/mobile_main_flow_smoke_test.dart \
+  test/mobile_main_flow_smoke_test.dart \
   --name "mobile inactive lifecycle cancels active streaming response"
 dart format lib/shared/providers/chat_provider.dart \
   lib/main.dart \
-  test/smoke/mobile_main_flow_smoke_test.dart
+  test/mobile_main_flow_smoke_test.dart
 flutter --no-version-check test --no-pub -r expanded \
-  test/smoke/mobile_main_flow_smoke_test.dart \
+  test/mobile_main_flow_smoke_test.dart \
   --name "mobile resume waits for delayed background retry marker cleanup"
 flutter --no-version-check test --no-pub -r expanded \
-  test/smoke/mobile_main_flow_smoke_test.dart \
+  test/mobile_main_flow_smoke_test.dart \
   --name "mobile inactive lifecycle cancels all streaming sessions"
 flutter --no-version-check test --no-pub -r expanded \
-  test/shared/chat_provider_retry_test.dart \
-  test/smoke/mobile_main_flow_smoke_test.dart
+  test/chat_provider_retry_test.dart \
+  test/mobile_main_flow_smoke_test.dart
 flutter --no-version-check analyze
 git diff --check
 ```
@@ -112,7 +112,7 @@ git diff --check
 - 第九轮红灯阶段延迟 marker 写入竞态用例失败于 `Actual: session-background-marker-race`，证明快速切后台 / 前台时旧逻辑可能先清理、后写回 stale marker；修复后同进程恢复前台会等待 pending marker 写入完成再清理。
 - 第十轮红灯阶段非当前会话后台流用例失败于 `Expected: false Actual: <true>`，证明旧生命周期处理只取消 active 会话；修复后后台切出会遍历已加载会话中所有 streaming 状态，逐条取消并写入列表 marker。
 - 修复后目标用例通过。
-- `test/smoke/mobile_main_flow_smoke_test.dart` 17 项通过；`test/shared/chat_provider_retry_test.dart` 1 项通过。
+- `test/mobile_main_flow_smoke_test.dart` 17 项通过；`test/chat_provider_retry_test.dart` 1 项通过。
 - `flutter --no-version-check analyze` 无问题，`git diff --check` 无输出；正式 `pubspec.yaml` / `pubspec.lock` 未保留临时 sqlite hook。
 
 ## 边界

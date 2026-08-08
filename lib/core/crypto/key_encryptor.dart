@@ -11,10 +11,55 @@ class KeyEncryptor {
   static const _saltPrefix = 'aichat_salt_v1_';
   static const _iterations = 10000;
   static const _keyLength = 32; // AES-256
+  static const _backupMagic = 'simichat-backup-v1:';
 
   /// 加密 API Key
   static String encrypt(String plainText) {
-    final key = _deriveKey(_passphrase);
+    return _encryptWithKey(plainText, _deriveKey(_passphrase));
+  }
+
+  /// 解密 API Key（兼容旧的 base64 格式）
+  static String decrypt(String encrypted) {
+    // 新格式: IV:ciphertext (base64:base64)
+    if (encrypted.contains(':') && !encrypted.contains('.')) {
+      try {
+        return _decryptWithKey(encrypted, _deriveKey(_passphrase));
+      } catch (_) {
+        // Fall through to legacy format
+      }
+    }
+
+    // 兼容旧格式: base64Encoded.sha256checksum
+    return _decryptLegacy(encrypted);
+  }
+
+  /// 解密可选密钥。
+  ///
+  /// Ollama 等本地协议不要求 API Key；旧数据库或手工导入的本地渠道
+  /// 可能直接保存空字符串，因此读取渠道密钥时不能把空值当成损坏数据。
+  /// 非空值仍走严格解密，避免掩盖真正的密钥损坏。
+  static String decryptOrEmpty(String encrypted) {
+    if (encrypted.isEmpty) return '';
+    return decrypt(encrypted);
+  }
+
+  /// 使用用户口令做端到端加密（如云端备份导出）。
+  ///
+  /// 输出带 `simichat-backup-v1:` magic 前缀，便于错误口令时给出明确提示。
+  static String encryptWithPassword(String plainText, String passphrase) {
+    return '$_backupMagic${_encryptWithKey(plainText, _deriveKey(passphrase))}';
+  }
+
+  /// 使用用户口令解密。口令错误或数据损坏时抛出 [FormatException]。
+  static String decryptWithPassword(String encrypted, String passphrase) {
+    if (!encrypted.startsWith(_backupMagic)) {
+      throw const FormatException('备份口令错误或文件已损坏');
+    }
+    final body = encrypted.substring(_backupMagic.length);
+    return _decryptWithKey(body, _deriveKey(passphrase));
+  }
+
+  static String _encryptWithKey(String plainText, Uint8List key) {
     final iv = _randomBytes(16);
     final cipher = CBCBlockCipher(AESEngine())
       ..init(true, ParametersWithIV(KeyParameter(key), iv));
@@ -27,37 +72,28 @@ class KeyEncryptor {
     return '${base64Encode(iv)}:${base64Encode(output)}';
   }
 
-  /// 解密 API Key（兼容旧的 base64 格式）
-  static String decrypt(String encrypted) {
-    // 新格式: IV:ciphertext (base64:base64)
-    if (encrypted.contains(':') && !encrypted.contains('.')) {
-      final parts = encrypted.split(':');
-      if (parts.length == 2) {
-        try {
-          final iv = base64Decode(parts[0]);
-          final ciphertext = base64Decode(parts[1]);
-          final key = _deriveKey(_passphrase);
-          final cipher = CBCBlockCipher(AESEngine())
-            ..init(false, ParametersWithIV(KeyParameter(key), iv));
-          final output = Uint8List(ciphertext.length);
-          for (var offset = 0; offset < ciphertext.length; offset += 16) {
-            cipher.processBlock(ciphertext, offset, output, offset);
-          }
-          return utf8.decode(_pkcs7Unpad(output));
-        } catch (_) {
-          // Fall through to legacy format
-        }
-      }
+  static String _decryptWithKey(String encrypted, Uint8List key) {
+    final parts = encrypted.split(':');
+    if (parts.length != 2) {
+      throw const FormatException('Invalid encrypted format');
     }
-
-    // 兼容旧格式: base64Encoded.sha256checksum
-    return _decryptLegacy(encrypted);
+    final iv = base64Decode(parts[0]);
+    final ciphertext = base64Decode(parts[1]);
+    final cipher = CBCBlockCipher(AESEngine())
+      ..init(false, ParametersWithIV(KeyParameter(key), iv));
+    final output = Uint8List(ciphertext.length);
+    for (var offset = 0; offset < ciphertext.length; offset += 16) {
+      cipher.processBlock(ciphertext, offset, output, offset);
+    }
+    return utf8.decode(_pkcs7Unpad(output));
   }
 
   /// 旧格式解密（兼容）
   static String _decryptLegacy(String encrypted) {
     final parts = encrypted.split('.');
-    if (parts.length != 2) throw FormatException('Invalid encrypted key format');
+    if (parts.length != 2) {
+      throw FormatException('Invalid encrypted key format');
+    }
     final encoded = parts[0];
     final checksum = parts[1];
     final plainText = utf8.decode(base64Decode(encoded));
@@ -82,7 +118,9 @@ class KeyEncryptor {
 
   static Uint8List _randomBytes(int length) {
     final random = Random.secure();
-    return Uint8List.fromList(List.generate(length, (_) => random.nextInt(256)));
+    return Uint8List.fromList(
+      List.generate(length, (_) => random.nextInt(256)),
+    );
   }
 
   static Uint8List _pkcs7Pad(List<int> data, int blockSize) {

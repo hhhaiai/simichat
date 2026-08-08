@@ -84,12 +84,12 @@ Unhandled Exception: Bad state: Cannot use "ref" after the widget was disposed.
 
 修复：保存页面级 `WidgetRef`，弹窗关闭后用页面级 `ref` 执行 `_runDreaming`。
 
-新增回归测试：`test/shared/settings_page_dreaming_test.dart` 中的 `dreaming dialog run survives closing route before digest returns`，用延迟返回的 `DreamingService` 复现“弹窗先关闭、digest 后返回”的时序。旧代码下测试失败，修复后通过。
+新增回归测试：`test/settings_page_dreaming_test.dart` 中的 `dreaming dialog run survives closing route before digest returns`，用延迟返回的 `DreamingService` 复现“弹窗先关闭、digest 后返回”的时序。旧代码下测试失败，修复后通过。
 
 局部验证：
 
 ```bash
-flutter --no-version-check test --no-pub --no-test-assets test/shared/settings_page_dreaming_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/settings_page_dreaming_test.dart -r expanded
 ```
 
 结果：3 个 widget 测试全部通过。测试命令内临时追加 `sqlite3.source=system` hook，结束后已还原 `pubspec.yaml`。

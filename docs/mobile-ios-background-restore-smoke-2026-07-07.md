@@ -104,7 +104,7 @@ devicectl device install app --device BAD258BF-4E4A-5C40-9701-AEF8CCF43E6D build
 
 ## 本地静态门禁
 
-当前脚本 / harness 已被 `test/core/release_send_smoke_manifest_test.dart` 覆盖：
+当前脚本 / harness 已被 `test/release_send_smoke_manifest_test.dart` 覆盖：
 
 - release-only dart-define。
 - 安装 smoke 包前的 Locked launch 预检。
@@ -119,18 +119,18 @@ devicectl device install app --device BAD258BF-4E4A-5C40-9701-AEF8CCF43E6D build
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/release_send_smoke_manifest_test.dart \
+  test/release_send_smoke_manifest_test.dart \
   --name "iOS release background restore smoke is release-only and restorable"
 bash -n scripts/smoke_ios_release_background_restore.sh
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/release_send_smoke_manifest_test.dart
+  test/release_send_smoke_manifest_test.dart
 ```
 
 结果：
 
 - 红灯阶段目标用例失败于缺少 `assert_device_unlocked_for_launch`。
 - 加固后目标用例通过。
-- 全量 `test/core/release_send_smoke_manifest_test.dart` 7 项通过。
+- 全量 `test/release_send_smoke_manifest_test.dart` 7 项通过。
 
 ## 边界
 

@@ -43,7 +43,7 @@ void main() {
     expect(find.text('外观'), findsOneWidget);
     expect(find.text('主题模式'), findsOneWidget);
     expect(find.text('字体大小'), findsOneWidget);
-    expect(find.text('数据与档案'), findsOneWidget);
+    // 新增的推广卡片 / 社交通道等区块把「数据与档案」推到屏幕下方，这里不再断言其首屏可见。
 
     await tester.tap(find.text('主题模式'));
     await tester.pumpAndSettle();

@@ -15,7 +15,7 @@
 
 ## 回归测试
 
-- `test/core/openai_compatible_relay_server_test.dart`
+- `test/openai_compatible_relay_server_test.dart`
   - `POST /v1/responses streams safe failed event on upstream error`：先输出一个 delta，再模拟上游抛出包含 `sk-test` 和 `/Users/private` 的异常；断言响应包含 `response.failed`、`upstream_error`、`[DONE]`，且不包含敏感字样；审计事件记录 `code=upstream_error`、`stream=true`。
   - `POST /v1/chat/completions streams safe error on upstream failure`：先输出一个 chat delta，再模拟上游抛出包含 `sk-chat` 和 `/Users/private` 的异常；断言响应包含安全 `error` payload、`upstream_error`、`[DONE]`，且不包含敏感字样；审计事件记录 `code=upstream_error`、`stream=true`。
 
@@ -23,10 +23,10 @@
 
 ```bash
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart \
+  test/openai_compatible_relay_server_test.dart \
   --plain-name "POST /v1/chat/completions streams safe error on upstream failure"
 flutter --no-version-check test --no-pub -r expanded \
-  test/core/openai_compatible_relay_server_test.dart
+  test/openai_compatible_relay_server_test.dart
 flutter --no-version-check analyze
 git diff --check
 ```
@@ -36,7 +36,7 @@ git diff --check
 - 红灯：Chat Completions 流式异常用例旧实现只输出到最后一个 delta，缺少安全 `error` payload 和 `[DONE]`。
 - 修复后目标用例通过。
 - 继续补审计断言后，旧实现会把流内失败记录为 `ok`；修复后 Chat Completions 和 Responses 两条流式失败路径的审计 `code` 都是 `upstream_error`。
-- 当前 `test/core/openai_compatible_relay_server_test.dart` 全文件 25 项通过。
+- 当前 `test/openai_compatible_relay_server_test.dart` 全文件 25 项通过。
 
 ## 边界
 

@@ -4,11 +4,13 @@ import 'dart:io';
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/attachments/attachment_policy.dart';
 import '../../core/archive/markdown_conversation_archive.dart';
 import '../../core/ai/ai_protocol.dart' as ai;
+import '../../core/ai/image_generation_service.dart';
 import '../../core/ai/model_switch_record.dart';
 import '../../core/ai/openai_chat_protocol.dart' as ai_openai_chat;
 import '../../core/ai/ai_service.dart';
@@ -26,11 +28,16 @@ import '../../core/media/native_speech_to_text_engine.dart';
 import '../../core/media/openai_speech_to_text_engine.dart';
 import '../../core/memory/key_point_memory.dart';
 import '../../core/memory/reflection_service.dart';
+import '../../core/memory/user_profile.dart';
+import '../../core/twin/persona_profile.dart';
 import '../../core/skills/skill.dart' as skill_model;
 import 'mcp_provider.dart';
+import 'persona_provider.dart';
+import 'user_profile_provider.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../core/database/dao/message_dao.dart';
+import '../../core/database/dao/persona_audit_log_dao.dart';
 import '../../core/database/dao/session_dao.dart';
 import '../../core/notification/notification_service.dart';
 import '../widgets/chat_input_bar.dart' show PendingAttachment;
@@ -38,6 +45,7 @@ import 'audio_transcription_provider.dart';
 import 'channel_provider.dart';
 import 'database_provider.dart';
 import 'conversation_archive_provider.dart';
+import 'image_generation_provider.dart';
 import 'key_point_memory_provider.dart';
 import 'reflection_provider.dart';
 import 'session_provider.dart';
@@ -854,7 +862,7 @@ Future<bool> sendMessage({
   // 解密 API Key
   final String apiKey;
   try {
-    apiKey = KeyEncryptor.decrypt(modelInfo.channel.apiKeyEncrypted);
+    apiKey = KeyEncryptor.decryptOrEmpty(modelInfo.channel.apiKeyEncrypted);
   } catch (e) {
     ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
       isStreaming: false,
@@ -1027,6 +1035,237 @@ Future<bool> sendMessage({
     ),
   );
   return true;
+}
+
+/// 生成图片：插入用户提示词消息，调用 OpenAI 兼容 `/v1/images/generations`，
+/// 把图片保存到应用私有目录，并将结果作为 assistant 消息（含图片附件）插入会话。
+///
+/// 返回 null 表示成功，否则返回用户可读的错误信息（不向上抛出到 UI 层）。
+Future<String?> generateImage({
+  required WidgetRef ref,
+  required String sessionId,
+  required String prompt,
+}) async {
+  final messageDao = ref.read(messageDaoProvider);
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+  final attachmentDao = ref.read(attachmentDaoProvider);
+
+  final trimmedPrompt = prompt.trim();
+  if (trimmedPrompt.isEmpty) return '请输入图片描述';
+
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+
+  final modelId = session.defaultChannelModelId;
+  final modelInfo = modelId == null
+      ? null
+      : await channelDao.getModelWithChannel(modelId);
+  if (modelInfo == null) return '请先选择一个模型';
+  final channel = modelInfo.channel;
+
+  // 1. 插入用户提示词消息，保持与普通发送一致的归档与 token 计数行为。
+  final userMsgId = _uuid.v4();
+  final userTokens = TokenEstimator.estimate(trimmedPrompt);
+  await messageDao.insertMessage(
+    id: userMsgId,
+    sessionId: sessionId,
+    role: 'user',
+    content: trimmedPrompt,
+    tokens: userTokens,
+  );
+  unawaited(
+    _appendConversationArchiveMessage(
+      ref: ref,
+      sessionId: sessionId,
+      sessionTitle: session.title,
+      messageId: userMsgId,
+      role: 'user',
+      content: trimmedPrompt,
+    ),
+  );
+  await sessionDao.updateLastMessageAt(sessionId);
+  await sessionDao.updateTotalTokens(
+    sessionId,
+    session.totalTokens + userTokens,
+  );
+
+  // 2. 调用图片生成服务：复用当前渠道的 Base URL / API Key，模型可配置。
+  final imageConfig = ref.read(imageGenerationConfigProvider);
+  final service = ImageGenerationService(
+    baseUrl: channel.baseUrl,
+    apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
+    model: imageConfig.model,
+  );
+
+  final GeneratedImage generated;
+  try {
+    generated = await service.generate(trimmedPrompt);
+  } catch (e) {
+    ref.invalidate(messagesProvider(sessionId));
+    ref.invalidate(sessionsProvider);
+    return '图片生成失败：$e';
+  }
+
+  // 3. 保存图片并插入 assistant 消息 + 图片附件。
+  try {
+    final root = await getApplicationSupportDirectory();
+    final directory = Directory(p.join(root.path, 'generated_images'));
+    await directory.create(recursive: true);
+    final fileName = 'generated-${DateTime.now().millisecondsSinceEpoch}.png';
+    final file = File(p.join(directory.path, fileName));
+    await file.writeAsBytes(generated.bytes, flush: true);
+
+    final assistantMsgId = _uuid.v4();
+    await messageDao.insertMessage(
+      id: assistantMsgId,
+      sessionId: sessionId,
+      role: 'assistant',
+      content: '已生成图片',
+      tokens: 0,
+      channelModelId: modelId,
+    );
+    await attachmentDao.insertAttachment(
+      id: _uuid.v4(),
+      messageId: assistantMsgId,
+      fileType: 'image',
+      localPath: file.path,
+      fileName: fileName,
+      fileSize: generated.bytes.lengthInBytes,
+    );
+    unawaited(
+      _appendConversationArchiveMessage(
+        ref: ref,
+        sessionId: sessionId,
+        sessionTitle: session.title,
+        messageId: assistantMsgId,
+        role: 'assistant',
+        content: '已生成图片',
+        channelModelId: modelId,
+        attachmentNames: [fileName],
+      ),
+    );
+    await sessionDao.updateLastMessageAt(sessionId);
+  } catch (e) {
+    ref.invalidate(messagesProvider(sessionId));
+    ref.invalidate(sessionsProvider);
+    return '保存生成图片失败：$e';
+  }
+
+  ref.invalidate(messagesProvider(sessionId));
+  ref.invalidate(sessionsProvider);
+  return null;
+}
+
+/// 替身回复：仅当用户显式授权时，用镜像人格 system prompt 为最近一条用户消息生成回复。
+///
+/// 返回 null 表示成功，否则返回用户可读的错误信息。
+Future<String?> generatePersonaReply({
+  required WidgetRef ref,
+  required String sessionId,
+}) async {
+  final auth = ref.read(personaAuthorizationProvider);
+  if (!auth.isAuthorized) {
+    return '替身回复尚未授权，请先在设置 → 数字孪生中显式启用。';
+  }
+
+  final messageDao = ref.read(messageDaoProvider);
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+
+  final modelId = session.defaultChannelModelId;
+  final modelInfo = modelId == null
+      ? null
+      : await channelDao.getModelWithChannel(modelId);
+  if (modelInfo == null) return '请先选择一个模型';
+
+  // 最近一条用户消息。
+  final messages = await messageDao.getMessagesBySession(sessionId);
+  Message? lastUser;
+  for (final message in messages.reversed) {
+    if (message.role == 'user') {
+      lastUser = message;
+      break;
+    }
+  }
+  if (lastUser == null) return '当前没有可替身回复的用户消息';
+
+  // 人格配置（来自本地用户画像）。
+  final profile = ref.read(userProfileProvider);
+  final persona = const PersonaProfileGenerator().fromUserProfile(
+    profile ?? UserProfile.empty(),
+  );
+  if (persona.isEmpty) return '画像信号不足，暂无可生成的人格配置';
+
+  // 上下文：最近若干条消息。
+  final recent = messages.length <= 10
+      ? messages
+      : messages.sublist(messages.length - 10);
+  final contextMessages = recent
+      .map((m) => ai.AiMessage(role: m.role, content: m.content))
+      .toList(growable: false);
+
+  final apiKey = KeyEncryptor.decryptOrEmpty(modelInfo.channel.apiKeyEncrypted);
+  final buffer = StringBuffer();
+  try {
+    await for (final chunk in AiService.sendMessage(
+      protocol: modelInfo.channel.protocol,
+      baseUrl: modelInfo.channel.baseUrl,
+      apiKey: apiKey,
+      model: modelInfo.channelModel.modelName,
+      messages: contextMessages,
+      systemPrompt: persona.buildPersonaSystemPrompt(),
+    )) {
+      final content = chunk.content ?? '';
+      if (content.isNotEmpty) buffer.write(content);
+    }
+  } catch (e) {
+    return '替身回复失败：$e';
+  }
+
+  final reply = buffer.toString().trim();
+  if (reply.isEmpty) return '替身回复未生成有效内容';
+
+  final assistantMsgId = _uuid.v4();
+  await messageDao.insertMessage(
+    id: assistantMsgId,
+    sessionId: sessionId,
+    role: 'assistant',
+    content: reply,
+    tokens: TokenEstimator.estimate(reply),
+    channelModelId: modelId,
+  );
+  unawaited(
+    _appendConversationArchiveMessage(
+      ref: ref,
+      sessionId: sessionId,
+      sessionTitle: session.title,
+      messageId: assistantMsgId,
+      role: 'assistant',
+      content: reply,
+      channelModelId: modelId,
+    ),
+  );
+  await sessionDao.updateLastMessageAt(sessionId);
+
+  // 审计：记录本次替身回复。
+  try {
+    await ref
+        .read(personaAuditLogDaoProvider)
+        .insertLog(
+          eventType: PersonaAuditEventType.personaReply,
+          sessionId: sessionId,
+          messageId: assistantMsgId,
+          summary: '替身回复 ${reply.length} 字符',
+        );
+  } catch (_) {}
+
+  ref.invalidate(messagesProvider(sessionId));
+  ref.invalidate(sessionsProvider);
+  return null;
 }
 
 Future<void> _runAssistantResponse({
@@ -1595,7 +1834,9 @@ Future<void> _generateTitle(
   ChannelModelWithChannel modelInfo,
 ) async {
   try {
-    final apiKey = KeyEncryptor.decrypt(modelInfo.channel.apiKeyEncrypted);
+    final apiKey = KeyEncryptor.decryptOrEmpty(
+      modelInfo.channel.apiKeyEncrypted,
+    );
     final buffer = StringBuffer();
     await for (final chunk in AiService.sendMessage(
       protocol: modelInfo.channel.protocol,

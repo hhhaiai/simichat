@@ -1,0 +1,47 @@
+# 当前验证基线（2026-08-08）
+
+## 结果摘要
+
+| 检查项 | 结果 | 证据 |
+| --- | --- | --- |
+| Dart 静态分析 | 通过 | flutter --no-version-check analyze --no-pub，No issues found |
+| 本地模型专项回归 | 通过 | Ollama 协议、预设、密钥、渠道导入和设置页入口测试共 39 项通过 |
+| 设置页回归 | 通过 | DW Chainless、渠道导入和模型剔除测试共 17 项通过 |
+| 全量 Flutter 单元 / Widget 测试 | 通过 | flutter --no-version-check test --no-pub，660 项通过 |
+| 格式检查 | 通过 | git diff --check 无输出 |
+| 本地模型 smoke 脚本 mock | 通过 | mock HTTP 服务返回 /api/tags、thinking + content NDJSON 和 done=true，脚本输出 LOCAL_OLLAMA_SMOKE_OK |
+| Android debug 构建 | 通过 | flutter --no-version-check build apk --debug，生成 build/app/outputs/flutter-apk/app-debug.apk |
+| 本机真实 Ollama | 未验证 | ollama 命令不存在，127.0.0.1:11434 当前连接被拒绝 |
+
+## 本轮代码验证
+
+本轮将本地模型接入收口为以下事实：
+
+- 设置页可以直接添加 Ollama 渠道，API Key 明确为可选；
+- 旧数据库或手工导入的空 apiKeyEncrypted 不会在聊天、标题、替身回复、设置页模型测试或本地 Bot 路径触发解密异常；
+- Ollama 流式协议保留 thinking 和 content；
+- 模型自动获取链路在 Ollama 反向代理配置 API Key 时也发送 Bearer 鉴权；
+- HTTP 请求有连接 / 空闲超时，取消会关闭 client；
+- 本地模型预设提供 gemma4、qwen3:4b、llama3.2:3b 推荐名称，自动获取模型时 Ollama 默认勾选 gemma4 及其 tag 变体；
+- 新增 scripts/smoke_local_ollama.sh 作为真实服务验证入口。
+
+## 未完成的 runtime 证据
+
+当前机器没有可连接的 Ollama 运行时，因此不能声称以下项目已经在真实本地模型上通过：
+
+- 指定模型权重的首 token / 总响应耗时；
+- 长会话上下文压缩和 Dreaming / Reflection 质量；
+- Android Emulator、Android 真机、iOS Simulator、iOS 真机的网络地址和后台行为；
+- 模型显存 / 内存占用以及并发请求容量。
+
+运行真实验证：
+
+~~~bash
+ollama pull gemma4
+ollama serve
+OLLAMA_MODEL=gemma4 scripts/smoke_local_ollama.sh
+~~~
+
+## 工作树边界
+
+开始本轮前工作树已有一批未提交修改和未跟踪实现文件。本轮没有删除、重置或覆盖这些内容，只在模型稳定性、设置页、本地验证脚本、README 和文档入口上继续修改。最终是否提交、如何拆分 commit、是否整理历史功能文件，仍应在完整审阅 git diff 后单独决定。

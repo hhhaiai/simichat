@@ -9,7 +9,7 @@
 执行内容：
 
 ```bash
-flutter test test/smoke/mobile_main_flow_smoke_test.dart
+flutter test test/mobile_main_flow_smoke_test.dart
 flutter analyze
 ```
 
@@ -38,7 +38,7 @@ flutter analyze
 ## 3. 当前验证结果
 
 - `./scripts/smoke_mobile_main_flow.sh`：通过。
-- `flutter test test/smoke/mobile_main_flow_smoke_test.dart`：`00:03 +3: All tests passed!`。
+- `flutter test test/mobile_main_flow_smoke_test.dart`：`00:03 +3: All tests passed!`。
 - `flutter analyze`：通过，`No issues found!`。
 
 ## 4. 未覆盖风险

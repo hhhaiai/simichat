@@ -25,8 +25,8 @@
 
 2026-07-07 本地验证：
 
-- `flutter --no-version-check test --no-pub --no-test-assets test/core/deep_link_service_test.dart test/core/deep_link_manifest_test.dart`
-- `flutter --no-version-check test --no-pub --no-test-assets test/smoke/mobile_main_flow_smoke_test.dart -r expanded`
+- `flutter --no-version-check test --no-pub --no-test-assets test/deep_link_service_test.dart test/deep_link_manifest_test.dart`
+- `flutter --no-version-check test --no-pub --no-test-assets test/mobile_main_flow_smoke_test.dart -r expanded`
 - `flutter --no-version-check test --no-pub --no-test-assets`
 - `flutter --no-version-check analyze`
 - `git diff --check`

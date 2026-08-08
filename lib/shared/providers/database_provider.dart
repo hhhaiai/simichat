@@ -32,3 +32,6 @@ final mcpDaoProvider = Provider((ref) => ref.watch(databaseProvider).mcpDao);
 final skillDaoProvider = Provider(
   (ref) => ref.watch(databaseProvider).skillDao,
 );
+final personaAuditLogDaoProvider = Provider(
+  (ref) => ref.watch(databaseProvider).personaAuditLogDao,
+);

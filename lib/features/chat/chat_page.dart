@@ -381,6 +381,111 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  /// 替身回复：为最近一条用户消息以镜像人格生成回复。
+  Future<bool> _handlePersonaReply() async {
+    final activeSessionId = ref.read(activeSessionIdProvider);
+    if (activeSessionId == null) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('请先选择或新建一个会话')));
+      return false;
+    }
+    if (_isSubmitting) return false;
+    if (mounted) setState(() => _isSubmitting = true);
+    try {
+      final error = await generatePersonaReply(
+        ref: ref,
+        sessionId: activeSessionId,
+      );
+      if (!mounted) return false;
+      if (error != null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text(error)));
+        return false;
+      }
+      _scheduleScrollToBottom();
+      return true;
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      } else {
+        _isSubmitting = false;
+      }
+    }
+  }
+
+  /// 图片生成：把输入框文本作为提示词调用图片生成，成功后清空输入。
+  Future<bool> _handleGenerateImage(String content) async {
+    if (_isSubmitting) return false;
+    if (!ref.read(isOnlineProvider)) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.fixed,
+            content: Text('当前网络不可用，请联网后重试'),
+          ),
+        );
+      return false;
+    }
+
+    var activeSessionId = ref.read(activeSessionIdProvider);
+    if (mounted) setState(() => _isSubmitting = true);
+
+    try {
+      final resolvedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (resolvedModelId == null) return false;
+
+      activeSessionId ??= await createNewSession(
+        ref,
+        defaultModelId: resolvedModelId,
+      );
+      if (!mounted) return false;
+
+      await ref
+          .read(sessionDaoProvider)
+          .updateDefaultModel(activeSessionId, resolvedModelId);
+
+      final error = await generateImage(
+        ref: ref,
+        sessionId: activeSessionId,
+        prompt: content,
+      );
+      if (!mounted) return false;
+      if (error != null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text(error)));
+        _draftCache[activeSessionId] = content;
+        _inputController.text = content;
+        _inputController.selection = TextSelection.fromPosition(
+          TextPosition(offset: content.length),
+        );
+        _hasTextNotifier.value = true;
+        return false;
+      }
+      _draftCache.remove(activeSessionId);
+      _hasTextNotifier.value = false;
+      setState(() => _pendingModelId = null);
+      _focusNode.requestFocus();
+      _scheduleScrollToBottom();
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('图片生成失败: $e')));
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      } else {
+        _isSubmitting = false;
+      }
+    }
+  }
+
   void _showNetworkRestoredRetryPromptIfCurrentSession() {
     final blockedSessionId = _blockedSendWhileOfflineSessionId;
     if (blockedSessionId == null ||
@@ -758,6 +863,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               isStreaming: streamState.isStreaming,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
+              onGenerateImage: _handleGenerateImage,
+              onPersonaReply: _handlePersonaReply,
               modelSelector: null,
             ),
           ],
@@ -917,6 +1024,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           isStreaming: false,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
+          onGenerateImage: _handleGenerateImage,
+          onPersonaReply: _handlePersonaReply,
           modelSelector: null,
         ),
       ],

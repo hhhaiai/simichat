@@ -74,7 +74,7 @@
 验证：
 
 ```bash
-flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_app_native_transport_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/mcp_app_native_transport_test.dart -r expanded
 flutter --no-version-check analyze --no-pub
 flutter --no-version-check test --no-pub --no-test-assets -r expanded
 ```
@@ -118,13 +118,13 @@ scripts/mcp_runtime_container.sh smoke
 - 新增 `lib/shared/providers/mcp_runtime_provider.dart`：`McpRuntimeController` 管理 PC Node 容器 Runtime 的 `status/start/stop/smoke`，并在移动端明确返回 unsupported 状态，提示移动端使用 App 内建 MCP Runtime；桌面打包时会从 Flutter assets 把 Runtime 脚本 / Dockerfile / Node server 写入应用支持目录后再执行，避免依赖源码仓库路径。
 - 设置页 MCP 区新增“MCP Runtime（内建 / PC 容器）”入口：移动端展示 App 内建边界；PC 端可刷新状态、启动容器、停止容器和运行 smoke。
 - 该入口优先调用开发仓库中的 `scripts/mcp_runtime_container.sh`；打包后使用随 App 资产释放到本机应用支持目录的同一套脚本与容器文件。脚本仍不调用宿主机 `node/npm/npx`；Node MCP 继续走容器侧车 SSE。
-- 新增 `test/core/mcp_runtime_provider_test.dart` 与 `test/shared/settings_page_mcp_runtime_test.dart` 覆盖移动端边界、PC lifecycle 输出解析、失败诊断和设置页可见入口。
+- 新增 `test/mcp_runtime_provider_test.dart` 与 `test/settings_page_mcp_runtime_test.dart` 覆盖移动端边界、PC lifecycle 输出解析、失败诊断和设置页可见入口。
 
 验证：
 
 ```bash
-flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_runtime_provider_test.dart test/shared/settings_page_mcp_runtime_test.dart -r expanded
-flutter --no-version-check test --no-pub test/core/mcp_runtime_container_manifest_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/mcp_runtime_provider_test.dart test/settings_page_mcp_runtime_test.dart -r expanded
+flutter --no-version-check test --no-pub test/mcp_runtime_container_manifest_test.dart -r expanded
 flutter --no-version-check analyze --no-pub
 flutter --no-version-check test --no-pub --no-test-assets -r expanded
 ```
@@ -144,9 +144,9 @@ flutter --no-version-check test --no-pub --no-test-assets -r expanded
 验证：
 
 ```bash
-flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_runtime_container_manifest_test.dart -r expanded
-flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_sse_transport_test.dart -r expanded
-flutter --no-version-check test --no-pub --no-test-assets test/core/mcp_app_native_transport_test.dart test/core/mcp_runtime_container_manifest_test.dart test/core/mcp_sse_transport_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/mcp_runtime_container_manifest_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/mcp_sse_transport_test.dart -r expanded
+flutter --no-version-check test --no-pub --no-test-assets test/mcp_app_native_transport_test.dart test/mcp_runtime_container_manifest_test.dart test/mcp_sse_transport_test.dart -r expanded
 flutter --no-version-check analyze --no-pub
 scripts/mcp_runtime_container.sh smoke
 ```

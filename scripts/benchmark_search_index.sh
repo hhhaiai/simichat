@@ -3,4 +3,4 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-flutter test test/benchmark/search_index_benchmark.dart "$@"
+flutter test test/search_index_benchmark.dart "$@"
