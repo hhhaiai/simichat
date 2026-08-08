@@ -36,6 +36,9 @@ jobs:
       - name: Install Flutter dependencies
         run: flutter pub get
 
+      - name: Generate Dart sources
+        run: dart run build_runner build --delete-conflicting-outputs
+
       - name: Build release APK
         run: flutter build apk --release --no-pub
 
@@ -93,6 +96,9 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
+
+      - name: Generate Dart sources
+        run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Prepare exact bundled Node binary
         env:
