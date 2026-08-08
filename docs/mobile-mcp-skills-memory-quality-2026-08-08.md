@@ -67,7 +67,7 @@
 - `limit <= 0` 的本地搜索直接返回空结果；消息、session、FTS、semantic 查询均归一化结果上限，避免移动端无界读取大量消息。
 - 全局搜索输入增加 generation；清空搜索立即结束 loading；旧查询不会覆盖新查询；页面销毁后异步结果不再 `setState`。
 - 保留 Key Point、SQLite FTS、消息语义搜索、语义搜索开关和索引检查 / 预热 / 修复路径。
-- 设置页移动端本地搜索索引弹窗在窄屏下通过 `DropdownButtonFormField.isExpanded` 收口传输方式选择器，修复 iPhone13 真机发现的右侧 12 px `RenderFlex` 溢出。
+- 设置页移动端 MCP 添加服务器弹窗在窄屏下通过 `DropdownButtonFormField.isExpanded` 收口传输方式选择器，修复 iPhone13 真机发现的右侧 12 px `RenderFlex` 溢出。
 
 ## 3. 真机结果
 
