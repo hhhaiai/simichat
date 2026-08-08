@@ -92,6 +92,8 @@ Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeStart(
   setenv("TMPDIR", cache.c_str(), 1);
   setenv("NODE_PATH", cwd.c_str(), 1);
   setenv("MCP_RUNTIME_HOST", "127.0.0.1", 1);
+  const std::string extension_root = cwd + "/..";
+  setenv("MCP_RUNTIME_EXTENSION_ROOT", extension_root.c_str(), 1);
   setenv("SIMICHAT_NODE_RUNTIME_KIND", "android-embedded", 1);
   setenv("SIMICHAT_NODE_APP_MANAGED", "true", 1);
 

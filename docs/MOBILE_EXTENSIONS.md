@@ -22,10 +22,10 @@ SimiChat 的移动端扩展不是一个任意 npm / npx 安装器，而是 App �
 | 类型 | Android | iOS | 当前执行方式 |
 | --- | --- | --- | --- |
 | App Native MCP | 支持并可直接连接 | 支持并可直接连接 | Flutter / Dart 内建 handler |
-| `runtime=node-mobile` 纯 JS MCP | 已有 Android bundled Node 基础；安装包协议已接入 | 包可以校验并安装；iOS NodeMobile bridge 尚待纳入发布构建 | App-owned Node runtime |
+| `runtime=node-mobile` 纯 JS MCP | APK 内置 Node，支持纯 JS 包安装、注册和 SSE | App 内置 NodeMobile framework，支持纯 JS 包安装、注册和 SSE | App-owned Node runtime |
 | Markdown Skill | 支持 | 支持 | Dart 读取并注入 system prompt |
 | Declarative Agent | 支持 | 支持 | Dart 编排；默认模型 `gemma4` |
-| `stdio` / `npx` MCP | 不支持 | 不支持 | 转为 App Native、bundled Node、远程 SSE 或 PC |
+| `stdio` / `npx` MCP | 已审核包转为 in-process adapter；未知包拒绝 | 已审核包转为 in-process adapter；未知包拒绝 | 不启动 stdio / npx 进程 |
 | native addon / 下载二进制 | 不支持动态安装 | 不支持动态安装 | 构建时集成，不能由包引入 |
 
 这份文档区分“包已安装”和“运行时已连接”。安装成功不等于任意 MCP 已经具备可用执行端点。
@@ -194,11 +194,17 @@ Agent 是声明式配置，不是下载执行文件。`agent.json` 可以声明�
 
 #### Bundled Node MCP
 
-Android 已有 APK 内置 `libnode.so`、JNI bridge、health、SSE 和重试生命周期；PC 使用随包 Node binary。这个运行时不调用宿主机 `node` / `npx` / Docker / Podman。纯 JS MCP 包可以被 installer 校验和写入 App sandbox，但要连接它，平台适配器还必须把安装目录和 entry 交给 bundled Node endpoint。
+Android 已有 APK 内置 `libnode.so`、JNI bridge、health、SSE 和重试生命周期；
+PC 使用随包 Node binary；iOS 使用随 App 发布的 `NodeMobile.xcframework` 和
+Swift / Objective-C++ bridge。这个运行时不调用宿主机 `node` / `npx` / Docker /
+Podman。纯 JS MCP 包会由 installer 校验并写入 App sandbox，随后将安装目录、entry、
+协议、SHA-256 和 permissions 交给 bundled Node endpoint。
 
 #### iOS
 
-iOS 的 Skills、声明式 Agents 和 App Native MCP 不依赖 Node，可以直接安装和运行。iOS 纯 JS MCP 的包协议已经统一，但当前仓库还没有随 App 发布的 `NodeMobile.framework` / iOS `libnode` bridge，因此不能把“安装成功”写成“iOS 纯 JS MCP 已真机运行”。在引入并审核 `NodeMobile.framework` 前，iOS 上的第三方 Node MCP 应使用远程 SSE / Streamable HTTP 或 App Native handler。
+iOS 的 Skills、声明式 Agents 和 App Native MCP 不依赖 Node，可以直接安装和运行。
+纯 JS MCP 通过 App 内置 `NodeMobile.xcframework` 运行，Node server 与 Flutter
+通过 `127.0.0.1` SSE 连接；不要求 iOS 外部 node、npx、shell、Docker 或网络服务。
 
 ## 5. 失败与恢复验收
 
@@ -216,10 +222,19 @@ DEVICE_ID=<android-device-id> ./scripts/smoke_device_mobile_extensions.sh
 DEVICE_ID=<ios-device-id> ./scripts/smoke_device_mobile_extensions.sh
 ```
 
-当前真机入口为 `integration_test/mobile_extensions_real_smoke_test.dart`，覆盖
-Skill SHA-256、启用、Agent `gemma4` plan、App Native MCP `initialize` /
-`tools/list` / `tools/call` 和 Agent 卸载；它不代表 iOS `node-mobile` framework
-已经完成。
+当前真机入口为 `integration_test/mobile_extensions_real_smoke_test.dart` 与
+`integration_test/mobile_node_mcp_real_smoke_test.dart`，覆盖 Skill SHA-256、
+启用、Agent `gemma4` plan、App Native MCP `initialize` / `tools/list` /
+`tools/call`、Agent 卸载，以及纯 JS `mobile-mcp-v1`、`stdio-compat-v1` 和
+legacy npx in-process adapter。
+
+纯 JS / 兼容层真机 marker：
+
+```text
+SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY
+SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY
+SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY
+```
 
 必须覆盖：
 
@@ -243,7 +258,8 @@ iPhone:         install Skill / Agent / App Native MCP / initialize / tools/list
 
 ## 6. 不支持的设计
 
-以下路径明确拒绝或转移，不作为移动端直接安装能力：
+以下路径明确拒绝或转移，不作为移动端直接安装能力；只有已审核 adapter 才会保留
+对应 MCP 的工具语义：
 
 ```text
 npm install 任意依赖

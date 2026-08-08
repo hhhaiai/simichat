@@ -12,6 +12,7 @@ import workmanager_apple
   private var nativeSpeechToTextChannel: FlutterMethodChannel?
   private var deepLinkChannel: FlutterMethodChannel?
   private var backgroundRefreshStatusChannel: FlutterMethodChannel?
+  private var nodeRuntime: SimiChatNodeRuntime?
   private var pendingInitialDeepLink: String?
   private var audioRecorder: AVAudioRecorder?
   private var audioPlayer: AVAudioPlayer?
@@ -56,6 +57,24 @@ import workmanager_apple
     registerNativeSpeechToTextChannel(messenger: messenger)
     registerDeepLinkChannel(messenger: messenger)
     registerBackgroundRefreshStatusChannel(messenger: messenger)
+    registerNodeRuntimeChannel(messenger: messenger)
+  }
+
+  private func registerNodeRuntimeChannel(messenger: FlutterBinaryMessenger) {
+    let runtime = SimiChatNodeRuntime()
+    nodeRuntime = runtime
+    let channel = FlutterMethodChannel(
+      name: SimiChatNodeRuntime.channel,
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "start": result(runtime.start())
+      case "status": result(runtime.status())
+      case "stop": result(runtime.stop())
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
   }
 
   @discardableResult

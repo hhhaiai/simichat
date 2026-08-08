@@ -24,7 +24,7 @@
       "healthUrl": "http://127.0.0.1:37651/health",
       "mobileReady": true,
       "desktopReady": true,
-      "iosReady": false,
+      "iosReady": true,
       "requiresHostNode": false,
       "requiresHostNpx": false,
       "requiresDocker": false,
@@ -64,10 +64,21 @@
             "-Wl,-z,common-page-size=16384"
           ],
           "elfLoadAlignmentBytes": 16384
-        }
+        },
+        "iosRuntime": "nodejs-mobile",
+        "iosVersion": "18.20.4",
+        "iosFramework": "ios/Runner/NodeRuntime/NodeMobile.xcframework",
+        "iosSourceRevision": "959b6e8637c86fb1f63f1aaf72adc86c7e8c335d",
+        "iosMinimumVersion": "13.0",
+        "iosSupportedSlices": [
+          "ios-arm64",
+          "ios-arm64_x86_64-simulator"
+        ],
+        "iosBuildScript": "scripts/prepare_ios_node_mobile.sh"
       },
       "verification": {
         "androidPixel8": "runtime_verified",
+        "iosIphone13": "runtime_verified",
         "desktopBundledProcessSmoke": "runtime_verified",
         "desktopFlutterApp": "runtime_verified; Flutter test emitted SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY"
       },

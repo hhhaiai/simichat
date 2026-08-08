@@ -57,11 +57,6 @@ class BundledNodeRuntime {
 
   static Future<Map<String, dynamic>> status() async {
     if (isMobile) {
-      if (!Platform.isAndroid) {
-        return _unsupported(
-          'iOS uses App Native MCP; Node runtime is Android/PC only',
-        );
-      }
       try {
         final response = await kBundledNodeRuntimeChannel
             .invokeMapMethod<String, dynamic>('status');
@@ -94,11 +89,6 @@ class BundledNodeRuntime {
 
   static Future<Map<String, dynamic>> stop() async {
     if (isMobile) {
-      if (!Platform.isAndroid) {
-        return _unsupported(
-          'iOS uses App Native MCP; Node runtime is Android/PC only',
-        );
-      }
       try {
         final response = await kBundledNodeRuntimeChannel
             .invokeMapMethod<String, dynamic>('stop');
@@ -122,11 +112,6 @@ class BundledNodeRuntime {
 
   static Future<Map<String, dynamic>> _startInternal() async {
     if (isMobile) {
-      if (!Platform.isAndroid) {
-        return _unsupported(
-          'iOS uses App Native MCP; Node runtime is Android/PC only',
-        );
-      }
       Object? lastError;
       Map<String, dynamic>? lastInfo;
       for (var attempt = 1; attempt <= _maxStartAttempts; attempt++) {
@@ -223,6 +208,7 @@ class BundledNodeRuntime {
         'MCP_RUNTIME_HOST': '127.0.0.1',
         'MCP_RUNTIME_PORT': '37651',
         'MCP_RUNTIME_WORKSPACE_ROOT': runtimeRoot.path,
+        'MCP_RUNTIME_EXTENSION_ROOT': runtimeRoot.parent.path,
         'SIMICHAT_NODE_RUNTIME_KIND': 'desktop-bundled',
         'SIMICHAT_NODE_APP_MANAGED': 'true',
       },
@@ -296,6 +282,97 @@ class BundledNodeRuntime {
     throw TimeoutException(
       'Bundled Node runtime health check failed: $lastError',
     );
+  }
+
+  /// Loads one verified, pure-JavaScript MCP package into the already running
+  /// Node Mobile/desktop runtime. Registration is an in-process adapter; it
+  /// never starts `node`, `npm`, `npx`, a shell, or a child process.
+  static Future<Map<String, dynamic>> registerExtension({
+    required String id,
+    required String root,
+    required String entry,
+    required String protocol,
+    required String sha256,
+    List<String> permissions = const <String>[],
+  }) async {
+    final runtime = await start();
+    if (runtime['running'] != true) {
+      throw StateError('Bundled Node runtime is not running: $runtime');
+    }
+    return _postRuntimeJson('/runtime/extensions/register', <String, dynamic>{
+      'id': id,
+      'root': root,
+      'entry': entry,
+      'protocol': protocol,
+      'sha256': sha256,
+      'permissions': permissions,
+    });
+  }
+
+  static String extensionSseUrl(String id) =>
+      'http://127.0.0.1:37651/mcp/sse/$id';
+
+  static Future<Map<String, dynamic>> unregisterExtension(String id) {
+    return _postRuntimeJson('/runtime/extensions/unregister', <String, dynamic>{
+      'id': id,
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> extensionStatus() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client.getUrl(
+        Uri.parse('http://127.0.0.1:37651/runtime/extensions/status'),
+      );
+      final response = await request.close().timeout(
+        const Duration(seconds: 5),
+      );
+      final body = await utf8.decoder.bind(response).join();
+      if (response.statusCode != 200) {
+        throw StateError(
+          'Node runtime extension status failed: HTTP ${response.statusCode}',
+        );
+      }
+      final decoded = jsonDecode(body);
+      final raw = decoded is Map ? decoded['extensions'] : null;
+      if (raw is! List) return const <Map<String, dynamic>>[];
+      return raw
+          .whereType<Map>()
+          .map((item) => item.cast<String, dynamic>())
+          .toList(growable: false);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<Map<String, dynamic>> _postRuntimeJson(
+    String path,
+    Map<String, dynamic> payload,
+  ) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client.postUrl(
+        Uri.parse('http://127.0.0.1:37651$path'),
+      );
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode(payload));
+      final response = await request.close().timeout(
+        const Duration(seconds: 15),
+      );
+      final body = await utf8.decoder.bind(response).join();
+      final decoded = body.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final message = decoded is Map ? decoded['error'] : decoded;
+        throw StateError('Node runtime extension request failed: $message');
+      }
+      return decoded is Map
+          ? decoded.cast<String, dynamic>()
+          : <String, dynamic>{'value': decoded};
+    } finally {
+      client.close(force: true);
+    }
   }
 
   static Future<Directory> _runtimeRoot() async {

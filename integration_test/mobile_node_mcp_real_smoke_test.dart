@@ -1,0 +1,180 @@
+import 'dart:convert';
+
+import 'package:ai_chat_app/core/extensions/mobile_extension_installer.dart';
+import 'package:ai_chat_app/core/extensions/mobile_extension_manifest.dart';
+import 'package:ai_chat_app/core/extensions/mobile_extension_service.dart';
+import 'package:ai_chat_app/core/mcp/bundled_node_runtime.dart';
+import 'package:ai_chat_app/core/mcp/mcp_client.dart';
+import 'package:ai_chat_app/core/mcp/mobile_npx_resolver.dart';
+import 'package:crypto/crypto.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('pure JS node-mobile MCP runs on the device', (tester) async {
+    final installer = MobileExtensionInstaller();
+    addTearDown(installer.dispose);
+    final service = MobileExtensionService(installer);
+    const id = 'device-node-mobile-smoke';
+    final package = _package();
+    final installed = await service.installBytes(package.toBytes());
+    addTearDown(() => service.uninstall(id));
+
+    final descriptor = installed.mcp!;
+    expect(descriptor.isNodeMobile, isTrue);
+    expect(descriptor.protocol, 'mobile-mcp-v1');
+
+    final runtime = await BundledNodeRuntime.start();
+    expect(runtime['running'], isTrue);
+    final registration = await BundledNodeRuntime.registerExtension(
+      id: descriptor.id,
+      root: descriptor.installPath,
+      entry: descriptor.entry,
+      protocol: descriptor.protocol!,
+      sha256: descriptor.sha256,
+      permissions: descriptor.permissions,
+    );
+    expect(registration['loaded'], isTrue);
+
+    final client = McpClient(
+      name: 'device-node-mobile-smoke',
+      transport: SseTransport(
+        url: BundledNodeRuntime.extensionSseUrl(descriptor.id),
+      ),
+    );
+    addTearDown(() async {
+      await client.dispose();
+      await BundledNodeRuntime.unregisterExtension(id);
+    });
+    await client.initialize();
+    expect(client.tools.map((tool) => tool.name), contains('smoke.echo'));
+    final result = await client.callTool('smoke.echo', {'text': 'device'});
+    expect(result.isError, isFalse);
+    expect(result.content.single.text, contains('device'));
+    // ignore: avoid_print
+    print('SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('stdio-compat-v1 MCP runs without a stdio process', (
+    tester,
+  ) async {
+    final installer = MobileExtensionInstaller();
+    addTearDown(installer.dispose);
+    final service = MobileExtensionService(installer);
+    const id = 'device-stdio-compat-smoke';
+    final installed = await service.installBytes(
+      _package(id: id, protocol: 'stdio-compat-v1').toBytes(),
+    );
+    addTearDown(() => service.uninstall(id));
+
+    final descriptor = installed.mcp!;
+    expect(descriptor.isNodeMobile, isTrue);
+    expect(descriptor.protocol, 'stdio-compat-v1');
+
+    final runtime = await BundledNodeRuntime.start();
+    expect(runtime['running'], isTrue);
+    final registration = await BundledNodeRuntime.registerExtension(
+      id: descriptor.id,
+      root: descriptor.installPath,
+      entry: descriptor.entry,
+      protocol: descriptor.protocol!,
+      sha256: descriptor.sha256,
+      permissions: descriptor.permissions,
+    );
+    expect(registration['protocol'], 'stdio-compat-v1');
+
+    final client = McpClient(
+      name: id,
+      transport: SseTransport(
+        url: BundledNodeRuntime.extensionSseUrl(descriptor.id),
+      ),
+    );
+    addTearDown(() async {
+      await client.dispose();
+      await BundledNodeRuntime.unregisterExtension(id);
+    });
+    await client.initialize();
+    expect(client.tools.map((tool) => tool.name), contains('smoke.echo'));
+    final result = await client.callTool('smoke.echo', {
+      'text': 'stdio-compat',
+    });
+    expect(result.isError, isFalse);
+    expect(result.content.single.text, contains('stdio-compat'));
+    // ignore: avoid_print
+    print('SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('legacy npx MCP resolves to the mobile in-process adapter', (
+    tester,
+  ) async {
+    final resolution = MobileNpxResolver.resolve(
+      command: 'npx',
+      args: const ['--yes', '@modelcontextprotocol/server-time@latest'],
+    );
+    expect(resolution?.profile, 'time');
+    final client = McpClient(
+      name: 'mobile-npx-time-smoke',
+      transport: AppNativeMcpTransport(
+        serverId: 'mobile-npx:${resolution!.packageName}',
+        profile: resolution.profile,
+      ),
+    );
+    addTearDown(client.dispose);
+    await client.initialize();
+    expect(client.tools.map((tool) => tool.name), contains('simichat.now'));
+    final result = await client.callTool('simichat.now', const {});
+    expect(result.isError, isFalse);
+    // ignore: avoid_print
+    print('SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY');
+    expect(tester.takeException(), isNull);
+  });
+}
+
+MobileExtensionPackage _package({
+  String id = 'device-node-mobile-smoke',
+  String protocol = 'mobile-mcp-v1',
+}) {
+  const source = '''
+export default {
+  async initialize(context) {
+    return {
+      protocolVersion: context.protocolVersion,
+      capabilities: { tools: {} },
+      serverInfo: { name: 'device-node-mobile-smoke', version: '1.0.0' }
+    };
+  },
+  async listTools() {
+    return {
+      tools: [{
+        name: 'smoke.echo',
+        description: 'Pure JavaScript device smoke tool',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } } }
+      }]
+    };
+  },
+  async callTool(name, args) {
+    if (name !== 'smoke.echo') throw new Error('unknown tool');
+    return { content: [{ type: 'text', text: String(args.text || '') }], isError: false };
+  }
+};
+''';
+  final bytes = utf8.encode(source);
+  return MobileExtensionPackage(
+    manifest: MobileExtensionManifest(
+      id: id,
+      version: '1.0.0',
+      type: MobileExtensionType.mcp,
+      entry: 'index.mjs',
+      sha256: sha256.convert(bytes).toString(),
+      sizeBytes: bytes.length,
+      runtime: MobileExtensionRuntime.nodeMobile,
+      protocol: protocol,
+      permissions: const [],
+    ),
+    files: {'index.mjs': bytes},
+  );
+}

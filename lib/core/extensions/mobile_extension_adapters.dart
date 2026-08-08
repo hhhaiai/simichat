@@ -41,6 +41,8 @@ class MobileMcpInstallDescriptor {
     required this.runtime,
     required this.entry,
     required this.installPath,
+    required this.sha256,
+    this.protocol,
     this.transport,
     this.serverId,
     this.permissions = const <String>[],
@@ -52,6 +54,8 @@ class MobileMcpInstallDescriptor {
   final MobileExtensionRuntime runtime;
   final String entry;
   final String installPath;
+  final String sha256;
+  final String? protocol;
   final String? transport;
   final String? serverId;
   final List<String> permissions;
@@ -73,6 +77,8 @@ class MobileMcpInstallDescriptor {
       runtime: manifest.runtime,
       entry: manifest.entry,
       installPath: result.record.installPath,
+      sha256: manifest.sha256,
+      protocol: manifest.protocol,
       transport: manifest.mcpTransport,
       serverId: manifest.mcpServerId,
       permissions: manifest.permissions,
@@ -86,6 +92,8 @@ class MobileMcpInstallDescriptor {
     'runtime': runtime.wireName,
     'entry': entry,
     'installPath': installPath,
+    'sha256': sha256,
+    if (protocol != null) 'protocol': protocol,
     if (transport != null) 'transport': transport,
     if (serverId != null) 'serverId': serverId,
     'permissions': permissions,

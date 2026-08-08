@@ -125,7 +125,10 @@ void main() {
 
     expect(item.transport, 'sse');
     expect(item.url, 'http://127.0.0.1:37651/mcp/sse/simichat-node');
-    expect(item.description, contains('Android / PC App 随包提供 Node.js Runtime'));
+    expect(
+      item.description,
+      contains('Android / iOS / PC App 随包提供 Node.js Runtime'),
+    );
     expect(item.description, contains('不依赖宿主机 node'));
   });
 
@@ -260,7 +263,7 @@ void main() {
     expect(bundled['runtime'], 'node-bundled');
     expect(bundled['mobileReady'], isTrue);
     expect(bundled['desktopReady'], isTrue);
-    expect(bundled['iosReady'], isFalse);
+    expect(bundled['iosReady'], isTrue);
     expect(bundled['requiresHostNode'], isFalse);
     expect(bundled['requiresHostNpx'], isFalse);
     expect(bundled['requiresDocker'], isFalse);
@@ -269,6 +272,17 @@ void main() {
     expect(bundle['desktopManifest'], 'tools/node_runtime/manifest.json');
     expect(bundle['androidAbi'], 'arm64-v8a');
     expect(bundle['androidAbis'], ['arm64-v8a']);
+    expect(bundle['iosRuntime'], 'nodejs-mobile');
+    expect(bundle['iosVersion'], '18.20.4');
+    expect(
+      bundle['iosFramework'],
+      'ios/Runner/NodeRuntime/NodeMobile.xcframework',
+    );
+    expect(bundle['iosMinimumVersion'], '13.0');
+    expect(bundle['iosSupportedSlices'], [
+      'ios-arm64',
+      'ios-arm64_x86_64-simulator',
+    ]);
     final pageSize = bundle['androidPageSize'] as Map<String, dynamic>;
     expect(pageSize['requiredBytes'], 16384);
     expect(pageSize['elfLoadAlignment'], 'verified');

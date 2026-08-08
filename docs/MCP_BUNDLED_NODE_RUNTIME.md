@@ -2,7 +2,7 @@
 
 ## 1. 目标与边界
 
-`simichat-node-bundled` 是 Android / PC App 内置的 Node MCP 路径。它把
+`simichat-node-bundled` 是 Android / iOS / PC App 内置的 Node MCP 路径。它把
 Node Runtime 和 MCP server 脚本随应用一起交付，应用启动 MCP 时由自身负责
 准备、启动、健康检查和连接，不依赖用户机器预装的：
 
@@ -17,6 +17,7 @@ Node Runtime 和 MCP server 脚本随应用一起交付，应用启动 MCP 时�
 | 平台 | 实现 | 进程边界 | 当前支持范围 |
 | --- | --- | --- | --- |
 | Android | `nodejs-mobile v18.20.4` 的 `libnode.so` + JNI bridge | Node event loop 在 App 进程内 | `arm64-v8a`；Pixel 8 真机已验证 |
+| iOS | `NodeMobile.xcframework`（`nodejs-mobile v18.20.4`）+ Swift / Objective-C++ bridge | Node event loop 在 App 进程内 | `ios-arm64`、`ios-arm64_x86_64-simulator`；iPhone13 真机已验证 |
 | macOS / Linux / Windows | 官方 Node executable 随 App 资源分发，由 Dart controller 启动 | App 管理的本地子进程 | 构建脚本已支持六个平台；macOS Flutter App integration 已验证，Linux / Windows 仍需各自发布包验收 |
 
 PC 的 `externalProcess=true` 只表示 Node 是 App 管理的本地子进程，不表示
@@ -36,6 +37,7 @@ McpManager
             ├─ Android: MethodChannel
             │    └─ SimiChatNodeRuntime.kt
             │         └─ JNI -> libnode.so -> runtime-server.mjs
+            ├─ iOS: NodeMobile.xcframework -> runtime-server.mjs
             └─ PC: Process.start(<bundled node>, <runtime-server.mjs>)
                  └─ localhost SSE /health + /mcp/sse/simichat-node
 ```
@@ -167,9 +169,46 @@ ZIPALIGN=/path/to/android-sdk/build-tools/35.0.1/zipalign \
 两者均已由 source / release APK 证据验证，仍不能把静态 APK 证据外推成 16 KB 真机
 长时运行证据。
 
-## 4. PC 实现
+## 4. iOS 实现
 
-### 4.1 构建前准备
+### 4.1 发布 framework
+
+iOS 不查找宿主机 `node`，而是将固定源码构建为发布构件：
+
+```bash
+SIMICHAT_NODE_MOBILE_SOURCE=/path/to/nodejs-mobile-18.20.4 \
+  ./scripts/prepare_ios_node_mobile.sh
+```
+
+脚本在隔离复制目录中构建 device / simulator slices，应用 nodejs-mobile
+v18.20.4 在新 Xcode SDK 下的 V8 `mach_vm.h` 兼容 patch，然后生成：
+
+```text
+ios/Runner/NodeRuntime/NodeMobile.xcframework
+```
+
+`Info.plist` 必须包含 `ios-arm64` 与 `ios-arm64_x86_64-simulator`，Xcode project
+同时负责 link、embed、CodeSignOnCopy。构建结果不能由 source checkout 或
+单独的静态库文件代替。
+
+### 4.2 iOS 运行时边界
+
+`SimiChatNodeRuntime.swift` 在 App 私有队列调用 Objective-C++ wrapper 的
+`node_start`，向内置 Node 设置 `MCP_RUNTIME_*` 环境变量，并把 Flutter asset
+中的 `runtime-server.mjs` 复制到 Application Support。Flutter 只连接 loopback
+health / SSE；不会创建 iOS 外部进程，也不会使用 npx / shell / Docker。
+
+当前 iPhone13 真机 smoke 需要同时看到：
+
+```text
+SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY
+SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY
+SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY
+```
+
+## 5. PC 实现
+
+### 5.1 构建前准备
 
 PC binary 不从 PATH 查找，也不会在运行时自动下载。构建前必须按目标平台
 执行：
@@ -226,7 +265,7 @@ binary 缺失时由 Xcode phase 直接失败；Linux / Windows CMake 配置在 b
 缺失时直接失败。App 运行时同样只接受明确的 bundled path，若缺失会报错
 “找不到随应用分发的 Node runtime”，不会静默回退宿主机 `node`。
 
-### 4.2 PC 运行时查找顺序
+### 5.2 PC 运行时查找顺序
 
 `lib/core/mcp/bundled_node_runtime.dart` 只查找明确的 bundled path：
 
@@ -238,7 +277,7 @@ binary 缺失时由 Xcode phase 直接失败；Linux / Windows CMake 配置在 b
 
 其中没有 `command -v node`、`npm`、`npx`、Docker 或 Podman fallback。
 
-### 4.3 PC host-side smoke
+### 5.3 PC host-side smoke
 
 在已有 bundled binary 的开发机上可以运行：
 
@@ -265,7 +304,7 @@ server → SSE → MCP tool 的真实进程链路。随后 macOS Flutter App int
 `Failed to foreground app; open returned 1` 的工具层提示，但测试进程和 runtime
 链路均完成，未观察到 MCP failure。
 
-## 5. Marketplace 与配置
+## 6. Marketplace 与配置
 
 市场条目：
 
@@ -277,7 +316,8 @@ url: http://127.0.0.1:37651/mcp/sse/simichat-node
 
 `McpManager.connectServer` 发现该 `marketplaceId` 后，先启动
 `BundledNodeRuntime`，再创建 SSE client。普通第三方 `stdio` 条目不会自动
-变成 bundled runtime，也不会在移动端被错误启动。
+变成 bundled runtime，也不会在移动端被错误启动；legacy `stdio` / `npx` 只有命中
+已审核的 in-process adapter 才会连接。
 
 对应配置示例：
 
@@ -287,13 +327,13 @@ docs/runtime-manifest.example.json
 
 三条路径的边界：
 
-| 路径 | Android | PC | 宿主机 Node | Docker / Podman |
-| --- | ---: | ---: | ---: | ---: |
-| `simichat-local` App Native | 是 | 是 | 否 | 否 |
-| `simichat-node-bundled` | arm64 已验证 | macOS App integration 已验证；Linux / Windows 待补 | 否 | 否 |
-| `simichat-node-container` | 否 | 可选侧车 | 否 | 是 |
+| 路径 | Android | iOS | PC | 宿主机 Node | Docker / Podman |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `simichat-local` App Native | 是 | 是 | 是 | 否 | 否 |
+| `simichat-node-bundled` | arm64 已验证 | iPhone13 已验证 | macOS App integration 已验证；Linux / Windows 待补 | 否 | 否 |
+| `simichat-node-container` | 否 | 否 | 可选侧车 | 否 | 是 |
 
-## 6. 当前真实证明矩阵
+## 7. 当前真实证明矩阵
 
 | 证据 | 结果 | 说明 |
 | --- | --- | --- |
@@ -301,6 +341,8 @@ docs/runtime-manifest.example.json
 | MCP manifest / provider 单测 | PASS | 只证明 source/config/test boundary |
 | Android debug APK | PASS | APK 含 `libnode.so`、JNI bridge、`libc++_shared.so`、server asset |
 | Pixel 8 真机 | PASS | initialize、tools/list、runtime_info、echo 均由 APK 内 Node 完成 |
+| iOS NodeMobile.xcframework | PASS | device arm64、arm64 simulator、x86_64 simulator 已组装；最终 App 包含已 link/embed 的 framework |
+| iPhone13 真机 | PASS | pure JS、stdio-compat-v1、legacy npx adapter 的 initialize / tools/list / tools/call marker 全部通过 |
 | PC bundled Node host process | PASS | exact bundled path 的真实 Node / SSE / tool smoke |
 | PC Flutter App integration | PASS | macOS App test 完成 bundled Node、MCP initialize、tools/list、runtime_info；输出 `SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY` |
 | PC 六平台发布包 | UNVERIFIED | 当前机器未逐个平台生成和启动发布产物 |
@@ -312,17 +354,22 @@ Pixel 8 真机命令：
 
 ```bash
 flutter --no-version-check test \
-  integration_test/mobile_bundled_node_mcp_real_smoke_test.dart \
+  integration_test/mobile_node_mcp_real_smoke_test.dart \
   -d 37101FDJH0077P --no-pub -r expanded
+flutter --no-version-check test \
+  integration_test/mobile_node_mcp_real_smoke_test.dart \
+  -d 00008110-0016349A3A20A01E --no-pub -r expanded
 ```
 
 预期 marker：
 
 ```text
-SIMICHAT_ANDROID_BUNDLED_NODE_MCP_READY
+SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY
+SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY
+SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY
 ```
 
-## 7. 发布前门禁
+## 8. 发布前门禁
 
 ### Android
 
@@ -331,7 +378,7 @@ flutter --no-version-check analyze --no-pub
 flutter --no-version-check build apk --debug --no-pub
 flutter --no-version-check build apk --release --no-pub
 flutter --no-version-check test \
-  integration_test/mobile_bundled_node_mcp_real_smoke_test.dart \
+  integration_test/mobile_node_mcp_real_smoke_test.dart \
   -d <android-device-id> --no-pub -r expanded
 unzip -l build/app/outputs/flutter-apk/app-debug.apk \
   | grep -E 'libnode|libsimichat_node_bridge|libc\+\+_shared|runtime-server'
@@ -340,6 +387,20 @@ ZIPALIGN=/path/to/android-sdk/build-tools/35.0.1/zipalign \
   ./scripts/verify_android_native_16k.sh \
   build/app/outputs/flutter-apk/app-release.apk
 ```
+
+### iOS
+
+```bash
+SIMICHAT_NODE_MOBILE_SOURCE=/path/to/nodejs-mobile-18.20.4 \
+  ./scripts/prepare_ios_node_mobile.sh
+xcodebuild -project ios/Runner.xcodeproj -list
+flutter build ios --debug --no-pub
+DEVICE_ID=<ios-device-id> ./scripts/smoke_device_mobile_extensions.sh
+```
+
+发布前必须同时确认 `NodeMobile.xcframework/Info.plist`、device / simulator
+slices、最终 App 中的 embedded framework，以及 iPhone 真机三个 marker；
+只生成 framework 或只通过 Xcode link 不能替代 Node health、SSE 和 MCP tool call。
 
 ### PC
 

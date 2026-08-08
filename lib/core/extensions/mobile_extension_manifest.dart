@@ -53,6 +53,12 @@ const kMobileExtensionPermissions = <String>{
   'mcp.call',
 };
 
+/// Protocol contracts implemented by a JavaScript MCP package.  These are
+/// deliberately explicit: a package that only has an npm CLI entry point is
+/// not automatically runnable on a phone.  It must be adapted to one of the
+/// in-process contracts and ship all of its JavaScript dependencies.
+const kMobileMcpProtocols = <String>{'mobile-mcp-v1', 'stdio-compat-v1'};
+
 const kMobileExtensionIdPattern = r'^[a-z0-9][a-z0-9._-]{1,127}$';
 final _mobileExtensionIdPattern = RegExp(kMobileExtensionIdPattern);
 final _sha256Pattern = RegExp(r'^[a-f0-9]{64}$');
@@ -85,6 +91,7 @@ class MobileExtensionManifest {
     this.description,
     this.nativeAddon = false,
     this.permissions = const <String>[],
+    this.protocol,
     this.mcpTransport,
     this.mcpServerId,
     this.autoEnable = false,
@@ -101,6 +108,10 @@ class MobileExtensionManifest {
   final String? description;
   final bool nativeAddon;
   final List<String> permissions;
+
+  /// The in-process JavaScript contract used by a node-mobile MCP package.
+  /// `stdio-compat-v1` is an adapter contract, not a child-process transport.
+  final String? protocol;
 
   /// For an MCP package this is either `app_native` or `sse`.
   /// `node-mobile` packages use the local bundled runtime and do not set it.
@@ -157,6 +168,7 @@ class MobileExtensionManifest {
 
     _validateTypeRuntime(type, runtime, entry);
 
+    final protocol = _optionalString(json['protocol']);
     final mcpTransport = _optionalString(json['mcpTransport']);
     final mcpServerId = _optionalString(json['mcpServerId']);
     if (type == MobileExtensionType.mcp && mcpTransport != null) {
@@ -173,6 +185,15 @@ class MobileExtensionManifest {
       }
     }
 
+    if (type == MobileExtensionType.mcp &&
+        runtime == MobileExtensionRuntime.nodeMobile &&
+        protocol != null &&
+        !kMobileMcpProtocols.contains(protocol)) {
+      throw MobileExtensionManifestException(
+        'node-mobile MCP protocol 只支持: ${kMobileMcpProtocols.join(', ')}',
+      );
+    }
+
     return MobileExtensionManifest(
       id: id,
       version: version,
@@ -185,6 +206,9 @@ class MobileExtensionManifest {
       description: _optionalString(json['description']),
       nativeAddon: nativeAddon,
       permissions: List.unmodifiable(permissions),
+      protocol: runtime == MobileExtensionRuntime.nodeMobile
+          ? protocol ?? 'mobile-mcp-v1'
+          : protocol,
       mcpTransport: mcpTransport,
       mcpServerId: mcpServerId,
       autoEnable: json['autoEnable'] == true,
@@ -203,6 +227,7 @@ class MobileExtensionManifest {
     if (description != null) 'description': description,
     'nativeAddon': nativeAddon,
     'permissions': permissions,
+    if (protocol != null) 'protocol': protocol,
     if (mcpTransport != null) 'mcpTransport': mcpTransport,
     if (mcpServerId != null) 'mcpServerId': mcpServerId,
     'autoEnable': autoEnable,
@@ -228,6 +253,12 @@ class MobileExtensionManifest {
             !entry.toLowerCase().endsWith('.mjs')) {
           throw const MobileExtensionManifestException(
             'node-mobile MCP entry 必须是 .js 或 .mjs',
+          );
+        }
+        if (runtime == MobileExtensionRuntime.nodeMobile &&
+            entry.toLowerCase().endsWith('.cjs')) {
+          throw const MobileExtensionManifestException(
+            'node-mobile MCP 不支持 CommonJS entry，请使用 .js 或 .mjs',
           );
         }
       case MobileExtensionType.skill:

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/mcp/mcp_client.dart';
 import '../../core/mcp/bundled_node_runtime.dart';
+import '../../core/mcp/mobile_npx_resolver.dart';
 import '../../core/database/dao/mcp_dao.dart';
 import 'database_provider.dart';
 
@@ -108,6 +109,12 @@ class McpUnsupportedTransportException implements Exception {
 }
 
 const kBundledNodeMcpServerId = 'simichat-node-bundled';
+const kMobileExtensionMarketplacePrefix = 'mobile-extension:';
+const kMobileExtensionRootConfigKey = 'x-simichat-extension-root';
+const kMobileExtensionEntryConfigKey = 'x-simichat-extension-entry';
+const kMobileExtensionProtocolConfigKey = 'x-simichat-extension-protocol';
+const kMobileExtensionSha256ConfigKey = 'x-simichat-extension-sha256';
+const kMobileExtensionPermissionsConfigKey = 'x-simichat-extension-permissions';
 
 /// MCP 管理器：管理多个 MCP 服务器连接，持久化到数据库
 class McpManager extends StateNotifier<List<McpServerConfig>> {
@@ -216,17 +223,28 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
       );
     } else if (config.transport == kMcpTransportStdio) {
       if (_mobilePlatform) {
-        throw const McpUnsupportedTransportException(
-          '移动端不支持 stdio MCP，请使用 App 内建或 SSE。',
+        final resolution = MobileNpxResolver.resolve(
+          command: config.command ?? '',
+          args: config.args ?? const <String>[],
+        );
+        if (resolution == null) {
+          throw const McpUnsupportedTransportException(
+            '移动端不支持 stdio MCP；未打包的 npx 也被拒绝，仅支持已审核的 in-process adapter。',
+          );
+        }
+        transport = AppNativeMcpTransport(
+          serverId: 'mobile-npx:${resolution.packageName}',
+          profile: resolution.profile,
+        );
+      } else {
+        if (config.command == null || config.command!.isEmpty) {
+          throw Exception('MCP stdio server requires a command');
+        }
+        transport = StdioTransport(
+          command: config.command!,
+          args: config.args ?? [],
         );
       }
-      if (config.command == null || config.command!.isEmpty) {
-        throw Exception('MCP stdio server requires a command');
-      }
-      transport = StdioTransport(
-        command: config.command!,
-        args: config.args ?? [],
-      );
     } else if (config.transport == kMcpTransportSse) {
       if (config.url == null || config.url!.isEmpty) {
         throw Exception('MCP SSE server requires a URL');
@@ -238,6 +256,46 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
             '随应用分发的 Node Runtime 未运行: ${runtime['message'] ?? runtime}',
           );
         }
+      }
+      final extensionId =
+          config.marketplaceId != null &&
+              config.marketplaceId!.startsWith(
+                kMobileExtensionMarketplacePrefix,
+              )
+          ? config.marketplaceId!.substring(
+              kMobileExtensionMarketplacePrefix.length,
+            )
+          : null;
+      if (extensionId != null) {
+        final headers = config.headers ?? const <String, String>{};
+        final root = headers[kMobileExtensionRootConfigKey];
+        final entry = headers[kMobileExtensionEntryConfigKey];
+        final protocol = headers[kMobileExtensionProtocolConfigKey];
+        final sha256 = headers[kMobileExtensionSha256ConfigKey];
+        if ([
+          root,
+          entry,
+          protocol,
+          sha256,
+        ].any((value) => value == null || value.isEmpty)) {
+          throw const McpUnsupportedTransportException(
+            '移动端 Node MCP 配置缺少已安装包的注册元数据。',
+          );
+        }
+        final permissions =
+            (headers[kMobileExtensionPermissionsConfigKey] ?? '')
+                .split(',')
+                .map((item) => item.trim())
+                .where((item) => item.isNotEmpty)
+                .toList(growable: false);
+        await BundledNodeRuntime.registerExtension(
+          id: extensionId,
+          root: root!,
+          entry: entry!,
+          protocol: protocol!,
+          sha256: sha256!,
+          permissions: permissions,
+        );
       }
       transport = SseTransport(url: config.url!, headers: config.headers ?? {});
     } else {

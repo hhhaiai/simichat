@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/mcp/mcp_client.dart';
+import '../../core/mcp/bundled_node_runtime.dart';
 import '../../core/extensions/mobile_extension_agent.dart';
 import '../../core/extensions/mobile_extension_installer.dart';
 import '../../core/extensions/mobile_extension_service.dart';
@@ -32,8 +33,9 @@ final installedMobileExtensionsProvider = FutureProvider(
 /// Installs a package and activates the parts that already have a native
 /// Flutter boundary. Skills are written to the existing Skills table;
 /// app-native MCP packages are connected immediately on both Android and iOS;
-/// Node Mobile packages stay in the verified registry until their bundled
-/// runtime endpoint is selected by the platform adapter.
+/// pure-JS Node Mobile packages are registered in the App-owned runtime and
+/// connected through its loopback SSE endpoint.  No package installation path
+/// invokes npm, npx, a shell, or a host process.
 Future<InstalledMobileExtension> installMobileExtension(
   WidgetRef ref,
   List<int> bytes, {
@@ -78,6 +80,32 @@ Future<InstalledMobileExtension> installMobileExtension(
       isEnabled: true,
       source: 'marketplace',
       marketplaceId: mcp.serverId,
+    );
+    await manager.addServer(config);
+    await manager.connectServer(config);
+  }
+  if (mcp != null && mcp.isNodeMobile) {
+    final manager = ref.read(mcpManagerProvider.notifier);
+    final serverId = 'mobile-extension-${mcp.id}';
+    final existing = ref
+        .read(mcpManagerProvider)
+        .where((server) => server.id == serverId);
+    if (existing.isNotEmpty) await manager.removeServer(serverId);
+    final config = McpServerConfig(
+      id: serverId,
+      name: mcp.name,
+      transport: kMcpTransportSse,
+      url: BundledNodeRuntime.extensionSseUrl(mcp.id),
+      isEnabled: true,
+      source: 'mobile_extension',
+      marketplaceId: '$kMobileExtensionMarketplacePrefix${mcp.id}',
+      headers: <String, String>{
+        kMobileExtensionRootConfigKey: mcp.installPath,
+        kMobileExtensionEntryConfigKey: mcp.entry,
+        kMobileExtensionProtocolConfigKey: mcp.protocol ?? 'mobile-mcp-v1',
+        kMobileExtensionSha256ConfigKey: mcp.sha256,
+        kMobileExtensionPermissionsConfigKey: mcp.permissions.join(','),
+      },
     );
     await manager.addServer(config);
     await manager.connectServer(config);

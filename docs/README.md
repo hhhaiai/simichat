@@ -35,6 +35,7 @@
 | [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md) | 当前静态分析、全量测试、构建、mock smoke 和真实 runtime 边界 |
 | [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
 | [Android / PC 内置 Node Runtime](MCP_BUNDLED_NODE_RUNTIME.md) | APK 内 `libnode.so`、PC bundled Node、构建准备、SSE 链路、真实验证矩阵和未覆盖边界 |
+| [移动端纯 JS MCP 与 stdio / npx 兼容层](MOBILE_MCP_RUNTIME.md) | `mobile-mcp-v1`、`stdio-compat-v1`、已审核 npx in-process adapter、安装注册链路和真机 marker |
 | [Android / iOS 移动端 MCP、Skills、Agent 安装协议](MOBILE_EXTENSIONS.md) | 统一扩展 manifest、SHA-256、权限、原子安装、registry、quarantine、Skills / Agent / App Native MCP 接入和 iOS 边界 |
 | [Bundled Runtime CI](../.github/workflows/bundled-runtime.yml) | macOS / Linux / Windows 发布包构建、随包 binary 检查和 exact-package MCP smoke |
 | [功能实现差距分析（2026-08-07）](implementation-gap-analysis-2026-08-07.md) | 功能项逐项标注已实现、需真机补证或需外部资源 |
@@ -77,6 +78,7 @@
 - [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md)
 - [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md)
 - [当前项目状态](current-status.md)
+- [移动端 Node / stdio / npx 真机验证（2026-08-09）](mobile-node-mcp-runtime-2026-08-09.md)
 
 ### 4.2 移动端主链路和设备验证
 

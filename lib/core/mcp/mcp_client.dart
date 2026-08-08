@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../search/web_search_service.dart';
 
@@ -228,10 +231,15 @@ abstract class McpTransport {
 class AppNativeMcpTransport implements McpTransport {
   AppNativeMcpTransport({
     this.serverId = kAppNativeMcpServerId,
+    this.profile = 'default',
     WebSearchService? webSearch,
   }) : _webSearch = webSearch;
 
   final String serverId;
+
+  /// Legacy npm MCP compatibility profile.  It is an in-app adapter, not a
+  /// stdio process, and is only selected by MobileNpxResolver.
+  final String profile;
   final WebSearchService? _webSearch;
   void Function(Map<String, dynamic>)? _onMessage;
   bool _connected = false;
@@ -297,8 +305,9 @@ class AppNativeMcpTransport implements McpTransport {
   }
 
   List<Map<String, dynamic>> _tools() {
-    return [
-      {
+    final tools = <Map<String, dynamic>>[];
+    if (profile == 'default' || profile == 'time') {
+      tools.add({
         'name': 'simichat.now',
         'description': '返回当前设备时间。无需 Node、npx 或外部 MCP 进程。',
         'inputSchema': {
@@ -310,13 +319,15 @@ class AppNativeMcpTransport implements McpTransport {
             },
           },
         },
-      },
-      {
+      });
+      tools.add({
         'name': 'simichat.runtime_info',
         'description': '返回当前 SimiChat 内建 MCP Runtime 状态。',
         'inputSchema': {'type': 'object', 'properties': {}},
-      },
-      {
+      });
+    }
+    if (profile == 'default') {
+      tools.add({
         'name': 'simichat.web_search',
         'description':
             '搜索互联网（DuckDuckGo Instant Answer，无需 API Key），返回相关摘要与链接，可用于检索增强回答。',
@@ -327,8 +338,70 @@ class AppNativeMcpTransport implements McpTransport {
           },
           'required': ['query'],
         },
-      },
-    ];
+      });
+    }
+    if (profile == 'memory') {
+      tools.addAll([
+        {
+          'name': 'simichat.memory_search',
+          'description': '在 App 本地记忆中搜索文本。只读，不启动 npx。',
+          'inputSchema': {
+            'type': 'object',
+            'properties': {
+              'query': {'type': 'string'},
+              'maxResults': {'type': 'integer'},
+            },
+            'required': ['query'],
+          },
+        },
+        {
+          'name': 'simichat.memory_list',
+          'description': '列出 App 本地记忆摘要。',
+          'inputSchema': {'type': 'object', 'properties': {}},
+        },
+      ]);
+    }
+    if (profile == 'fetch') {
+      tools.add({
+        'name': 'simichat.fetch',
+        'description': '在 App 内发起受限 HTTP(S) GET 请求。',
+        'inputSchema': {
+          'type': 'object',
+          'properties': {
+            'url': {'type': 'string'},
+            'maxBytes': {'type': 'integer'},
+          },
+          'required': ['url'],
+        },
+      });
+    }
+    if (profile == 'filesystem') {
+      tools.addAll([
+        {
+          'name': 'simichat.fs_list',
+          'description': '列出 App 私有 Application Support 目录。',
+          'inputSchema': {
+            'type': 'object',
+            'properties': {
+              'path': {'type': 'string'},
+            },
+          },
+        },
+        {
+          'name': 'simichat.fs_read_text',
+          'description': '读取 App 私有 Application Support 目录中的文本文件。',
+          'inputSchema': {
+            'type': 'object',
+            'properties': {
+              'path': {'type': 'string'},
+              'maxBytes': {'type': 'integer'},
+            },
+            'required': ['path'],
+          },
+        },
+      ]);
+    }
+    return tools;
   }
 
   List<Map<String, dynamic>> _resources() {
@@ -347,6 +420,15 @@ class AppNativeMcpTransport implements McpTransport {
     final arguments =
         (params['arguments'] as Map?)?.cast<String, dynamic>() ??
         const <String, dynamic>{};
+
+    if (!_tools().any((tool) => tool['name'] == name)) {
+      return {
+        'content': [
+          {'type': 'text', 'text': '当前 MCP profile 未暴露工具: $name'},
+        ],
+        'isError': true,
+      };
+    }
 
     switch (name) {
       case 'simichat.now':
@@ -398,6 +480,16 @@ class AppNativeMcpTransport implements McpTransport {
             'isError': true,
           };
         }
+      case 'simichat.memory_search':
+        return _memorySearch(arguments);
+      case 'simichat.memory_list':
+        return _memoryList();
+      case 'simichat.fetch':
+        return _fetch(arguments);
+      case 'simichat.fs_list':
+        return _filesystemList(arguments);
+      case 'simichat.fs_read_text':
+        return _filesystemRead(arguments);
       default:
         return {
           'content': [
@@ -436,6 +528,7 @@ class AppNativeMcpTransport implements McpTransport {
   Map<String, dynamic> _runtimeInfo() {
     return {
       'serverId': serverId,
+      'profile': profile,
       'transport': kMcpTransportAppNative,
       'dependencyMode': 'in_app',
       'externalProcess': false,
@@ -466,6 +559,143 @@ class AppNativeMcpTransport implements McpTransport {
     final hours = (absMinutes ~/ 60).toString().padLeft(2, '0');
     final mins = (absMinutes % 60).toString().padLeft(2, '0');
     return '$sign$hours:$mins';
+  }
+
+  Future<Map<String, dynamic>> _memoryList() async {
+    final items = await _loadMemoryItems();
+    return _textResult({'count': items.length, 'items': items});
+  }
+
+  Future<Map<String, dynamic>> _memorySearch(
+    Map<String, dynamic> arguments,
+  ) async {
+    final query = (arguments['query'] as String? ?? '').trim().toLowerCase();
+    if (query.isEmpty) {
+      return {
+        'content': [
+          {'type': 'text', 'text': 'query 不能为空'},
+        ],
+        'isError': true,
+      };
+    }
+    final maxResults = (arguments['maxResults'] is int)
+        ? (arguments['maxResults'] as int).clamp(1, 50).toInt()
+        : 10;
+    final items = await _loadMemoryItems();
+    final matches = items
+        .where((item) => jsonEncode(item).toLowerCase().contains(query))
+        .take(maxResults)
+        .toList(growable: false);
+    return _textResult({
+      'query': query,
+      'count': matches.length,
+      'items': matches,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _loadMemoryItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('key_point_memory_v1');
+    if (raw == null || raw.trim().isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map((item) => item.cast<String, dynamic>())
+          .toList(growable: false);
+    } on Object {
+      return const [];
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetch(Map<String, dynamic> arguments) async {
+    final uri = Uri.tryParse((arguments['url'] as String? ?? '').trim());
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return {
+        'content': [
+          {'type': 'text', 'text': '只支持 HTTP(S) URL'},
+        ],
+        'isError': true,
+      };
+    }
+    final maxBytes = (arguments['maxBytes'] is int)
+        ? (arguments['maxBytes'] as int).clamp(1, 65536).toInt()
+        : 65536;
+    final client = http.Client();
+    try {
+      final response = await client
+          .get(uri)
+          .timeout(const Duration(seconds: 10));
+      final bytes = response.bodyBytes;
+      return _textResult({
+        'url': uri.toString(),
+        'status': response.statusCode,
+        'ok': response.statusCode >= 200 && response.statusCode < 300,
+        'text': utf8.decode(
+          bytes.take(maxBytes).toList(),
+          allowMalformed: true,
+        ),
+        'truncated': bytes.length > maxBytes,
+      });
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<Directory> _filesystemRoot() => getApplicationSupportDirectory();
+
+  Future<FileSystemEntity> _filesystemPath(String rawPath) async {
+    final root = p.normalize((await _filesystemRoot()).absolute.path);
+    final candidate = p.normalize(
+      p.join(root, rawPath.trim().isEmpty ? '.' : rawPath),
+    );
+    if (candidate != root && !p.isWithin(root, candidate)) {
+      throw StateError('filesystem path escapes the app container');
+    }
+    return FileSystemEntity.typeSync(candidate) ==
+            FileSystemEntityType.directory
+        ? Directory(candidate)
+        : File(candidate);
+  }
+
+  Future<Map<String, dynamic>> _filesystemList(
+    Map<String, dynamic> arguments,
+  ) async {
+    final directory = await _filesystemPath(
+      arguments['path'] as String? ?? '.',
+    );
+    if (directory is! Directory) throw StateError('path is not a directory');
+    final entries = <Map<String, dynamic>>[];
+    await for (final item in directory.list()) {
+      final type = await FileSystemEntity.type(item.path);
+      entries.add(<String, dynamic>{
+        'name': p.basename(item.path),
+        'type': type == FileSystemEntityType.directory
+            ? 'directory'
+            : type == FileSystemEntityType.file
+            ? 'file'
+            : 'other',
+      });
+      if (entries.length >= 200) break;
+    }
+    return _textResult({'entries': entries});
+  }
+
+  Future<Map<String, dynamic>> _filesystemRead(
+    Map<String, dynamic> arguments,
+  ) async {
+    final file = await _filesystemPath(arguments['path'] as String? ?? '');
+    if (file is! File) throw StateError('path is not a file');
+    final maxBytes = (arguments['maxBytes'] is int)
+        ? (arguments['maxBytes'] as int).clamp(1, 65536).toInt()
+        : 65536;
+    final bytes = await file.readAsBytes();
+    return _textResult({
+      'path': p.basename(file.path),
+      'text': utf8.decode(bytes.take(maxBytes).toList(), allowMalformed: true),
+      'truncated': bytes.length > maxBytes,
+    });
   }
 }
 

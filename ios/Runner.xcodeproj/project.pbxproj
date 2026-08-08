@@ -18,6 +18,10 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
+		A1B2C3D4E5F6012345678901 /* NodeMobile.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6012345678911 /* NodeMobile.xcframework */; };
+		A1B2C3D4E5F6012345678902 /* NodeMobile.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6012345678911 /* NodeMobile.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A1B2C3D4E5F6012345678903 /* SimiChatNodeRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6012345678912 /* SimiChatNodeRuntime.swift */; };
+		A1B2C3D4E5F6012345678904 /* SimiChatNodeBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6012345678913 /* SimiChatNodeBridge.mm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,6 +41,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				A1B2C3D4E5F6012345678902 /* NodeMobile.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -69,6 +74,10 @@
 		FC133441AB2BD3849A7CF91B /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 		FC4FF152E5F3B1EAB77EA386 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
+		A1B2C3D4E5F6012345678911 /* NodeMobile.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = NodeMobile.xcframework; path = Runner/NodeRuntime/NodeMobile.xcframework; sourceTree = "<group>"; };
+		A1B2C3D4E5F6012345678912 /* SimiChatNodeRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimiChatNodeRuntime.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6012345678913 /* SimiChatNodeBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = SimiChatNodeBridge.mm; sourceTree = "<group>"; };
+		A1B2C3D4E5F6012345678914 /* SimiChatNodeBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SimiChatNodeBridge.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +93,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F6012345678901 /* NodeMobile.xcframework in Frameworks */,
 				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				3FD26FE5CBC77D817F0C5487 /* Pods_Runner.framework in Frameworks */,
 			);
@@ -145,6 +155,7 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				A1B2C3D4E5F6012345678915 /* NodeRuntime */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -152,10 +163,21 @@
 		D074A2E9D4701A6A61DA11A0 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6012345678911 /* NodeMobile.xcframework */,
 				FC4FF152E5F3B1EAB77EA386 /* Pods_Runner.framework */,
 				974A077676EC71FB0E8CB99E /* Pods_RunnerTests.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6012345678915 /* NodeRuntime */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6012345678912 /* SimiChatNodeRuntime.swift */,
+				A1B2C3D4E5F6012345678913 /* SimiChatNodeBridge.mm */,
+				A1B2C3D4E5F6012345678914 /* SimiChatNodeBridge.h */,
+			);
+			path = NodeRuntime;
 			sourceTree = "<group>";
 		};
 		EB208CF47C6B111534ED5B64 /* Pods */ = {
@@ -389,6 +411,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F6012345678903 /* SimiChatNodeRuntime.swift in Sources */,
+				A1B2C3D4E5F6012345678904 /* SimiChatNodeBridge.mm in Sources */,
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,

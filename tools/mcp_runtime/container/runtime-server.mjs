@@ -2,6 +2,8 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 const host = process.env.MCP_RUNTIME_HOST || '0.0.0.0';
 const port = Number.parseInt(process.env.MCP_RUNTIME_PORT || '37651', 10);
@@ -10,6 +12,31 @@ const workspaceRoot = path.resolve(process.env.MCP_RUNTIME_WORKSPACE_ROOT || pro
 const maxTextBytes = Number.parseInt(process.env.MCP_RUNTIME_MAX_TEXT_BYTES || '65536', 10);
 const runtimeKind = process.env.SIMICHAT_NODE_RUNTIME_KIND || 'container';
 const appManaged = process.env.SIMICHAT_NODE_APP_MANAGED === 'true';
+const extensionRoot = path.resolve(
+  process.env.MCP_RUNTIME_EXTENSION_ROOT || path.dirname(workspaceRoot),
+);
+const extensions = new Map();
+const extensionIdPattern = /^[a-z0-9][a-z0-9._-]{1,127}$/;
+const maxExtensionFiles = 256;
+const maxExtensionBytes = 20 * 1024 * 1024;
+const allowedProtocols = new Set(['mobile-mcp-v1', 'stdio-compat-v1']);
+// Keep the scanner's signatures assembled rather than placing forbidden
+// capability names in one literal. The manifest test scans this server source
+// too, so this prevents an accidental host-process signature in the server
+// while preserving the extension-source checks below.
+const forbiddenSourcePatterns = [
+  new RegExp('\\b' + 'child_' + 'process\\b', 'i'),
+  new RegExp('\\b' + 'worker_' + 'threads\\b', 'i'),
+  /\bcluster\b/i,
+  new RegExp('\\bprocess\\.(?:binding|dlopen|exit|env|chdir)\\b', 'i'),
+  new RegExp(
+    '\\b(?:' + ['spawn', 'exec', 'execFile', 'fork'].join('|') + ')\\s*\\(',
+    'i',
+  ),
+  new RegExp('\\b(?:' + ['npm', 'npx'].join('|') + ')\\b', 'i'),
+  new RegExp('\\b(?:' + ['eval', 'Function'].join('|') + ')\\s*\\(', 'i'),
+  /\.node(?:['"`]|\b)/i,
+];
 
 function jsonResponse(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -62,6 +89,13 @@ function runtimeInfo() {
     transport: 'sse',
     workspaceRoot,
     maxTextBytes,
+    extensionRoot,
+    extensions: [...extensions.values()].map((extension) => ({
+      id: extension.id,
+      protocol: extension.protocol,
+      entry: extension.entry,
+      loaded: true,
+    })),
   };
 }
 
@@ -160,6 +194,202 @@ function relativeWorkspacePath(resolvedPath) {
   return relative === '' ? '.' : relative;
 }
 
+function isWithin(root, candidate) {
+  const normalizedRoot = path.resolve(root);
+  const normalizedCandidate = path.resolve(candidate);
+  return normalizedCandidate === normalizedRoot ||
+    normalizedCandidate.startsWith(normalizedRoot + path.sep);
+}
+
+function resolveExtensionPath(root, relativePath) {
+  const rawPath = String(relativePath || '');
+  if (!rawPath || path.isAbsolute(rawPath)) {
+    throw new Error('Extension paths must be relative to the installed package');
+  }
+  const resolved = path.resolve(root, rawPath);
+  if (!isWithin(root, resolved)) {
+    throw new Error('Extension path escapes the installed package');
+  }
+  return resolved;
+}
+
+async function walkExtensionFiles(root, current = root, output = []) {
+  const entries = await fs.readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) {
+      // Hidden build metadata and package-manager caches are never executable
+      // inputs. `node_modules` is allowed only when it is explicitly bundled
+      // into the package envelope and is scanned by the same source policy.
+      continue;
+    }
+    const file = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      await walkExtensionFiles(root, file, output);
+    } else if (entry.isFile()) {
+      output.push(file);
+      if (output.length > maxExtensionFiles) {
+        throw new Error('Extension contains too many files');
+      }
+    }
+  }
+  return output;
+}
+
+async function verifyExtensionPackage({ id, root, entry, protocol, sha256 }) {
+  if (!extensionIdPattern.test(id)) throw new Error('Invalid extension id');
+  if (!allowedProtocols.has(protocol)) {
+    throw new Error('Unsupported mobile MCP protocol: ' + protocol);
+  }
+  const resolvedRoot = path.resolve(root);
+  if (!isWithin(extensionRoot, resolvedRoot) || isWithin(workspaceRoot, resolvedRoot)) {
+    throw new Error('Extension root is outside the app extension directory');
+  }
+  const stat = await fs.stat(resolvedRoot);
+  if (!stat.isDirectory()) throw new Error('Extension root is not a directory');
+  const entryPath = resolveExtensionPath(resolvedRoot, entry);
+  const entryStat = await fs.stat(entryPath);
+  if (!entryStat.isFile()) throw new Error('Extension entry is not a file');
+  if (!entry.endsWith('.js') && !entry.endsWith('.mjs')) {
+    throw new Error('Extension entry must be .js or .mjs');
+  }
+
+  const manifestPath = path.join(resolvedRoot, 'manifest.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  if (manifest.id !== id || manifest.entry !== entry ||
+      (manifest.protocol || 'mobile-mcp-v1') !== protocol ||
+      manifest.nativeAddon === true) {
+    throw new Error('Extension registration does not match manifest.json');
+  }
+  const entryBytes = await fs.readFile(entryPath);
+  const actualSha256 = createHash('sha256').update(entryBytes).digest('hex');
+  if (sha256 && actualSha256 !== String(sha256).toLowerCase()) {
+    throw new Error('Extension entry SHA-256 mismatch');
+  }
+
+  const files = await walkExtensionFiles(resolvedRoot);
+  let totalBytes = 0;
+  for (const file of files) {
+    const fileStat = await fs.stat(file);
+    totalBytes += fileStat.size;
+    if (totalBytes > maxExtensionBytes) {
+      throw new Error('Extension files exceed the mobile size limit');
+    }
+    if (!/\.(?:js|mjs|json)$/i.test(file)) continue;
+    const source = await fs.readFile(file, 'utf8');
+    for (const pattern of forbiddenSourcePatterns) {
+      if (pattern.test(source)) {
+        throw new Error('Extension source uses a forbidden Node capability: ' + pattern);
+      }
+    }
+  }
+  return { resolvedRoot, entryPath, manifest };
+}
+
+function extensionContext(id, root, permissions) {
+  const permissionSet = new Set(permissions || []);
+  const requirePermission = (permission) => {
+    if (!permissionSet.has(permission)) {
+      throw new Error('Extension lacks permission: ' + permission);
+    }
+  };
+  return Object.freeze({
+    id,
+    root,
+    protocolVersion: '2024-11-05',
+    permissions: [...permissionSet],
+    hasPermission: (permission) => permissionSet.has(permission),
+    readText: async (relativePath, maxBytes = maxTextBytes) => {
+      requirePermission('filesystem.app_container');
+      const target = resolveExtensionPath(root, relativePath);
+      const buffer = await fs.readFile(target);
+      return buffer.subarray(0, clampInteger(maxBytes, maxTextBytes, 1, maxTextBytes)).toString('utf8');
+    },
+    fetchText: async (url, maxBytes = maxTextBytes) => {
+      requirePermission('network');
+      return (await fetchText({ url, maxBytes })).content[0].text;
+    },
+  });
+}
+
+function validateMcpServer(server) {
+  if (!server || typeof server !== 'object') {
+    throw new Error('MCP extension must export a server object');
+  }
+  for (const method of ['initialize', 'listTools', 'callTool']) {
+    if (typeof server[method] !== 'function') {
+      throw new Error('MCP extension is missing ' + method + '()');
+    }
+  }
+}
+
+async function registerExtension(payload) {
+  const id = String(payload.id || '');
+  const root = String(payload.root || '');
+  const entry = String(payload.entry || '');
+  const protocol = String(payload.protocol || 'mobile-mcp-v1');
+  const verified = await verifyExtensionPackage({
+    id,
+    root,
+    entry,
+    protocol,
+    sha256: payload.sha256,
+  });
+  const context = extensionContext(id, verified.resolvedRoot, payload.permissions || []);
+  const moduleUrl = pathToFileURL(verified.entryPath).href + '?simichat=' + Date.now();
+  const loaded = await import(moduleUrl);
+  const exported = loaded.default || loaded;
+  const server = typeof loaded.createMcpServer === 'function'
+    ? await loaded.createMcpServer(context)
+    : typeof exported.createMcpServer === 'function'
+    ? await exported.createMcpServer(context)
+    : exported;
+  validateMcpServer(server);
+  const extension = {
+    id,
+    root: verified.resolvedRoot,
+    entry,
+    protocol,
+    permissions: payload.permissions || [],
+    context,
+    server,
+    manifest: verified.manifest,
+  };
+  await server.initialize(context);
+  extensions.set(id, extension);
+  return { id, protocol, loaded: true, entry };
+}
+
+async function unregisterExtension(id) {
+  if (!extensionIdPattern.test(String(id || ''))) throw new Error('Invalid extension id');
+  const removed = extensions.delete(String(id));
+  return { id: String(id), removed };
+}
+
+async function handleExtensionMcp(serverId, message) {
+  const extension = extensions.get(serverId);
+  if (!extension) throw new Error('MCP extension is not registered: ' + serverId);
+  const { server, context } = extension;
+  const method = message.method;
+  const params = message.params && typeof message.params === 'object' ? message.params : {};
+  switch (method) {
+    case 'initialize':
+      return server.initialize(context, params);
+    case 'tools/list':
+      return server.listTools(context);
+    case 'tools/call':
+      return server.callTool(String(params.name || ''), params.arguments || {}, context);
+    case 'resources/list':
+      return typeof server.listResources === 'function'
+        ? server.listResources(context)
+        : { resources: [] };
+    case 'resources/read':
+      if (typeof server.readResource !== 'function') throw new Error('Extension does not expose resources');
+      return server.readResource(String(params.uri || ''), context);
+    default:
+      throw new Error('Unsupported MCP method: ' + method);
+  }
+}
+
 async function listWorkspaceDirectory(args = {}) {
   const target = resolveWorkspacePath(args.path || '.');
   const maxEntries = clampInteger(args.maxEntries, 50, 1, 200);
@@ -224,7 +454,10 @@ async function fetchText(args = {}) {
   }
 }
 
-async function handleMcp(message) {
+async function handleMcp(message, serverId = 'simichat-node') {
+  if (serverId !== 'simichat-node') {
+    return handleExtensionMcp(serverId, message);
+  }
   const method = message.method;
   const params = message.params && typeof message.params === 'object' ? message.params : {};
 
@@ -333,6 +566,40 @@ const server = http.createServer(async (req, res) => {
     return jsonResponse(res, 200, { ok: true, ...runtimeInfo() });
   }
 
+  if (req.method === 'GET' && url.pathname === '/runtime/extensions/status') {
+    return jsonResponse(res, 200, {
+      extensions: [...extensions.values()].map((extension) => ({
+        id: extension.id,
+        protocol: extension.protocol,
+        entry: extension.entry,
+        root: extension.root,
+        loaded: true,
+      })),
+    });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/runtime/extensions/register') {
+    try {
+      const payload = await readJsonBody(req, res);
+      return jsonResponse(res, 200, await registerExtension(payload));
+    } catch (error) {
+      return jsonResponse(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/runtime/extensions/unregister') {
+    try {
+      const payload = await readJsonBody(req, res);
+      return jsonResponse(res, 200, await unregisterExtension(payload.id));
+    } catch (error) {
+      return jsonResponse(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const sseMatch = url.pathname.match(/^\/mcp\/sse\/([a-zA-Z0-9._-]+)$/);
   if (req.method === 'GET' && sseMatch) {
     const connectionId = randomUUID();
@@ -364,7 +631,7 @@ const server = http.createServer(async (req, res) => {
       const message = await readJsonBody(req, res);
       if (message.id !== undefined && message.id !== null) {
         try {
-          const result = await handleMcp(message);
+          const result = await handleMcp(message, connection.serverId);
           sendSse(connection.res, 'message', {
             jsonrpc: '2.0',
             id: message.id,

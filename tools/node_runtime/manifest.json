@@ -67,5 +67,17 @@
       ],
       "elfLoadAlignmentBytes": 16384
     }
+  },
+  "ios": {
+    "runtime": "nodejs-mobile",
+    "version": "18.20.4",
+    "framework": "ios/Runner/NodeRuntime/NodeMobile.xcframework",
+    "sourceRevision": "959b6e8637c86fb1f63f1aaf72adc86c7e8c335d",
+    "minimumIosVersion": "13.0",
+    "supportedSlices": [
+      "ios-arm64",
+      "ios-arm64_x86_64-simulator"
+    ],
+    "buildScript": "scripts/prepare_ios_node_mobile.sh"
   }
 }
