@@ -204,7 +204,7 @@ windows-x64
 1. 从 manifest 读取 Node 版本和官方归档名；
 2. 下载到 `.part` 文件；
 3. 下载命令成功后原子改名；
-4. 使用 `shasum -a 256` 校验；
+4. 优先使用 `sha256sum`，在 macOS 等环境回退到 `shasum -a 256` 校验；
 5. 解压到 `tools/node_runtime/bundled/<platform-id>/node[.exe]`；
 6. 校验失败时终止，不把不完整 binary 交给 Flutter。
 

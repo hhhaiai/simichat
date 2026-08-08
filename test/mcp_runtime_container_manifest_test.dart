@@ -194,6 +194,7 @@ void main() {
       expect(script, contains("['nodeVersion']"));
       expect(script, contains("['source']"));
       expect(script, contains('.part'));
+      expect(script, contains('sha256sum'));
       expect(script, contains('shasum -a 256'));
       expect(script, contains('tools/node_runtime/bundled'));
       expect(script, isNot(contains('command -v node')));

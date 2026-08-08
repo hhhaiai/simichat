@@ -64,7 +64,14 @@ if [[ ! -f "$archive_path" ]]; then
   mv "$archive_part" "$archive_path"
 fi
 
-actual_sha="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_sha="$(sha256sum "$archive_path" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_sha="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+else
+  echo "No SHA-256 utility found; install sha256sum or shasum." >&2
+  exit 2
+fi
 if [[ "$actual_sha" != "$expected_sha" ]]; then
   echo "SHA-256 mismatch for $archive: expected $expected_sha, got $actual_sha" >&2
   exit 1
