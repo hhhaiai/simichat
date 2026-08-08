@@ -41,6 +41,10 @@ jobs:
       - name: Generate Dart sources
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: Remove stale test-only Android plugin registrant
+        shell: bash
+        run: rm -f android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
       - name: Build release APK
         run: flutter build apk --release --no-pub
 
@@ -112,8 +116,8 @@ jobs:
       - name: Build release package
         env:
           SIMICHAT_NODE_RUNTIME_PLATFORM: ${{ matrix.runtime_platform }}
-          CODE_SIGNING_ALLOWED: ${{ matrix.target == 'macos' && 'NO' || '' }}
-          CODE_SIGNING_REQUIRED: ${{ matrix.target == 'macos' && 'NO' || '' }}
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: ${{ matrix.target == 'macos' && 'NO' || '' }}
+          FLUTTER_XCODE_CODE_SIGNING_REQUIRED: ${{ matrix.target == 'macos' && 'NO' || '' }}
         run: flutter build ${{ matrix.target }} --release --no-pub
 
       - name: Verify package carries the target Node binary
