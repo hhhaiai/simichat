@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -61,22 +62,63 @@ class McpServerConfig {
 // JSON 序列化辅助
 String? _listToJson(List<String>? list) =>
     list != null ? jsonEncode(list) : null;
-List<String>? _listFromJson(String? json) =>
-    json != null ? List<String>.from(jsonDecode(json) as List) : null;
+
+List<String>? _listFromJson(String? json) {
+  if (json == null || json.trim().isEmpty) return null;
+  try {
+    final decoded = jsonDecode(json);
+    if (decoded is! List) return null;
+    return decoded.whereType<String>().toList(growable: false);
+  } on Object {
+    // 旧版本或手工修改过的数据库不能阻塞移动端启动。
+    return null;
+  }
+}
+
 String? _mapToJson(Map<String, String>? map) =>
     map != null ? jsonEncode(map) : null;
-Map<String, String>? _mapFromJson(String? json) =>
-    json != null ? Map<String, String>.from(jsonDecode(json) as Map) : null;
+
+Map<String, String>? _mapFromJson(String? json) {
+  if (json == null || json.trim().isEmpty) return null;
+  try {
+    final decoded = jsonDecode(json);
+    if (decoded is! Map) return null;
+    return decoded.map<String, String>((key, value) {
+      return MapEntry(key.toString(), value.toString());
+    });
+  } on Object {
+    // headers 是可选配置；损坏时安全降级为空，而不是让 provider 失败。
+    return null;
+  }
+}
+
+bool get isMobileMcpPlatform =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
+
+class McpUnsupportedTransportException implements Exception {
+  const McpUnsupportedTransportException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 /// MCP 管理器：管理多个 MCP 服务器连接，持久化到数据库
 class McpManager extends StateNotifier<List<McpServerConfig>> {
   final McpDao _dao;
+  final bool _mobilePlatform;
   final Map<String, McpClient> _clients = {};
   final Set<String> _connectedIds = <String>{};
   final Map<String, String> _connectionErrors = <String, String>{};
   late final Future<void> ready;
+  bool _disposed = false;
 
-  McpManager(this._dao) : super([]) {
+  McpManager(this._dao, {bool? mobilePlatform})
+    : _mobilePlatform = mobilePlatform ?? isMobileMcpPlatform,
+      super([]) {
     ready = _loadFromDb();
   }
 
@@ -136,10 +178,7 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   }
 
   Future<void> removeServer(String id) async {
-    _clients[id]?.dispose();
-    _clients.remove(id);
-    _connectedIds.remove(id);
-    _connectionErrors.remove(id);
+    await disconnectServer(id);
     await _dao.deleteServer(id);
     state = state.where((s) => s.id != id).toList();
   }
@@ -160,6 +199,10 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
   }
 
   Future<void> connectServer(McpServerConfig config) async {
+    if (_disposed) {
+      throw StateError('MCP manager has been disposed');
+    }
+
     // 断开已有连接（避免资源泄漏）
     await disconnectServer(config.id);
 
@@ -169,6 +212,11 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
         serverId: config.marketplaceId ?? config.id,
       );
     } else if (config.transport == kMcpTransportStdio) {
+      if (_mobilePlatform) {
+        throw const McpUnsupportedTransportException(
+          '移动端不支持 stdio MCP，请使用 App 内建或 SSE。',
+        );
+      }
       if (config.command == null || config.command!.isEmpty) {
         throw Exception('MCP stdio server requires a command');
       }
@@ -244,11 +292,23 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
 
   @override
   void dispose() {
-    for (final client in _clients.values) {
-      client.dispose();
-    }
+    _disposed = true;
+    final clients = _clients.values.toList(growable: false);
     _clients.clear();
+    _connectedIds.clear();
+    _connectionErrors.clear();
+    unawaited(_disposeClients(clients));
     super.dispose();
+  }
+
+  Future<void> _disposeClients(Iterable<McpClient> clients) async {
+    for (final client in clients) {
+      try {
+        await client.dispose();
+      } on Object catch (error) {
+        debugPrint('[MCP] Client dispose failed: $error');
+      }
+    }
   }
 }
 

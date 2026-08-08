@@ -303,4 +303,24 @@ void main() {
       isNot(contains('%')),
     );
   });
+
+  test('local search treats a non-positive result limit as an empty request', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await db.sessionDao.createSession(id: 's1');
+    await db.messageDao.insertMessage(
+      id: 'm1',
+      sessionId: 's1',
+      role: 'user',
+      content: '移动端本地记忆稳定工作。',
+    );
+
+    final results = await LocalFullTextSearchService(
+      sessionDao: db.sessionDao,
+      messageDao: db.messageDao,
+    ).search('移动端', limit: 0);
+
+    expect(results, isEmpty);
+  });
 }

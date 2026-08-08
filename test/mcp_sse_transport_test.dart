@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -85,6 +86,84 @@ void main() {
 
       expect(client.isInitialized, isTrue);
       expect(postPaths, contains('/mcp/messages/session-1'));
+    },
+  );
+
+  test(
+    'SseTransport rejects non-success status and clears the client',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final subscription = server.listen((request) async {
+        request.response
+          ..statusCode = HttpStatus.unauthorized
+          ..write('not authorized');
+        await request.response.close();
+      });
+      addTearDown(() async {
+        await subscription.cancel();
+        await server.close(force: true);
+      });
+
+      final transport = SseTransport(
+        url: 'http://127.0.0.1:${server.port}/mcp/sse/test',
+        connectTimeout: const Duration(seconds: 1),
+        endpointTimeout: const Duration(seconds: 1),
+      );
+      addTearDown(transport.disconnect);
+
+      await expectLater(
+        transport.connect((_) {}),
+        throwsA(
+          isA<McpSseException>().having(
+            (error) => error.message,
+            'message',
+            contains('HTTP 401'),
+          ),
+        ),
+      );
+      await expectLater(
+        transport.send({'jsonrpc': '2.0', 'id': 1}),
+        throwsA(isA<McpSseException>()),
+      );
+    },
+  );
+
+  test(
+    'SseTransport cleans up when endpoint does not arrive in time',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final subscription = server.listen((request) async {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          )
+          ..bufferOutput = false;
+        request.response.write(': connected\n\n');
+        await request.response.flush();
+      });
+      addTearDown(() async {
+        await subscription.cancel();
+        await server.close(force: true);
+      });
+
+      final transport = SseTransport(
+        url: 'http://127.0.0.1:${server.port}/mcp/sse/test',
+        connectTimeout: const Duration(seconds: 1),
+        endpointTimeout: const Duration(milliseconds: 30),
+      );
+      addTearDown(transport.disconnect);
+
+      await expectLater(
+        transport.connect((_) {}),
+        throwsA(isA<TimeoutException>()),
+      );
+      await expectLater(
+        transport.send({'jsonrpc': '2.0', 'id': 1}),
+        throwsA(isA<McpSseException>()),
+      );
     },
   );
 }

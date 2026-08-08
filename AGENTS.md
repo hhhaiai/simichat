@@ -134,6 +134,16 @@
 - **未完成边界**：本机真实 Ollama 当前不可连接，`gemma4` 权重、移动端网络、长会话和后台运行仍需真实 runtime / 设备补证。
 - **文档入口**：当前状态使用 `docs/current-status.md`；专题导航使用 `docs/README.md`；当前验证使用 `docs/verification-baseline-2026-08-08.md`。历史带日期文档不覆盖当前状态。
 
+### 0.2.10 2026-08-08 移动端 MCP / Skills / 记忆稳定性专项
+
+- **MCP**：移动端在管理器层拒绝 `stdio`，不进入 `Process.start()`；旧 enabled `stdio` 配置不会阻塞 provider；App Native、SSE、endpoint 相对路径、timeout、非 2xx、disconnect、pending 清理和重复 dispose 均已收口。
+- **Skills**：SkillHub 损坏本地缓存可隔离恢复；线上列表和 Generic HTTP 技能统一 512 KB 上限；JSON / UTF-8 / SHA-256 / 页码 / 搜索竞态 / HTTP client dispose 已收口。
+- **记忆**：消息 / session / FTS / semantic 查询统一限制结果上限；全局搜索旧请求不会覆盖新请求；Key Point、索引预热 / 修复、Dreaming / Reflection / background runner / user profile 专项保持本地失败回退。
+- **真机证据**：Pixel 8 和 iPhone13 的 MCP / Skills / 记忆逻辑专项各 162 项通过；真实移动 UI smoke 各 1 项通过。iPhone13 首次 UI 复跑发现 MCP 添加弹窗 `DropdownButtonFormField` 窄屏右侧溢出 12 px，加入 `isExpanded: true` 后两台设备均复跑通过。
+- **仓库门禁**：全量 Flutter 测试 672 项通过，`flutter --no-version-check analyze --no-pub` 无问题，`git diff --check` 无输出。
+- **未完成边界**：真实远程 MCP 长时弱网恢复、iOS 系统 BGTask 实际执行、Android OEM / 跨日长期后台和真实 Ollama `gemma4` runtime 仍按独立文档保留未证明状态。
+- **文档入口**：专项详见 `docs/mobile-mcp-skills-memory-quality-2026-08-08.md`；当前状态和验证基线已同步更新。
+
 ### 0.3 2026-07-14 模型增强 Reflection 验证补充
 
 - 2026-07-14 22:57 将非流式远程 Reflection 修复推进到 Pixel 8 正式后台真机闭环。首次 wrapper 预检收到临时 `401`，在构建前安全退出、设备未变化；为预检新增最多 3 次有界重试，只重试 `401 / 408 / 429 / 5xx / curl 失败 / 200 空内容`，manifest 红灯后转绿。复跑时 attempt 1 为 401、attempt 2 成功，独立 `backgroundmodelsmoke` build / install 后 READY pid `8925` 被回收，JobScheduler 未使用 shell force，在 elapsed `324` 秒时由 `SystemJobService` 冷启动 pid `10117`，完成 `status=completed digest=2026-07-14 reflection=2026-07-14`。prefs 同时含 Dreaming / Reflection 当前与历史，`generationMode=model`，无 pending / `model_fallback`，日志与 prefs 无配置地址 / key。cleanup 后隔离包和 sqlite hook 无残留，正式包 pid `10528`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 不变，跨日 job id `0` 仍 waiting；最终全量稳定门禁 557 项通过。取证：`/tmp/simichat-android-background-dreaming-20260714224926.log`、`/tmp/simichat-android-background-dreaming-prefs-20260714224926.xml`。
@@ -776,6 +786,7 @@
 | `docs/current-status.md` | 当前代码状态、本轮修复、验证门禁和未完成 runtime 证据 |
 | `docs/local-model.md` | Ollama 本地模型配置、`gemma4` 默认勾选、协议稳定性和故障排查 |
 | `docs/verification-baseline-2026-08-08.md` | 当前静态分析、测试、构建、mock smoke 和真实 runtime 边界 |
+| `docs/mobile-mcp-skills-memory-quality-2026-08-08.md` | Pixel 8 / iPhone13 移动端 MCP、Skills、记忆逻辑与真实 UI 稳定性证据 |
 | `docs/architecture.md` | 整体架构设计、模块边界、数据流、生产化门禁 |
 | `docs/model-integration.md` | 多模型接入、渠道、模型能力、接口中转方案 |
 | `docs/memory-system.md` | 记忆、Markdown 原始档案、本地检索增强生成、Key Points |

@@ -31,6 +31,7 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
   bool _isSearching = false;
   List<_SearchResult> _results = [];
   Timer? _debounceTimer;
+  int _searchGeneration = 0;
 
   @override
   void initState() {
@@ -49,15 +50,19 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
   }
 
   Future<void> _doSearch(String query) async {
+    final generation = ++_searchGeneration;
     final trimmed = query.trim();
     if (trimmed.isEmpty) {
+      if (!mounted) return;
       setState(() {
         _query = '';
         _results = [];
+        _isSearching = false;
       });
       return;
     }
 
+    if (!mounted) return;
     setState(() {
       _query = trimmed;
       _isSearching = true;
@@ -82,13 +87,13 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
           )
           .toList();
 
-      if (!mounted) return;
+      if (!mounted || generation != _searchGeneration) return;
       setState(() {
         _results = results;
         _isSearching = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _searchGeneration) return;
       setState(() => _isSearching = false);
     }
   }

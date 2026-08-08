@@ -32,29 +32,44 @@ class McpClient {
 
   bool _initialized = false;
   bool get isInitialized => _initialized;
+  bool _disposed = false;
+  Future<void>? _disposeFuture;
 
   McpClient({required this.name, required McpTransport transport})
     : _transport = transport;
 
   /// 初始化连接
   Future<void> initialize() async {
-    await _transport.connect(_onMessage);
+    if (_disposed) throw StateError('MCP client has been disposed');
+    try {
+      await _transport.connect(_onMessage);
 
-    // 发送 initialize 请求
-    await _sendRequest('initialize', {
-      'protocolVersion': '2024-11-05',
-      'capabilities': {'tools': {}, 'resources': {}},
-      'clientInfo': {'name': 'ai_chat_app', 'version': '1.0.0'},
-    });
+      // 发送 initialize 请求
+      await _sendRequest('initialize', {
+        'protocolVersion': '2024-11-05',
+        'capabilities': {'tools': {}, 'resources': {}},
+        'clientInfo': {'name': 'ai_chat_app', 'version': '1.0.0'},
+      });
 
-    _initialized = true;
+      _initialized = true;
 
-    // 通知服务端初始化完成
-    _sendNotification('notifications/initialized', {});
+      // 通知服务端初始化完成
+      _sendNotification('notifications/initialized', {});
 
-    // 获取工具列表
-    await refreshTools();
-    await refreshResources();
+      // 获取工具列表
+      await refreshTools();
+      await refreshResources();
+    } catch (_) {
+      _initialized = false;
+      // initialize 失败时也必须释放已经建立的 transport，避免移动端
+      // 页面返回 / 重试后留下旧的 SSE 或 stdio 资源。
+      try {
+        await _transport.disconnect();
+      } catch (disconnectError) {
+        debugPrint('[MCP] Failed to cleanup initialization: $disconnectError');
+      }
+      rethrow;
+    }
   }
 
   /// 刷新工具列表
@@ -106,6 +121,7 @@ class McpClient {
     Map<String, dynamic> params, {
     Duration timeout = const Duration(seconds: 30),
   }) async {
+    if (_disposed) throw StateError('MCP client has been disposed');
     final id = _nextId++;
     final completer = Completer<Map<String, dynamic>>();
     _pendingRequests[id] = completer;
@@ -117,7 +133,13 @@ class McpClient {
       'params': params,
     };
 
-    await _transport.send(message);
+    try {
+      await _transport.send(message);
+    } catch (_) {
+      // 传输层失败时不能把永远不会完成的 request 留在 pending map 中。
+      _pendingRequests.remove(id);
+      rethrow;
+    }
 
     return completer.future.timeout(
       timeout,
@@ -129,12 +151,27 @@ class McpClient {
   }
 
   void _sendNotification(String method, Map<String, dynamic> params) {
-    unawaited(
-      _transport.send({'jsonrpc': '2.0', 'method': method, 'params': params}),
-    );
+    if (_disposed) return;
+    unawaited(_sendNotificationSafely(method, params));
+  }
+
+  Future<void> _sendNotificationSafely(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      await _transport.send({
+        'jsonrpc': '2.0',
+        'method': method,
+        'params': params,
+      });
+    } catch (error) {
+      debugPrint('[MCP] Notification failed: $error');
+    }
   }
 
   void _onMessage(Map<String, dynamic> message) {
+    if (_disposed) return;
     // JSON-RPC 2.0: id 可以是 int 或 String
     final rawId = message['id'];
     final id = rawId is int
@@ -155,7 +192,13 @@ class McpClient {
     }
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose() {
+    return _disposeFuture ??= _disposeInternal();
+  }
+
+  Future<void> _disposeInternal() async {
+    _disposed = true;
+    _initialized = false;
     // 清理所有未完成的请求
     for (final entry in _pendingRequests.entries) {
       if (!entry.value.isCompleted) {
@@ -163,9 +206,12 @@ class McpClient {
       }
     }
     _pendingRequests.clear();
-    await _transport.disconnect();
-    await _toolsController.close();
-    await _resourcesController.close();
+    try {
+      await _transport.disconnect();
+    } finally {
+      await _toolsController.close();
+      await _resourcesController.close();
+    }
   }
 }
 
@@ -564,102 +610,132 @@ class StdioTransport implements McpTransport {
 class SseTransport implements McpTransport {
   final String url;
   final Map<String, String> headers;
+  final Duration connectTimeout;
+  final Duration endpointTimeout;
+  final Duration requestTimeout;
   http.Client? _client;
   String? _messageEndpoint;
   StreamSubscription<String>? _sseSubscription;
 
-  SseTransport({required this.url, this.headers = const {}});
+  SseTransport({
+    required this.url,
+    this.headers = const {},
+    this.connectTimeout = const Duration(seconds: 15),
+    this.endpointTimeout = const Duration(seconds: 15),
+    this.requestTimeout = const Duration(seconds: 15),
+  });
 
   @override
   Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
-    _client = http.Client();
+    await disconnect();
+    final client = http.Client();
+    _client = client;
+    _messageEndpoint = null;
     final endpointCompleter = Completer<void>();
 
-    final request = http.Request('GET', Uri.parse(url));
-    request.headers.addAll(headers);
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      request.headers.addAll(headers);
 
-    final response = await _client!.send(request);
-    final stream = response.stream
-        .transform(utf8.decoder)
-        .transform(const LineSplitter());
+      final response = await client.send(request).timeout(connectTimeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        await response.stream.drain<void>();
+        throw McpSseException('SSE 连接失败：HTTP ${response.statusCode}');
+      }
+      final stream = response.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
 
-    String? eventType;
-    String dataBuffer = '';
+      String? eventType;
+      String dataBuffer = '';
 
-    _sseSubscription = stream.listen(
-      (line) {
-        if (line.startsWith('event:')) {
-          eventType = line.substring(6).trim();
-        } else if (line.startsWith('data:')) {
-          if (dataBuffer.isNotEmpty) dataBuffer += '\n';
-          dataBuffer += line.substring(5).trim();
-        } else if (line.isEmpty && dataBuffer.isNotEmpty) {
-          if (eventType == 'endpoint') {
-            _messageEndpoint = dataBuffer;
-            if (!endpointCompleter.isCompleted) endpointCompleter.complete();
-          } else if (eventType == 'message') {
-            try {
-              final message = jsonDecode(dataBuffer) as Map<String, dynamic>;
-              onMessage(message);
-            } catch (e) {
-              debugPrint('[MCP SSE] Parse error: $e');
+      _sseSubscription = stream.listen(
+        (line) {
+          if (line.startsWith('event:')) {
+            eventType = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            if (dataBuffer.isNotEmpty) dataBuffer += '\n';
+            dataBuffer += line.substring(5).trim();
+          } else if (line.isEmpty && dataBuffer.isNotEmpty) {
+            if (eventType == 'endpoint') {
+              _messageEndpoint = dataBuffer.trim();
+              if (!endpointCompleter.isCompleted) endpointCompleter.complete();
+            } else if (eventType == 'message') {
+              try {
+                final message = jsonDecode(dataBuffer) as Map<String, dynamic>;
+                onMessage(message);
+              } catch (e) {
+                debugPrint('[MCP SSE] Parse error: $e');
+              }
             }
+            eventType = null;
+            dataBuffer = '';
           }
-          eventType = null;
-          dataBuffer = '';
-        }
-      },
-      onError: (e) {
-        debugPrint('[MCP SSE] Stream error: $e');
-        if (!endpointCompleter.isCompleted) {
-          endpointCompleter.completeError(e);
-        }
-      },
-      onDone: () {
-        debugPrint('[MCP SSE] Stream closed');
-        if (!endpointCompleter.isCompleted) {
-          endpointCompleter.completeError(
-            Exception('SSE stream closed before endpoint received'),
-          );
-        }
-      },
-    );
+        },
+        onError: (Object error) {
+          debugPrint('[MCP SSE] Stream error: $error');
+          if (!endpointCompleter.isCompleted) {
+            endpointCompleter.completeError(error);
+          }
+        },
+        onDone: () {
+          debugPrint('[MCP SSE] Stream closed');
+          if (!endpointCompleter.isCompleted) {
+            endpointCompleter.completeError(
+              const McpSseException(
+                'SSE stream closed before endpoint received',
+              ),
+            );
+          }
+        },
+      );
 
-    return endpointCompleter.future.timeout(
-      const Duration(seconds: 15),
-      onTimeout: () {
-        throw TimeoutException('SSE endpoint not received within 15s');
-      },
-    );
+      await endpointCompleter.future.timeout(endpointTimeout);
+    } catch (_) {
+      await disconnect();
+      rethrow;
+    }
   }
 
   @override
   Future<void> disconnect() async {
-    await _sseSubscription?.cancel();
+    final subscription = _sseSubscription;
+    final client = _client;
     _sseSubscription = null;
-    _client?.close();
     _client = null;
+    _messageEndpoint = null;
+    await subscription?.cancel();
+    client?.close();
   }
 
   @override
   Future<void> send(Map<String, dynamic> message) async {
-    if (_messageEndpoint == null || _client == null) return;
+    final endpoint = _messageEndpoint;
+    final client = _client;
+    if (endpoint == null || client == null) {
+      throw const McpSseException('SSE 未连接或尚未收到 message endpoint');
+    }
     final body = jsonEncode(message);
-    try {
-      final response = await _client!.post(
-        Uri.parse(url).resolve(_messageEndpoint!),
-        headers: {'Content-Type': 'application/json', ...headers},
-        body: body,
-      );
-      if (response.statusCode >= 400) {
-        debugPrint(
-          '[MCP SSE] POST failed: ${response.statusCode} ${response.body}',
-        );
-      }
-    } catch (e) {
-      debugPrint('[MCP SSE] POST error: $e');
+    final response = await client
+        .post(
+          Uri.parse(url).resolve(endpoint),
+          headers: {'Content-Type': 'application/json', ...headers},
+          body: body,
+        )
+        .timeout(requestTimeout);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw McpSseException('SSE 消息发送失败：HTTP ${response.statusCode}');
     }
   }
+}
+
+class McpSseException implements Exception {
+  const McpSseException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 /// MCP 工具定义

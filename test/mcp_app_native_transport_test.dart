@@ -102,4 +102,96 @@ void main() {
     expect(payload['serverId'], kAppNativeMcpServerId);
     expect(payload['externalProcess'], isFalse);
   });
+
+  test(
+    'McpManager rejects stdio on mobile before starting a process',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      final manager = McpManager(db.mcpDao, mobilePlatform: true);
+      addTearDown(manager.dispose);
+      await manager.ready;
+
+      const config = McpServerConfig(
+        id: 'mobile-stdio',
+        name: '移动端 stdio',
+        transport: kMcpTransportStdio,
+        command: 'this-command-must-not-be-started',
+      );
+
+      await expectLater(
+        manager.connectServer(config),
+        throwsA(
+          isA<McpUnsupportedTransportException>().having(
+            (error) => error.message,
+            'message',
+            contains('移动端不支持 stdio'),
+          ),
+        ),
+      );
+      expect(manager.isConnected(config.id), isFalse);
+    },
+  );
+
+  test('McpManager safely loads malformed optional JSON fields', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.mcpDao.insertServer(
+      id: 'malformed-json',
+      name: '损坏配置',
+      transport: kMcpTransportAppNative,
+      args: '{not-json',
+      headers: '["not-an-object"]',
+      isEnabled: false,
+    );
+
+    final manager = McpManager(db.mcpDao, mobilePlatform: true);
+    addTearDown(manager.dispose);
+    await manager.ready;
+
+    expect(manager.state.single.args, isNull);
+    expect(manager.state.single.headers, isNull);
+  });
+
+  test(
+    'McpManager startup does not block on a legacy enabled mobile stdio row',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      await db.mcpDao.insertServer(
+        id: 'legacy-mobile-stdio',
+        name: '旧版 stdio',
+        transport: kMcpTransportStdio,
+        command: 'this-command-must-not-be-started',
+        isEnabled: true,
+      );
+
+      final manager = McpManager(db.mcpDao, mobilePlatform: true);
+      addTearDown(manager.dispose);
+      await manager.ready;
+
+      expect(manager.state.single.isEnabled, isTrue);
+      expect(
+        manager.connectionErrorFor('legacy-mobile-stdio'),
+        contains('移动端不支持 stdio'),
+      );
+      expect(manager.isConnected('legacy-mobile-stdio'), isFalse);
+    },
+  );
+
+  test(
+    'McpClient dispose is idempotent after app-native initialization',
+    () async {
+      final client = McpClient(
+        name: 'dispose-test',
+        transport: AppNativeMcpTransport(),
+      );
+      await client.initialize();
+
+      await client.dispose();
+      await client.dispose();
+      expect(client.isInitialized, isFalse);
+    },
+  );
 }

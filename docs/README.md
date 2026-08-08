@@ -33,6 +33,7 @@
 | [当前项目状态](current-status.md) | 当前代码修复、gemma4 默认选择、验证门禁、未完成 runtime 证据 |
 | [本地 Ollama 接入与稳定性](local-model.md) | Ollama 安装、Base URL、模型列表、协议稳定性、故障排查 |
 | [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md) | 当前静态分析、全量测试、构建、mock smoke 和真实 runtime 边界 |
+| [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
 | [功能实现差距分析（2026-08-07）](implementation-gap-analysis-2026-08-07.md) | 功能项逐项标注已实现、需真机补证或需外部资源 |
 | [产品需求总纲](requirements.md) | 产品目标、模块、页面、隐私和路线需求 |
 
@@ -71,6 +72,7 @@
 ### 4.1 当前验证
 
 - [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md)
+- [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md)
 - [当前项目状态](current-status.md)
 
 ### 4.2 移动端主链路和设备验证

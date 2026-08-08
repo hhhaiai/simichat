@@ -70,10 +70,11 @@ class SessionDao extends DatabaseAccessor<AppDatabase> with _$SessionDaoMixin {
     await (delete(sessions)..where((t) => t.id.equals(id))).go();
   }
 
-  Future<List<Session>> searchSessions(String query) {
+  Future<List<Session>> searchSessions(String query, {int limit = 200}) {
     return (select(sessions)
           ..where((t) => t.title.like('%$query%'))
-          ..orderBy([(t) => OrderingTerm.desc(t.lastMessageAt)]))
+          ..orderBy([(t) => OrderingTerm.desc(t.lastMessageAt)])
+          ..limit(limit.clamp(1, 500).toInt()))
         .get();
   }
 }

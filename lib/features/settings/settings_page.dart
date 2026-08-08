@@ -7893,7 +7893,9 @@ class SettingsPage extends ConsumerWidget {
                 server.transport == kMcpTransportAppNative
                     ? 'App 内建 · 无需 Node/npx/Python · 移动端/PC 直接运行'
                     : server.transport == kMcpTransportStdio
-                    ? '${server.command} ${(server.args ?? []).join(' ')}'
+                    ? isMobileMcpPlatform
+                          ? '移动端不支持 stdio · 请改用 App 内建或 SSE'
+                          : '${server.command} ${(server.args ?? []).join(' ')}'
                     : server.url ?? '',
                 if (manager.isConnected(server.id))
                   '状态：已连接'
@@ -7967,6 +7969,18 @@ class SettingsPage extends ConsumerWidget {
     final argsCtrl = TextEditingController();
     final urlCtrl = TextEditingController();
     String transport = kMcpTransportAppNative;
+    final transportItems = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(
+        value: kMcpTransportAppNative,
+        child: Text('App 内建（移动端/PC 直接运行）'),
+      ),
+      if (!isMobileMcpPlatform)
+        const DropdownMenuItem(
+          value: kMcpTransportStdio,
+          child: Text('Stdio（PC 高级 / Runtime）'),
+        ),
+      const DropdownMenuItem(value: kMcpTransportSse, child: Text('SSE（远程服务）')),
+    ];
 
     showDialog(
       context: context,
@@ -7987,21 +8001,9 @@ class SettingsPage extends ConsumerWidget {
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: transport,
+                  isExpanded: true,
                   decoration: const InputDecoration(labelText: '传输方式'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: kMcpTransportAppNative,
-                      child: Text('App 内建（移动端/PC 直接运行）'),
-                    ),
-                    DropdownMenuItem(
-                      value: kMcpTransportStdio,
-                      child: Text('Stdio（PC 高级 / Runtime）'),
-                    ),
-                    DropdownMenuItem(
-                      value: kMcpTransportSse,
-                      child: Text('SSE（远程服务）'),
-                    ),
-                  ],
+                  items: transportItems,
                   onChanged: (v) => setDialogState(() => transport = v!),
                 ),
                 const SizedBox(height: 12),

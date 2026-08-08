@@ -7,11 +7,18 @@ import 'package:path_provider/path_provider.dart';
 
 import 'skill.dart';
 
+/// 单个远程 Skill 文件和索引允许占用的最大字节数。
+const kMaxSkillDownloadBytes = 512 * 1024;
+
 /// SkillHub.cn API 客户端 + 本地持久化
 class SkillHubRepository {
-  SkillHubRepository({http.Client? client, Uri? skillHubApiBase})
-      : _client = client ?? http.Client(),
-        _skillHubApiBase = skillHubApiBase ?? Uri.parse(skillHubApiBaseUrl);
+  SkillHubRepository({
+    http.Client? client,
+    Uri? skillHubApiBase,
+    Directory? storageDirectory,
+  })  : _client = client ?? http.Client(),
+        _skillHubApiBase = skillHubApiBase ?? Uri.parse(skillHubApiBaseUrl),
+        _storageDirectory = storageDirectory;
 
   static const skillHubHomeUrl = 'https://skillhub.cn/';
   static const skillHubApiBaseUrl = 'https://api.skillhub.cn';
@@ -22,19 +29,32 @@ class SkillHubRepository {
 
   final http.Client _client;
   final Uri _skillHubApiBase;
+  final Directory? _storageDirectory;
+
+  void dispose() => _client.close();
 
   // ─── 本地持久化 ───
 
   Future<List<Skill>> loadOnlineSkills() async {
     final file = await _storageFile();
     if (!await file.exists()) return const [];
-    final decoded = jsonDecode(await file.readAsString());
-    if (decoded is! List) return const [];
-    return decoded
-        .whereType<Map<String, dynamic>>()
-        .map(_skillFromJson)
-        .where((s) => s.name.trim().isNotEmpty)
-        .toList(growable: false);
+    try {
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! List) {
+        await _quarantineCorruptFile(file);
+        return const [];
+      }
+      return decoded
+          .whereType<Map>()
+          .map((json) => _skillFromJson(json.cast<String, dynamic>()))
+          .where((s) => s.name.trim().isNotEmpty)
+          .toList(growable: false);
+    } on Object {
+      // 应用升级 / 进程被杀可能留下半写入文件。把原文件保留为 .corrupt，
+      // 让移动端恢复为空列表而不是让 Skills 页面整个 provider 失败。
+      await _quarantineCorruptFile(file);
+      return const [];
+    }
   }
 
   Future<List<Skill>> saveOnlineSkill(Skill skill) async {
@@ -188,7 +208,7 @@ class SkillHubRepository {
   // ─── 内部方法 ───
 
   Future<File> _storageFile() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = _storageDirectory ?? await getApplicationSupportDirectory();
     return File('${dir.path}/$_storageFileName');
   }
 
@@ -196,9 +216,36 @@ class SkillHubRepository {
     final file = await _storageFile();
     await file.parent.create(recursive: true);
     const encoder = JsonEncoder.withIndent('  ');
-    await file.writeAsString(
-      encoder.convert(skills.map(_skillToJson).toList(growable: false)),
-    );
+    final temp = File('${file.path}.tmp');
+    try {
+      await temp.writeAsString(
+        encoder.convert(skills.map(_skillToJson).toList(growable: false)),
+        flush: true,
+      );
+      try {
+        // Android / iOS 的同目录 rename 是原子替换，避免页面看到半个 JSON。
+        await temp.rename(file.path);
+      } on FileSystemException {
+        // Windows 等文件系统可能不允许覆盖已有目标；仅在该平台回退。
+        if (await file.exists()) await file.delete();
+        await temp.rename(file.path);
+      }
+    } finally {
+      if (await temp.exists()) await temp.delete();
+    }
+  }
+
+  Future<void> _quarantineCorruptFile(File file) async {
+    final basePath = '${file.path}.corrupt';
+    var target = File(basePath);
+    for (var index = 1; await target.exists(); index++) {
+      target = File('$basePath.$index');
+    }
+    try {
+      await file.rename(target.path);
+    } on FileSystemException {
+      // 读取失败不应再次阻塞页面；原文件仍保留，便于用户后续取证。
+    }
   }
 
   Future<http.Response> _get(Uri uri) async {
@@ -215,6 +262,9 @@ class SkillHubRepository {
       throw SkillImportException(
         '下载失败：HTTP ${response.statusCode} ${response.reasonPhrase ?? ''}',
       );
+    }
+    if (response.bodyBytes.length > _maxSkillBytes) {
+      throw const SkillImportException('Skill 响应超过 512KB，已拒绝读取。');
     }
     return response;
   }
@@ -234,11 +284,20 @@ class SkillHubRepository {
         'SkillHub 请求失败：HTTP ${response.statusCode}',
       );
     }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const SkillImportException('SkillHub 返回不是 JSON object。');
+    if (response.bodyBytes.length > _maxSkillBytes) {
+      throw const SkillImportException('SkillHub 响应超过 512KB，已拒绝读取。');
     }
-    return decoded;
+    return _decodeJson(response.body, 'SkillHub');
+  }
+
+  Map<String, dynamic> _decodeJson(String body, String sourceName) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } on Object {
+      // 统一转换成 UI 可展示、且不泄露响应正文的错误。
+    }
+    throw SkillImportException('$sourceName 返回不是有效 JSON object。');
   }
 
   Uri _skillHubUri(String path, [Map<String, String>? query]) {

@@ -262,10 +262,11 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
         .get();
   }
 
-  Future<List<Message>> searchAll(String query) {
+  Future<List<Message>> searchAll(String query, {int limit = 200}) {
     return (select(messages)
           ..where((t) => t.content.like('%$query%'))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit.clamp(1, 500).toInt()))
         .get();
   }
 
@@ -510,7 +511,8 @@ CREATE TABLE IF NOT EXISTS message_semantic_index (
     List<String> tokens, {
     int limit = 200,
   }) async {
-    if (tokens.isEmpty) return const [];
+    if (tokens.isEmpty || limit <= 0) return const [];
+    final normalizedLimit = limit.clamp(1, 500).toInt();
     final ftsQuery = buildMessageFtsQuery(tokens);
     if (ftsQuery == null) return const [];
     final ready = await ensureMessageFtsIndex();
@@ -527,7 +529,10 @@ WHERE messages_fts MATCH ?
 ORDER BY messages_fts.rank
 LIMIT ?
 ''',
-        variables: [Variable.withString(ftsQuery), Variable.withInt(limit)],
+        variables: [
+          Variable.withString(ftsQuery),
+          Variable.withInt(normalizedLimit),
+        ],
         readsFrom: {messages},
       ).get();
       if (rows.isEmpty) return const [];
@@ -564,7 +569,8 @@ LIMIT ?
     double threshold = 0.22,
     int limit = 200,
   }) async {
-    if (queryVector.isEmpty) return const [];
+    if (queryVector.isEmpty || limit <= 0) return const [];
+    final normalizedLimit = limit.clamp(1, 500).toInt();
     if (!_messageSemanticIndexReady) {
       final health = await checkMessageSemanticIndexHealth(
         repairIfNeeded: true,
@@ -582,7 +588,7 @@ LIMIT ?
     }
     if (scored.isEmpty) return const [];
     scored.sort((a, b) => b.similarity.compareTo(a.similarity));
-    final top = scored.take(limit).toList(growable: false);
+    final top = scored.take(normalizedLimit).toList(growable: false);
     final ids = top.map((item) => item.messageId).toList(growable: false);
     final foundMessages = await (select(
       messages,

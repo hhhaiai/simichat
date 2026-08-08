@@ -2,7 +2,7 @@
 
 > **更新时间：2026-08-08**
 >
-> 本文档是当前状态的快速事实摘要。项目目标、长期待办和历史账本以根目录 `AGENTS.md` 为准；安装和使用入口以根目录 `README.md` 为准；具体实现方案以本目录专题文档为准；本次验证命令与结果以 `verification-baseline-2026-08-08.md` 为准。
+> 本文档是当前状态的快速事实摘要。项目目标、长期待办和历史账本以根目录 `AGENTS.md` 为准；安装和使用入口以根目录 `README.md` 为准；具体实现方案以本目录专题文档为准；本次验证命令与结果以 `verification-baseline-2026-08-08.md` 为准；移动端 MCP / Skills / 记忆专项以 `mobile-mcp-skills-memory-quality-2026-08-08.md` 为准。
 
 ## 一、当前结论
 
@@ -11,8 +11,11 @@
 | Dart / Flutter 代码 | 已完成本轮本地模型修复及相关整理 | 静态分析通过 |
 | 本地 Ollama 配置 | 已支持无 API Key，自动获取模型时默认勾选 `gemma4` | 设置页、模型预设、模型列表选择逻辑有回归覆盖 |
 | Ollama 协议 | 已处理 NDJSON、thinking/content、取消、超时、非 200 响应和可选 Bearer 鉴权 | mock HTTP 协议测试通过 |
+| 移动端 MCP | App Native、移动端 stdio 拒绝、SSE 生命周期和设置页入口已收口 | Pixel 8 / iPhone13 逻辑专项各 162 项、UI smoke 各 1 项通过 |
+| 移动端 Skills | 本地缓存恢复、下载大小 / 编码 / SHA-256 边界、搜索竞态已收口 | Pixel 8 / iPhone13 Skills Hub UI 和逻辑专项通过 |
+| 移动端记忆 | Key Point、SQLite FTS、semantic、索引预热 / 修复和搜索竞态已收口 | Pixel 8 / iPhone13 全局搜索 UI 与 162 项专项通过 |
 | Android 构建 | Debug APK 构建通过 | `build/app/outputs/flutter-apk/app-debug.apk` |
-| 全量测试 | 660 项通过 | `flutter --no-version-check test --no-pub` |
+| 全量测试 | 672 项通过 | `flutter --no-version-check test --no-pub --no-test-assets -r expanded` |
 | 本机真实 Ollama | 当前未验证 | 本机没有 `ollama` 命令，`127.0.0.1:11434` 当前不可连接 |
 | 真机 / 长会话 | 当前未在本轮重新验证 | 不能由静态分析、mock 或 APK 构建替代 |
 
@@ -108,6 +111,12 @@ bash -n scripts/smoke_local_ollama.sh
 
 ```text
 docs/verification-baseline-2026-08-08.md
+```
+
+移动端 MCP / Skills / 记忆专项结果：
+
+```text
+docs/mobile-mcp-skills-memory-quality-2026-08-08.md
 ```
 
 ## 四、尚未完成的真实证据

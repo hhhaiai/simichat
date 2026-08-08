@@ -40,6 +40,8 @@ class LocalFullTextSearchService {
   final bool _enableSemanticMessageSearch;
 
   Future<List<LocalSearchResult>> search(String query, {int limit = 30}) async {
+    if (limit <= 0) return const [];
+    final resultLimit = limit.clamp(1, 100).toInt();
     final normalizedQuery = normalizeLocalSearchQuery(query);
     final tokens = tokenizeLocalSearchQuery(normalizedQuery);
     if (normalizedQuery.isEmpty || tokens.isEmpty) return const [];
@@ -56,7 +58,7 @@ class LocalFullTextSearchService {
 
     final titleMatches = <String, Session>{};
     for (final token in tokens) {
-      final sessions = await _sessionDao.searchSessions(token);
+      final sessions = await _sessionDao.searchSessions(token, limit: 200);
       for (final session in sessions) {
         titleMatches[session.id] = session;
         sessionCache[session.id] = session;
@@ -87,7 +89,7 @@ class LocalFullTextSearchService {
     }
 
     for (final token in tokens) {
-      final messages = await _messageDao.searchAll(token);
+      final messages = await _messageDao.searchAll(token, limit: 200);
       for (final message in messages) {
         if (message.messageType != 'original') continue;
         final hit = messageMatches.putIfAbsent(
@@ -167,7 +169,7 @@ class LocalFullTextSearchService {
         return a.title.compareTo(b.title);
       });
 
-    return results.take(limit).toList(growable: false);
+    return results.take(resultLimit).toList(growable: false);
   }
 }
 

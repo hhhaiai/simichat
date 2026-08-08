@@ -6,7 +6,9 @@ import 'database_provider.dart';
 
 /// SkillHub 仓库实例
 final skillHubRepositoryProvider = Provider<SkillHubRepository>((ref) {
-  return SkillHubRepository();
+  final repository = SkillHubRepository();
+  ref.onDispose(repository.dispose);
+  return repository;
 });
 
 /// 所有本地 Skills（数据库 + 线上已导入）
@@ -77,15 +79,20 @@ class SkillHubSearchNotifier extends StateNotifier<SkillHubSearchState> {
   SkillHubSearchNotifier(this._repository) : super(const SkillHubSearchState());
 
   final SkillHubRepository _repository;
+  int _requestGeneration = 0;
 
   Future<void> search({String keyword = ''}) async {
+    final generation = ++_requestGeneration;
     state = state.copyWith(isLoading: true, error: null);
     try {
       final result = await _repository.searchSkillHub(keyword: keyword);
+      if (generation != _requestGeneration || !mounted) return;
       state = SkillHubSearchState(result: result);
     } on SkillImportException catch (e) {
+      if (generation != _requestGeneration || !mounted) return;
       state = SkillHubSearchState(error: e.message);
     } catch (e) {
+      if (generation != _requestGeneration || !mounted) return;
       state = SkillHubSearchState(error: '搜索失败：$e');
     }
   }

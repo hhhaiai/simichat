@@ -123,20 +123,26 @@ class _SkillsHubPageState extends ConsumerState<SkillsHubPage> {
         isEnabled: true,
       );
     }
-    ref.invalidate(skillsProvider);
-    ref.invalidate(enabledSkillsProvider);
+    if (mounted) {
+      ref.invalidate(skillsProvider);
+      ref.invalidate(enabledSkillsProvider);
+    }
   }
 
   Future<void> _toggleSkill(String id, bool enabled) async {
     await ref.read(skillDaoProvider).toggleEnabled(id, enabled);
-    ref.invalidate(skillsProvider);
-    ref.invalidate(enabledSkillsProvider);
+    if (mounted) {
+      ref.invalidate(skillsProvider);
+      ref.invalidate(enabledSkillsProvider);
+    }
   }
 
   Future<void> _deleteSkill(String id) async {
     await ref.read(skillDaoProvider).deleteSkill(id);
-    ref.invalidate(skillsProvider);
-    ref.invalidate(enabledSkillsProvider);
+    if (mounted) {
+      ref.invalidate(skillsProvider);
+      ref.invalidate(enabledSkillsProvider);
+    }
   }
 
   void _searchHub() {
