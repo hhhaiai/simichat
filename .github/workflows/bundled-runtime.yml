@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: subosito/flutter-action@v2
         with:
@@ -82,12 +84,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev
 
       - uses: subosito/flutter-action@v2
         with:
@@ -108,6 +112,8 @@ jobs:
       - name: Build release package
         env:
           SIMICHAT_NODE_RUNTIME_PLATFORM: ${{ matrix.runtime_platform }}
+          CODE_SIGNING_ALLOWED: ${{ matrix.target == 'macos' && 'NO' || '' }}
+          CODE_SIGNING_REQUIRED: ${{ matrix.target == 'macos' && 'NO' || '' }}
         run: flutter build ${{ matrix.target }} --release --no-pub
 
       - name: Verify package carries the target Node binary
