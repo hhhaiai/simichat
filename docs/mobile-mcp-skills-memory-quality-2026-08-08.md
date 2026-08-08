@@ -182,7 +182,7 @@ flutter --no-version-check analyze --no-pub
 git diff --check
 ```
 
-本轮结果：全量 Flutter 测试 **680 项通过**；Dart analyze `No issues found!`；`git diff --check` 无输出。
+本轮结果：全量 Flutter 测试 **681 项通过**；Dart analyze `No issues found!`；`git diff --check` 无输出。
 
 ## 5. Android Node.js 初始决策与后续实现
 
@@ -209,9 +209,10 @@ git diff --check
   `SIMICHAT_ANDROID_BUNDLED_NODE_MCP_READY`。
 - APK 内容已确认包含 `libnode.so`、`libsimichat_node_bridge.so`、`libc++_shared.so`
   和 `runtime-server.mjs`。
-- 当前只交付 `arm64-v8a`。`libnode.so` 的 ELF `LOAD` 对齐仍为 `0x1000`，Pixel 8
-  logcat 出现 `PageSizeMismatchDialog`；因此 16 KB page-size 设备仍是
-  `UNVERIFIED`，不能宣称全 Android ABI / 16 KB 兼容。
+- 当前只交付 `arm64-v8a`。升级后重建的 `libnode.so` 四个 ELF `LOAD` 对齐均为
+  `0x4000`，source audit 已 PASS；release APK 的全部 native library 与 ZIP 16 KB
+  audit 也已 PASS；16 KB 真机和其他 Android ABI 仍保持独立门禁，不能因此宣称全
+  Android ABI 已支持。
 
 完整实现和发布门禁见：
 
@@ -228,4 +229,4 @@ docs/MCP_BUNDLED_NODE_RUNTIME.md
 - Android OEM 严格后台限制、跨日 / 长期 Doze 和长时间进程回收；本轮只复用了既有后台专项代码 / provider 回归。
 - 真实 Ollama `gemma4` 权重、移动端局域网地址、长上下文本地模型质量；详见 `docs/local-model.md` 和 `docs/verification-baseline-2026-08-08.md`。
 
-因此本轮结论是：**App Native MCP 已在 Pixel 8 和 iPhone13 上完成不依赖外部环境的真实连接与工具调用；Android arm64 Bundled Node MCP 已在 Pixel 8 真机完成真实 Node、SSE 和工具调用；MCP、Skills、记忆的核心移动 UI 路径也已通过，相关逻辑专项在两台真机目标上重复通过；16 KB page-size、非 arm64 ABI、系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**
+因此本轮结论是：**App Native MCP 已在 Pixel 8 和 iPhone13 上完成不依赖外部环境的真实连接与工具调用；Android arm64 Bundled Node MCP 已在 Pixel 8 真机完成真实 Node、SSE 和工具调用；重建后的 `libnode.so` source ELF 及 release APK 的 16 KB 静态对齐已通过；MCP、Skills、记忆的核心移动 UI 路径也已通过，相关逻辑专项在两台真机目标上重复通过；16 KB 真机、非 arm64 ABI、系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**

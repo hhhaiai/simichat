@@ -85,7 +85,7 @@ tools/node_runtime/manifest.json
 runtime: nodejs-mobile
 version: 18.20.4
 abi: arm64-v8a
-sha256: 7c907316beb6e78e34495926c9ac1befe079369b14650d508ea812929258250c
+sha256: 6f45b99339a9e4264e3a82aabe6c6fd7acb0bbdc7d428ee03aada653f4cd91ec
 ```
 
 Gradle 通过 CMake 将 `libnode.so`、JNI bridge 和 `libc++_shared.so` 一起放入
@@ -110,6 +110,19 @@ Android 的 stop 当前返回 `stopSupported=false`。这是有意的边界：No
 与 App 进程绑定，代码不伪造一个没有实现的停止状态；Android Activity / App
 进程结束时二者一起结束。
 
+启动状态会通过 MethodChannel 暴露：
+
+```text
+stopped -> starting -> running
+                    -> crashed
+```
+
+native bridge 记录 `nativeState`、`nativeExitCode` 和 `restartCount`。Dart 控制器
+采用 single-flight，健康检查失败最多再尝试一次；不会创建无限重启循环，也不会
+把没有实现的 Android stop 报告成成功。Android 的一次重试只有在 native Node 已经
+退出并释放启动闸门后才会真正创建新线程；如果仍处于 `starting`，第二次请求只是
+等待同一个 `/health` 结果。
+
 ### 3.3 Android 构建
 
 ```bash
@@ -122,6 +135,37 @@ flutter --no-version-check build apk --debug --no-pub
 unzip -l build/app/outputs/flutter-apk/app-debug.apk \
   | grep -E 'libnode|libsimichat_node_bridge|libc\+\+_shared|runtime-server'
 ```
+
+项目 Android app 的 JNI bridge 固定使用 NDK `28.2.13676358`。`libnode.so` 则从
+`sourceRevision` 对应的 nodejs-mobile 源码重建，使用 NDK `27.1.12297006` 并显式
+加入以下 linker flags：
+
+```text
+-Wl,-z,max-page-size=16384
+-Wl,-z,common-page-size=16384
+```
+
+之所以没有把 `libnode.so` 也切换到 NDK r28，是因为该版本的 libc++ 不再提供
+`std::char_traits<unsigned short>`，nodejs-mobile v18.20.4 的 inspector 类型会在
+构建阶段失败；r27 构建结果已通过 ELF 对齐检查。这个差异必须保留在 manifest，不能
+只看 Gradle 的 NDK 版本推断 libnode 的构建工具链。
+
+发布门禁使用 release APK，并要求 Android build-tools 35+ 提供 `zipalign -P 16`：
+
+```bash
+flutter --no-version-check build apk --release --no-pub
+LLVM_READELF=/path/to/ndk/toolchains/llvm/prebuilt/<host>/bin/llvm-readelf \
+ZIPALIGN=/path/to/android-sdk/build-tools/35.0.1/zipalign \
+  ./scripts/verify_android_native_16k.sh \
+  build/app/outputs/flutter-apk/app-release.apk
+```
+
+该脚本同时检查 source/APK 中每个 `lib/<abi>/*.so` 的 `LOAD` segment 是否至少
+`0x4000` 对齐，以及 `zipalign -c -P 16 -v 4`。旧版只支持 `-p` 的 zipalign 不能
+证明 16 KB ZIP 对齐，脚本会明确返回工具链缺口而不是给出假 PASS。
+因此 `elfLoadAlignment` 与 `apkZipAlignment` 在 manifest 中是两个独立字段；当前
+两者均已由 source / release APK 证据验证，仍不能把静态 APK 证据外推成 16 KB 真机
+长时运行证据。
 
 ## 4. PC 实现
 
@@ -261,7 +305,8 @@ docs/runtime-manifest.example.json
 | PC Flutter App integration | PASS | macOS App test 完成 bundled Node、MCP initialize、tools/list、runtime_info；输出 `SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY` |
 | PC 六平台发布包 | UNVERIFIED | 当前机器未逐个平台生成和启动发布产物 |
 | Android 非 arm64 ABI | NOT SUPPORTED | 当前没有对应 `libnode.so` |
-| Android 16 KB page size | UNVERIFIED | 需要独立的 16 KB 设备 / release ABI 验收，不能由当前 4 KB 设备结论外推 |
+| Android 16 KB page size | ELF PASS / APK ZIP PASS / 真机 UNVERIFIED | source 与 release APK 的 native / ZIP 审计均通过；仍需 16 KB 真机启动与 MCP smoke |
+| Android watchdog / 有限重启 | IMPLEMENTED | native 状态、退出码、single-flight 和最多一次重试已接入；长时间锁屏后台仍需 Foreground Service 证据 |
 
 Pixel 8 真机命令：
 
@@ -284,11 +329,16 @@ SIMICHAT_ANDROID_BUNDLED_NODE_MCP_READY
 ```bash
 flutter --no-version-check analyze --no-pub
 flutter --no-version-check build apk --debug --no-pub
+flutter --no-version-check build apk --release --no-pub
 flutter --no-version-check test \
   integration_test/mobile_bundled_node_mcp_real_smoke_test.dart \
   -d <android-device-id> --no-pub -r expanded
 unzip -l build/app/outputs/flutter-apk/app-debug.apk \
   | grep -E 'libnode|libsimichat_node_bridge|libc\+\+_shared|runtime-server'
+LLVM_READELF=/path/to/ndk/toolchains/llvm/prebuilt/<host>/bin/llvm-readelf \
+ZIPALIGN=/path/to/android-sdk/build-tools/35.0.1/zipalign \
+  ./scripts/verify_android_native_16k.sh \
+  build/app/outputs/flutter-apk/app-release.apk
 ```
 
 ### PC

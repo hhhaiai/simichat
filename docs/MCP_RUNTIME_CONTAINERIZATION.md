@@ -109,8 +109,9 @@ echo 的真实 Node 链路验证。
 
 当前边界保持明确：移动端 `stdio` 继续拒绝；`simichat-node-container` 仍作为
 PC 可选隔离侧车保留，但不再是 PC 内置 Node 的唯一路径。Android 当前只交付
-arm64-v8a，16 KB page-size 设备、非 arm64 ABI 和 Android 长时间后台仍需单独
-验收。PC host-side bundled process smoke 与 macOS Flutter PC App 集成已通过；
+arm64-v8a；重建后的 `libnode.so` source ELF 已通过 16 KB `LOAD` 对齐审计，APK
+ZIP 对齐、16 KB 真机、非 arm64 ABI 和 Android 长时间后台仍需单独验收。PC host-side
+bundled process smoke 与 macOS Flutter PC App 集成已通过；
 Linux / Windows 发布包仍需逐平台生成并启动验证。实现、命令和证据矩阵详见
 `docs/MCP_BUNDLED_NODE_RUNTIME.md`。
 

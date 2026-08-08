@@ -129,9 +129,11 @@ void main() {
     expect(item.description, contains('不依赖宿主机 node'));
   });
 
-  test('Android bundled Node runtime is a pinned arm64 native asset', () {
+  test('Android bundled Node runtime is a pinned arm64 native asset', () async {
     final library = File('android/app/src/main/jniLibs/arm64-v8a/libnode.so');
     final bridge = File('android/app/src/main/cpp/simichat_node_bridge.cpp');
+    final cmake = File('android/app/src/main/cpp/CMakeLists.txt');
+    final auditScript = File('scripts/verify_android_native_16k.sh');
     final manifest =
         jsonDecode(File('tools/node_runtime/manifest.json').readAsStringSync())
             as Map<String, dynamic>;
@@ -140,13 +142,42 @@ void main() {
     expect(library.existsSync(), isTrue);
     expect(library.lengthSync(), greaterThan(50 * 1024 * 1024));
     expect(bridge.readAsStringSync(), contains('node::Start'));
+    expect(bridge.readAsStringSync(), contains('nativeState'));
+    expect(bridge.readAsStringSync(), contains('nativeExitCode'));
+    expect(cmake.readAsStringSync(), contains('max-page-size=16384'));
+    expect(cmake.readAsStringSync(), contains('common-page-size=16384'));
+    expect(auditScript.existsSync(), isTrue);
+    expect(
+      await Process.run('bash', [
+        '-n',
+        auditScript.path,
+      ]).then((result) => result.exitCode),
+      0,
+    );
     expect(android['runtime'], 'nodejs-mobile');
     expect(android['version'], '18.20.4');
+    expect(android['sourceRevision'], hasLength(40));
+    expect(android['minimumAndroidApi'], 24);
+    expect(android['supportedAbis'], ['arm64-v8a']);
+    final pageSize = android['pageSize'] as Map<String, dynamic>;
+    expect(pageSize['requiredBytes'], 16384);
+    expect(pageSize['elfLoadAlignment'], 'verified');
+    expect(pageSize['apkZipAlignment'], 'verified');
+    final libraries = android['libraries'] as Map<String, dynamic>;
+    expect(libraries['arm64-v8a'], isA<Map<String, dynamic>>());
     expect(
       android['arm64Library'],
       'android/app/src/main/jniLibs/arm64-v8a/libnode.so',
     );
     expect(android['arm64Sha256'], hasLength(64));
+    expect(
+      (libraries['arm64-v8a'] as Map<String, dynamic>)['elfLoadAlignmentBytes'],
+      16384,
+    );
+    expect(
+      (android['libnodeBuild'] as Map<String, dynamic>)['ndk'],
+      '27.1.12297006',
+    );
   });
 
   test(
@@ -236,6 +267,10 @@ void main() {
     expect(bundle['desktopPrepareScript'], 'scripts/prepare_node_runtime.sh');
     expect(bundle['desktopManifest'], 'tools/node_runtime/manifest.json');
     expect(bundle['androidAbi'], 'arm64-v8a');
+    expect(bundle['androidAbis'], ['arm64-v8a']);
+    final pageSize = bundle['androidPageSize'] as Map<String, dynamic>;
+    expect(pageSize['requiredBytes'], 16384);
+    expect(pageSize['elfLoadAlignment'], 'verified');
     expect(
       bundle['androidLibrary'],
       'android/app/src/main/jniLibs/arm64-v8a/libnode.so',

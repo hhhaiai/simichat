@@ -16,6 +16,9 @@ void main() {
       await BundledNodeRuntime.stop();
     });
     expect(runtime['running'], isTrue);
+    expect(runtime['state'], 'running');
+    expect(runtime['healthVerified'], isTrue);
+    expect(runtime['restartCount'], isA<int>());
     expect(runtime['runtime'], 'simichat-node-desktop-bundled');
     expect(runtime['dependencyMode'], 'bundled_node');
     expect(runtime['requiresHostNode'], isFalse);

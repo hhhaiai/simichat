@@ -36,9 +36,35 @@
         "desktopRuntimeVersion": "24.11.1",
         "androidRuntime": "nodejs-mobile",
         "androidVersion": "18.20.4",
+        "androidSourceRevision": "959b6e8637c86fb1f63f1aaf72adc86c7e8c335d",
+        "androidMinimumApi": 24,
+        "androidAbis": [
+          "arm64-v8a"
+        ],
+        "androidPageSize": {
+          "requiredBytes": 16384,
+          "elfLoadAlignment": "verified",
+          "apkZipAlignment": "verified",
+          "auditScript": "scripts/verify_android_native_16k.sh"
+        },
         "androidAbi": "arm64-v8a",
         "androidLibrary": "android/app/src/main/jniLibs/arm64-v8a/libnode.so",
-        "androidSha256": "7c907316beb6e78e34495926c9ac1befe079369b14650d508ea812929258250c"
+        "androidSha256": "6f45b99339a9e4264e3a82aabe6c6fd7acb0bbdc7d428ee03aada653f4cd91ec",
+        "androidLibraries": {
+          "arm64-v8a": {
+            "path": "android/app/src/main/jniLibs/arm64-v8a/libnode.so",
+            "sha256": "6f45b99339a9e4264e3a82aabe6c6fd7acb0bbdc7d428ee03aada653f4cd91ec",
+            "elfLoadAlignmentBytes": 16384
+          }
+        },
+        "androidLibnodeBuild": {
+          "ndk": "27.1.12297006",
+          "linkerFlags": [
+            "-Wl,-z,max-page-size=16384",
+            "-Wl,-z,common-page-size=16384"
+          ],
+          "elfLoadAlignmentBytes": 16384
+        }
       },
       "verification": {
         "androidPixel8": "runtime_verified",

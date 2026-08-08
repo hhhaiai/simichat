@@ -5,6 +5,7 @@ import android.content.res.AssetManager
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Owns the Node.js runtime shipped inside the Android APK.
@@ -18,6 +19,10 @@ class SimiChatNodeRuntime(private val context: Context) {
     companion object {
         const val CHANNEL = "top.simitalk.aichat/node_runtime"
         const val PORT = 37651
+        private const val STATE_STOPPED = 0
+        private const val STATE_STARTING = 1
+        private const val STATE_RUNNING = 2
+        private const val STATE_CRASHED = 3
 
         init {
             // libnode is a dependency of the bridge. Loading it first also
@@ -28,6 +33,7 @@ class SimiChatNodeRuntime(private val context: Context) {
     }
 
     private val prepared = AtomicBoolean(false)
+    private val restartCount = AtomicInteger(0)
     private val runtimeDirectory: File
         get() = File(context.filesDir, "simichat_node_runtime")
     private val scriptFile: File
@@ -35,12 +41,18 @@ class SimiChatNodeRuntime(private val context: Context) {
 
     fun start(): Map<String, Any> {
         prepareAssets()
+        if (nativeState() == STATE_CRASHED) {
+            restartCount.incrementAndGet()
+        }
         val started = nativeStart(
             arrayOf("node", scriptFile.absolutePath),
             runtimeDirectory.absolutePath,
             context.cacheDir.absolutePath,
         )
-        return info(started)
+        // `started` also covers the short STARTING window. Returning it as a
+        // positive start acknowledgement lets Dart wait for /health instead
+        // of reporting a transient false negative to the MCP layer.
+        return info(started || nativeIsRunning())
     }
 
     fun status(): Map<String, Any> = info(nativeIsRunning())
@@ -52,21 +64,41 @@ class SimiChatNodeRuntime(private val context: Context) {
         return status() + mapOf("stopSupported" to false)
     }
 
-    private fun info(running: Boolean): Map<String, Any> = mapOf(
-        "running" to running,
-        "runtime" to "simichat-node-android-embedded",
-        "dependencyMode" to "bundled_nodejs_mobile",
-        "externalProcess" to false,
-        "appManaged" to true,
-        "requiresHostNode" to false,
-        "requiresHostNpx" to false,
-        "requiresDocker" to false,
-        "nodeVersion" to "18.20.4-mobile",
-        "abi" to android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
-        "healthUrl" to "http://127.0.0.1:$PORT/health",
-        "sseUrl" to "http://127.0.0.1:$PORT/mcp/sse/simichat-node",
-        "scriptPath" to scriptFile.absolutePath,
-    )
+    private fun info(running: Boolean): Map<String, Any> {
+        val nativeState = nativeState()
+        val exitCode = nativeExitCode()
+        return mapOf(
+            "running" to running,
+            "state" to stateName(nativeState),
+            "nativeState" to nativeState,
+            "nativeExitCode" to exitCode,
+            "restartCount" to restartCount.get(),
+            "lastError" to if (nativeState == STATE_CRASHED) {
+                "embedded Node exited with code $exitCode"
+            } else {
+                ""
+            },
+            "runtime" to "simichat-node-android-embedded",
+            "dependencyMode" to "bundled_nodejs_mobile",
+            "externalProcess" to false,
+            "appManaged" to true,
+            "requiresHostNode" to false,
+            "requiresHostNpx" to false,
+            "requiresDocker" to false,
+            "nodeVersion" to "18.20.4-mobile",
+            "abi" to android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+            "healthUrl" to "http://127.0.0.1:$PORT/health",
+            "sseUrl" to "http://127.0.0.1:$PORT/mcp/sse/simichat-node",
+            "scriptPath" to scriptFile.absolutePath,
+        )
+    }
+
+    private fun stateName(value: Int): String = when (value) {
+        STATE_STARTING -> "starting"
+        STATE_RUNNING -> "running"
+        STATE_CRASHED -> "crashed"
+        else -> "stopped"
+    }
 
     private fun prepareAssets() {
         if (prepared.get()) return
@@ -98,9 +130,14 @@ class SimiChatNodeRuntime(private val context: Context) {
 
     private external fun nativeIsRunning(): Boolean
 
+    private external fun nativeState(): Int
+
+    private external fun nativeExitCode(): Int
+
     private external fun nativeStart(
         arguments: Array<String>,
         workingDirectory: String,
         cacheDirectory: String,
     ): Boolean
+
 }

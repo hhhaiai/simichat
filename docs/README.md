@@ -35,6 +35,7 @@
 | [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md) | 当前静态分析、全量测试、构建、mock smoke 和真实 runtime 边界 |
 | [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
 | [Android / PC 内置 Node Runtime](MCP_BUNDLED_NODE_RUNTIME.md) | APK 内 `libnode.so`、PC bundled Node、构建准备、SSE 链路、真实验证矩阵和未覆盖边界 |
+| [Bundled Runtime CI](../.github/workflows/bundled-runtime.yml) | macOS / Linux / Windows 发布包构建、随包 binary 检查和 exact-package MCP smoke |
 | [功能实现差距分析（2026-08-07）](implementation-gap-analysis-2026-08-07.md) | 功能项逐项标注已实现、需真机补证或需外部资源 |
 | [产品需求总纲](requirements.md) | 产品目标、模块、页面、隐私和路线需求 |
 

@@ -37,8 +37,35 @@
   "android": {
     "runtime": "nodejs-mobile",
     "version": "18.20.4",
+    "sourceRevision": "959b6e8637c86fb1f63f1aaf72adc86c7e8c335d",
+    "minimumAndroidApi": 24,
+    "supportedAbis": [
+      "arm64-v8a"
+    ],
+    "pageSize": {
+      "requiredBytes": 16384,
+      "elfLoadAlignment": "verified",
+      "apkZipAlignment": "verified",
+      "auditScript": "scripts/verify_android_native_16k.sh"
+    },
     "archive": "https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip",
     "arm64Library": "android/app/src/main/jniLibs/arm64-v8a/libnode.so",
-    "arm64Sha256": "7c907316beb6e78e34495926c9ac1befe079369b14650d508ea812929258250c"
+    "arm64Sha256": "6f45b99339a9e4264e3a82aabe6c6fd7acb0bbdc7d428ee03aada653f4cd91ec",
+    "libraries": {
+      "arm64-v8a": {
+        "path": "android/app/src/main/jniLibs/arm64-v8a/libnode.so",
+        "sha256": "6f45b99339a9e4264e3a82aabe6c6fd7acb0bbdc7d428ee03aada653f4cd91ec",
+        "elfLoadAlignmentBytes": 16384
+      }
+    },
+    "libnodeBuild": {
+      "sourceRevision": "959b6e8637c86fb1f63f1aaf72adc86c7e8c335d",
+      "ndk": "27.1.12297006",
+      "linkerFlags": [
+        "-Wl,-z,max-page-size=16384",
+        "-Wl,-z,common-page-size=16384"
+      ],
+      "elfLoadAlignmentBytes": 16384
+    }
   }
 }

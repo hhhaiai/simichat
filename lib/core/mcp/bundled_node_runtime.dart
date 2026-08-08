@@ -23,6 +23,13 @@ class BundledNodeRuntime {
   static Process? _desktopProcess;
   static String? _desktopNodePath;
   static Future<Map<String, dynamic>>? _startFuture;
+  static final Set<Process> _desktopIntentionalStops = <Process>{};
+  static const int _maxStartAttempts = 2;
+  static const Duration _startRetryDelay = Duration(milliseconds: 350);
+  static String _desktopState = 'stopped';
+  static int _desktopRestartCount = 0;
+  static String? _lastError;
+  static DateTime? _lastHealthyAt;
 
   static bool get isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
@@ -71,12 +78,17 @@ class BundledNodeRuntime {
     }
     final process = _desktopProcess;
     if (process == null) {
-      return _stopped('Bundled Node runtime is not started');
+      return _stopped(
+        _lastError == null
+            ? 'Bundled Node runtime is not started'
+            : 'Bundled Node runtime is not running: $_lastError',
+      );
     }
     return _runningInfo(
       runtime: 'simichat-node-desktop-bundled',
       nodePath: _desktopNodePath ?? 'unknown',
       externalProcess: true,
+      state: _desktopState,
     );
   }
 
@@ -98,10 +110,13 @@ class BundledNodeRuntime {
     }
     final process = _desktopProcess;
     if (process != null) {
+      _desktopIntentionalStops.add(process);
       process.kill(ProcessSignal.sigterm);
       _desktopProcess = null;
       _desktopNodePath = null;
     }
+    _desktopState = 'stopped';
+    _lastError = null;
     return _stopped('Bundled Node runtime stopped');
   }
 
@@ -112,16 +127,38 @@ class BundledNodeRuntime {
           'iOS uses App Native MCP; Node runtime is Android/PC only',
         );
       }
-      try {
-        final response = await kBundledNodeRuntimeChannel
-            .invokeMapMethod<String, dynamic>('start');
-        final info =
-            response ?? _unsupported('Android Node runtime returned no status');
-        if (info['running'] == true) await _waitForHealth();
-        return info;
-      } on MissingPluginException {
-        return _unsupported('Android Node runtime channel is not registered');
+      Object? lastError;
+      Map<String, dynamic>? lastInfo;
+      for (var attempt = 1; attempt <= _maxStartAttempts; attempt++) {
+        try {
+          final response = await kBundledNodeRuntimeChannel
+              .invokeMapMethod<String, dynamic>('start');
+          final info =
+              response ??
+              _unsupported('Android Node runtime returned no status');
+          lastInfo = info;
+          if (info['running'] == true) {
+            await _waitForHealth();
+            return <String, dynamic>{
+              ...info,
+              'state': 'running',
+              'healthVerified': true,
+            };
+          }
+          lastError = info['lastError'] ?? info['message'] ?? 'not running';
+        } on MissingPluginException {
+          return _unsupported('Android Node runtime channel is not registered');
+        } on Object catch (error) {
+          lastError = error;
+        }
+        if (attempt < _maxStartAttempts) {
+          await Future<void>.delayed(_startRetryDelay);
+        }
       }
+      throw StateError(
+        'Android bundled Node runtime failed after $_maxStartAttempts '
+        'attempts: ${lastError ?? lastInfo}',
+      );
     }
     if (!isDesktop) {
       return _unsupported(
@@ -131,13 +168,39 @@ class BundledNodeRuntime {
 
     final existing = _desktopProcess;
     if (existing != null) {
+      await _waitForHealth();
+      _desktopState = 'running';
+      _lastHealthyAt = DateTime.now();
       return _runningInfo(
         runtime: 'simichat-node-desktop-bundled',
         nodePath: _desktopNodePath ?? 'unknown',
         externalProcess: true,
+        state: _desktopState,
       );
     }
 
+    Object? lastError;
+    for (var attempt = 1; attempt <= _maxStartAttempts; attempt++) {
+      try {
+        return await _startDesktopOnce();
+      } on Object catch (error) {
+        lastError = error;
+        _lastError = error.toString();
+        await _terminateDesktopProcess();
+        if (attempt < _maxStartAttempts) {
+          _desktopRestartCount++;
+          await Future<void>.delayed(_startRetryDelay);
+        }
+      }
+    }
+    _desktopState = 'crashed';
+    throw StateError(
+      'Bundled Node runtime failed after $_maxStartAttempts attempts: '
+      '$lastError',
+    );
+  }
+
+  static Future<Map<String, dynamic>> _startDesktopOnce() async {
     final runtimeRoot = await _runtimeRoot();
     final serverFile = await _copyServerAsset(runtimeRoot);
     final nodeFile = await _resolveBundledNode(runtimeRoot);
@@ -167,29 +230,42 @@ class BundledNodeRuntime {
     );
     _desktopProcess = process;
     _desktopNodePath = nodeFile.path;
+    _desktopState = 'starting';
+    _lastError = null;
     unawaited(
-      process.exitCode.then((_) {
+      process.exitCode.then((exitCode) {
+        final intentional = _desktopIntentionalStops.remove(process);
         if (identical(_desktopProcess, process)) {
           _desktopProcess = null;
           _desktopNodePath = null;
+          _desktopState = intentional || exitCode == 0 ? 'stopped' : 'crashed';
+          if (!intentional && exitCode != 0) {
+            _lastError = 'bundled Node exited with code $exitCode';
+          }
         }
       }),
     );
     unawaited(process.stdout.drain());
     unawaited(process.stderr.drain());
-    try {
-      await _waitForHealth();
-    } catch (_) {
-      process.kill(ProcessSignal.sigterm);
-      _desktopProcess = null;
-      _desktopNodePath = null;
-      rethrow;
-    }
+    await _waitForHealth();
+    _desktopState = 'running';
+    _lastHealthyAt = DateTime.now();
     return _runningInfo(
       runtime: 'simichat-node-desktop-bundled',
       nodePath: nodeFile.path,
       externalProcess: true,
+      state: _desktopState,
     );
+  }
+
+  static Future<void> _terminateDesktopProcess() async {
+    final process = _desktopProcess;
+    if (process == null) return;
+    _desktopIntentionalStops.add(process);
+    process.kill(ProcessSignal.sigterm);
+    _desktopProcess = null;
+    _desktopNodePath = null;
+    _desktopState = 'stopped';
   }
 
   static Future<void> _waitForHealth({
@@ -328,8 +404,10 @@ class BundledNodeRuntime {
     required String runtime,
     required String nodePath,
     required bool externalProcess,
+    required String state,
   }) => {
     'running': true,
+    'state': state,
     'runtime': runtime,
     'dependencyMode': 'bundled_node',
     'nodePath': nodePath,
@@ -338,14 +416,22 @@ class BundledNodeRuntime {
     'requiresHostNode': false,
     'requiresHostNpx': false,
     'requiresDocker': false,
+    'restartCount': _desktopRestartCount,
+    'lastError': _lastError ?? '',
+    'lastHealthyAt': _lastHealthyAt?.toIso8601String() ?? '',
+    'healthVerified': _lastHealthyAt != null,
     'healthUrl': kBundledNodeRuntimeHealthUrl,
     'sseUrl': kBundledNodeRuntimeSseUrl,
   };
 
   static Map<String, dynamic> _stopped(String message) => {
     'running': false,
+    'state': _desktopState,
     'runtime': 'simichat-node-bundled',
     'message': message,
+    'restartCount': _desktopRestartCount,
+    'lastError': _lastError ?? '',
+    'lastHealthyAt': _lastHealthyAt?.toIso8601String() ?? '',
     'requiresHostNode': false,
     'requiresHostNpx': false,
     'requiresDocker': false,

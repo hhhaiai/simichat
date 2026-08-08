@@ -20,6 +20,8 @@ namespace {
 constexpr char kLogTag[] = "SimiChatNodeRuntime";
 std::atomic<bool> g_started{false};
 std::atomic<bool> g_running{false};
+std::atomic<int> g_state{0};
+std::atomic<int> g_exit_code{0};
 std::thread g_node_thread;
 
 std::string jstring_to_string(JNIEnv* env, jstring value) {
@@ -51,6 +53,16 @@ Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeIsRunning(JNIEnv*, jobject) {
   return g_running.load() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeState(JNIEnv*, jobject) {
+  return g_state.load();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeExitCode(JNIEnv*, jobject) {
+  return g_exit_code.load();
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeStart(
     JNIEnv* env,
@@ -60,8 +72,14 @@ Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeStart(
     jstring cache_directory) {
   bool expected = false;
   if (!g_started.compare_exchange_strong(expected, true)) {
-    return g_running.load() ? JNI_TRUE : JNI_FALSE;
+    // A second start while the native thread is still entering Node is a
+    // successful single-flight request, not a failure. The Dart controller
+    // will wait for /health before creating the SSE client.
+    return JNI_TRUE;
   }
+
+  g_state.store(1);  // starting
+  g_exit_code.store(0);
 
   const std::string cwd = jstring_to_string(env, working_directory);
   const std::string cache = jstring_to_string(env, cache_directory);
@@ -93,12 +111,15 @@ Java_top_simitalk_aichat_SimiChatNodeRuntime_nativeStart(
     }
     argv.push_back(nullptr);
 
+    g_state.store(2);  // running
     g_running.store(true);
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                          "embedded Node starting (%s)",
                          args.size() > 1 ? args[1].c_str() : "no script");
     const int exit_code = node::Start(static_cast<int>(args.size()), argv.data());
     g_running.store(false);
+    g_exit_code.store(exit_code);
+    g_state.store(exit_code == 0 ? 0 : 3);  // stopped / crashed
     g_started.store(false);
     __android_log_print(ANDROID_LOG_INFO, kLogTag,
                          "embedded Node stopped with exit code %d", exit_code);

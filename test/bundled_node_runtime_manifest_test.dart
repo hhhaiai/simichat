@@ -43,6 +43,23 @@ void main() {
     );
   });
 
+  test('desktop bundle verifier uses the package binary explicitly', () {
+    final source = File('scripts/verify_desktop_bundle.sh').readAsStringSync();
+    expect(source, contains('SIMICHAT_BUNDLED_NODE_PATH'));
+    expect(source, contains('SIMICHAT_DESKTOP_BUNDLE_BINARY_READY'));
+    expect(source, contains('SIMICHAT_DESKTOP_BUNDLE_RUNTIME_READY'));
+    expect(source, contains('macos-arm64/node'));
+    expect(source, contains('linux-x64/node'));
+    expect(source, contains('windows-x64/node.exe'));
+    expect(
+      Process.runSync('bash', [
+        '-n',
+        'scripts/verify_desktop_bundle.sh',
+      ]).exitCode,
+      0,
+    );
+  });
+
   test('manifest separates Android embedded and desktop bundled metadata', () {
     final manifest =
         jsonDecode(File('tools/node_runtime/manifest.json').readAsStringSync())
@@ -84,8 +101,9 @@ void main() {
 
   test('desktop binary is installed by native bundles, not Flutter assets', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
-    final macosProject =
-        File('macos/Runner.xcodeproj/project.pbxproj').readAsStringSync();
+    final macosProject = File(
+      'macos/Runner.xcodeproj/project.pbxproj',
+    ).readAsStringSync();
     final linuxCmake = File('linux/CMakeLists.txt').readAsStringSync();
     final windowsCmake = File('windows/CMakeLists.txt').readAsStringSync();
 

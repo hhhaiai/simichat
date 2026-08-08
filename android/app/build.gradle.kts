@@ -8,7 +8,10 @@ plugins {
 android {
     namespace = "top.simitalk.aichat"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // NDK r28 defaults to 16 KB ELF segment alignment for newly linked
+    // native libraries. Keep this explicit so the Android bridge is built
+    // with the same toolchain on every developer and release machine.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -33,9 +36,9 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // Node.js for Mobile Apps is currently shipped for arm64-v8a only.
-        // This matches the supported real device acceptance target (Pixel 8)
-        // and prevents Gradle from producing an APK with a missing runtime ABI.
+        // The checked-in nodejs-mobile runtime currently has one verified ABI.
+        // Do not add an ABI here until its libnode.so, bridge, libc++_shared.so,
+        // page-size audit, and device smoke have all passed.
         ndk {
             abiFilters += "arm64-v8a"
         }

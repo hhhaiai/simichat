@@ -12,10 +12,11 @@
 | Android bundled Node MCP 真机 smoke | 通过 | Pixel 8 / Android 16 / arm64-v8a；APK 内 `libnode.so` 完成 initialize、tools/list、runtime_info、echo |
 | PC bundled Node host process smoke | 通过 | macOS arm64 exact bundled Node path；真实 `/health`、SSE、tools/list、runtime_info |
 | PC macOS Flutter bundled Node integration | 通过 | App test 输出 `SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY` |
-| 全量 Flutter 单元 / Widget 测试 | 通过 | flutter --no-version-check test --no-pub --no-test-assets -r compact，680 项通过 |
+| 全量 Flutter 单元 / Widget 测试 | 通过 | flutter --no-version-check test --no-pub --no-test-assets -r compact，681 项通过 |
 | 格式检查 | 通过 | git diff --check 无输出 |
 | 本地模型 smoke 脚本 mock | 通过 | mock HTTP 服务返回 /api/tags、thinking + content NDJSON 和 done=true，脚本输出 LOCAL_OLLAMA_SMOKE_OK |
 | Android debug 构建 | 通过 | flutter --no-version-check build apk --debug，生成 build/app/outputs/flutter-apk/app-debug.apk |
+| Android release 16 KB audit | 通过 | release APK 的全部 native library 与 ZIP alignment 通过 `ANDROID_16K_NATIVE_AUDIT_PASS`；使用 build-tools 35.0.1 |
 | 本机真实 Ollama | 未验证 | ollama 命令不存在，127.0.0.1:11434 当前连接被拒绝 |
 
 ## 本轮代码验证
@@ -34,6 +35,18 @@ page-size 边界见：
 ```text
 docs/MCP_BUNDLED_NODE_RUNTIME.md
 ```
+
+## 升级后追加证据（2026-08-08）
+
+- 从 nodejs-mobile `18.20.4` 的固定 source revision 重建了 Android
+  `arm64-v8a/libnode.so`。
+- 使用 NDK `27.1.12297006` 和 `-Wl,-z,max-page-size=16384`、
+  `-Wl,-z,common-page-size=16384`；四个 `LOAD` segment 均为 `0x4000`。
+- `LLVM_READELF=... ./scripts/verify_android_native_16k.sh` 对 source JNI library
+  输出 `ANDROID_16K_NATIVE_AUDIT_PASS`。
+- release APK 的全部 native library 和 ZIP 16 KB alignment audit 也已输出
+  `ANDROID_16K_NATIVE_AUDIT_PASS`；16 KB 真机仍需独立证据，manifest 对应字段保持
+  分开记录。
 
 本轮将本地模型接入收口为以下事实：
 

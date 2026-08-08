@@ -48,6 +48,12 @@ void main() {
     await manager.ready;
     await tester.pumpAndSettle();
 
+    final runtimeStatus = await BundledNodeRuntime.status();
+    expect(runtimeStatus['running'], isTrue);
+    expect(runtimeStatus['state'], 'running');
+    expect(runtimeStatus['nativeState'], 2);
+    expect(runtimeStatus['healthUrl'], kBundledNodeRuntimeHealthUrl);
+
     expect(manager.isConnected('real-android-bundled-node-mcp'), isTrue);
     expect(manager.connectionErrorFor('real-android-bundled-node-mcp'), isNull);
     expect(
