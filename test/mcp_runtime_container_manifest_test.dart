@@ -118,6 +118,71 @@ void main() {
     expect(item.description, contains('不依赖宿主机 npx'));
   });
 
+  test('marketplace exposes bundled Node runtime for Android and PC', () {
+    final item = builtinMcpServers.firstWhere(
+      (server) => server.id == 'simichat-node-bundled',
+    );
+
+    expect(item.transport, 'sse');
+    expect(item.url, 'http://127.0.0.1:37651/mcp/sse/simichat-node');
+    expect(item.description, contains('Android / PC App 随包提供 Node.js Runtime'));
+    expect(item.description, contains('不依赖宿主机 node'));
+  });
+
+  test('Android bundled Node runtime is a pinned arm64 native asset', () {
+    final library = File('android/app/src/main/jniLibs/arm64-v8a/libnode.so');
+    final bridge = File('android/app/src/main/cpp/simichat_node_bridge.cpp');
+    final manifest =
+        jsonDecode(File('tools/node_runtime/manifest.json').readAsStringSync())
+            as Map<String, dynamic>;
+    final android = manifest['android'] as Map<String, dynamic>;
+
+    expect(library.existsSync(), isTrue);
+    expect(library.lengthSync(), greaterThan(50 * 1024 * 1024));
+    expect(bridge.readAsStringSync(), contains('node::Start'));
+    expect(android['runtime'], 'nodejs-mobile');
+    expect(android['version'], '18.20.4');
+    expect(
+      android['arm64Library'],
+      'android/app/src/main/jniLibs/arm64-v8a/libnode.so',
+    );
+    expect(android['arm64Sha256'], hasLength(64));
+  });
+
+  test(
+    'desktop preparation pins official Node archives and does not use host node',
+    () {
+      final script = File('scripts/prepare_node_runtime.sh').readAsStringSync();
+      final manifest =
+          jsonDecode(
+                File('tools/node_runtime/manifest.json').readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final platforms = (manifest['platforms'] as Map<String, dynamic>);
+
+      expect(script, contains("['nodeVersion']"));
+      expect(script, contains("['source']"));
+      expect(script, contains('.part'));
+      expect(script, contains('shasum -a 256'));
+      expect(script, contains('tools/node_runtime/bundled'));
+      expect(script, isNot(contains('command -v node')));
+      expect(
+        platforms.keys,
+        containsAll([
+          'macos-arm64',
+          'macos-x64',
+          'linux-arm64',
+          'linux-x64',
+          'windows-arm64',
+          'windows-x64',
+        ]),
+      );
+      for (final value in platforms.values) {
+        expect((value as Map<String, dynamic>)['sha256'], hasLength(64));
+      }
+    },
+  );
+
   test('runtime manifest documents mobile and PC self-dependent paths', () {
     final manifestFile = File('docs/runtime-manifest.example.json');
     expect(manifestFile.existsSync(), isTrue);
@@ -156,5 +221,28 @@ void main() {
       container['baseImageOverrideEnv'],
       'SIMICHAT_MCP_RUNTIME_BASE_IMAGE',
     );
+
+    final bundled = servers.singleWhere(
+      (server) => server['id'] == 'simichat-node-bundled',
+    );
+    expect(bundled['runtime'], 'node-bundled');
+    expect(bundled['mobileReady'], isTrue);
+    expect(bundled['desktopReady'], isTrue);
+    expect(bundled['iosReady'], isFalse);
+    expect(bundled['requiresHostNode'], isFalse);
+    expect(bundled['requiresHostNpx'], isFalse);
+    expect(bundled['requiresDocker'], isFalse);
+    final bundle = bundled['bundle'] as Map<String, dynamic>;
+    expect(bundle['desktopPrepareScript'], 'scripts/prepare_node_runtime.sh');
+    expect(bundle['desktopManifest'], 'tools/node_runtime/manifest.json');
+    expect(bundle['androidAbi'], 'arm64-v8a');
+    expect(
+      bundle['androidLibrary'],
+      'android/app/src/main/jniLibs/arm64-v8a/libnode.so',
+    );
+    final verification = bundled['verification'] as Map<String, dynamic>;
+    expect(verification['androidPixel8'], 'runtime_verified');
+    expect(verification['desktopBundledProcessSmoke'], 'runtime_verified');
+    expect(verification['desktopFlutterApp'], contains('runtime_verified'));
   });
 }

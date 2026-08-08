@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/mcp/mcp_client.dart';
+import '../../core/mcp/bundled_node_runtime.dart';
 import '../../core/database/dao/mcp_dao.dart';
 import 'database_provider.dart';
 
@@ -105,6 +106,8 @@ class McpUnsupportedTransportException implements Exception {
   @override
   String toString() => message;
 }
+
+const kBundledNodeMcpServerId = 'simichat-node-bundled';
 
 /// MCP 管理器：管理多个 MCP 服务器连接，持久化到数据库
 class McpManager extends StateNotifier<List<McpServerConfig>> {
@@ -227,6 +230,14 @@ class McpManager extends StateNotifier<List<McpServerConfig>> {
     } else if (config.transport == kMcpTransportSse) {
       if (config.url == null || config.url!.isEmpty) {
         throw Exception('MCP SSE server requires a URL');
+      }
+      if (config.marketplaceId == kBundledNodeMcpServerId) {
+        final runtime = await BundledNodeRuntime.start();
+        if (runtime['running'] != true) {
+          throw Exception(
+            '随应用分发的 Node Runtime 未运行: ${runtime['message'] ?? runtime}',
+          );
+        }
       }
       transport = SseTransport(url: config.url!, headers: config.headers ?? {});
     } else {

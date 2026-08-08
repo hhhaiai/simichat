@@ -16,6 +16,48 @@
       ]
     },
     {
+      "id": "simichat-node-bundled",
+      "name": "SimiChat 内置 Node Runtime",
+      "runtime": "node-bundled",
+      "transport": "sse",
+      "url": "http://127.0.0.1:37651/mcp/sse/simichat-node",
+      "healthUrl": "http://127.0.0.1:37651/health",
+      "mobileReady": true,
+      "desktopReady": true,
+      "iosReady": false,
+      "requiresHostNode": false,
+      "requiresHostNpx": false,
+      "requiresDocker": false,
+      "appManaged": true,
+      "bundle": {
+        "serverAsset": "tools/mcp_runtime/container/runtime-server.mjs",
+        "desktopManifest": "tools/node_runtime/manifest.json",
+        "desktopPrepareScript": "scripts/prepare_node_runtime.sh",
+        "desktopRuntimeVersion": "24.11.1",
+        "androidRuntime": "nodejs-mobile",
+        "androidVersion": "18.20.4",
+        "androidAbi": "arm64-v8a",
+        "androidLibrary": "android/app/src/main/jniLibs/arm64-v8a/libnode.so",
+        "androidSha256": "7c907316beb6e78e34495926c9ac1befe079369b14650d508ea812929258250c"
+      },
+      "verification": {
+        "androidPixel8": "runtime_verified",
+        "desktopBundledProcessSmoke": "runtime_verified",
+        "desktopFlutterApp": "runtime_verified; Flutter test emitted SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY"
+      },
+      "tools": [
+        "simichat.node_runtime_info",
+        "simichat.echo",
+        "simichat.fs_list",
+        "simichat.fs_read_text",
+        "simichat.fetch_text"
+      ],
+      "permissions": {
+        "filesystemRootEnv": "MCP_RUNTIME_WORKSPACE_ROOT",
+        "network": "http_get_only"
+      }
+    },
+    {
       "id": "simichat-node-container",
       "name": "SimiChat Node 容器 Runtime",
       "runtime": "node-container",

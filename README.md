@@ -8,6 +8,7 @@ SimiChat 是一个 Flutter 全平台 AI 对话应用：会话、模型渠道、�
 - **数据本地保存**：SQLite、会话 Markdown、附件、模型渠道和设置都保存在应用本地；API Key 使用本地加密存储。
 - **可回退但不静默切云端**：本地 Ollama 不可用时会显示连接错误，不会自动把本地请求改发到远程厂商。
 - **跨平台**：Flutter 项目包含 Android、iOS、macOS、Linux 和 Windows 工程；真机 smoke 与静态测试分开记录。
+- **MCP 自带运行时**：Android APK 内置 arm64 Node.js Runtime；PC 构建前准备与目标平台匹配的官方 Node binary，App 运行 MCP 时不依赖宿主机 `node` / `npx` / Docker / Podman。
 
 ## 快速开始
 
@@ -69,6 +70,22 @@ Ollama 适配层同时处理：
 - 本地模型列表 /api/tags；
 - 图片附件转换为 Ollama images 字段。
 
+## 使用 App 内置 Node MCP
+
+市场中的 **SimiChat 内置 Node Runtime** 适用于需要 Node MCP 工具、但不希望
+配置宿主机 Node 环境的场景：
+
+- Android：`arm64-v8a` Node runtime 已随 APK 内置；
+- PC：发布构建前运行 `scripts/prepare_node_runtime.sh`，把 manifest 固定的
+  官方 Node binary 放入目标 App 自己的 Resources / 安装目录；桌面 binary
+  不进入 Flutter assets，也不会被打进 Android APK；
+- 运行时由 App 管理本地 SSE，不调用宿主机 `node` / `npm` / `npx`，也不自动
+  启动 Docker / Podman；
+- PC 容器 Runtime 仍是可选隔离路径，不是 bundled Node 的前置依赖。
+
+具体目录、生命周期、构建命令和证据边界见
+[Android / PC 内置 Node Runtime](docs/MCP_BUNDLED_NODE_RUNTIME.md)。
+
 ## 项目结构
 
 | 路径 | 内容 |
@@ -90,6 +107,8 @@ Ollama 适配层同时处理：
 - [当前项目状态](docs/current-status.md)
 - [本地 Ollama 接入与稳定性说明](docs/local-model.md)
 - [当前验证基线](docs/verification-baseline-2026-08-08.md)
+- [Android / PC 内置 Node Runtime](docs/MCP_BUNDLED_NODE_RUNTIME.md)
+- [MCP Runtime 容器化设计](docs/MCP_RUNTIME_CONTAINERIZATION.md)
 - [AI 协议适配层](docs/ai-protocols.md)
 - [整体架构](docs/architecture.md)
 - [模型接入方案](docs/model-integration.md)

@@ -13,12 +13,16 @@
 | Ollama 协议 | 已处理 NDJSON、thinking/content、取消、超时、非 200 响应和可选 Bearer 鉴权 | mock HTTP 协议测试通过 |
 | 移动端 MCP | App Native、移动端 stdio 拒绝、SSE 生命周期和设置页入口已收口 | Pixel 8 / iPhone13 逻辑专项各 162 项、UI smoke 各 1 项通过 |
 | App Native MCP 真机运行 | 在 App 进程内完成 MCP 初始化、工具发现和 `simichat.runtime_info` / `simichat.now` 调用，不依赖外部环境 | Pixel 8 / iPhone13 各 1 项真实设备 smoke 通过 |
+| Android 内置 Node MCP | APK 内置 `nodejs-mobile v18.20.4`、`arm64-v8a/libnode.so` 和 JNI bridge；MCP server 由 APK 内 Node 执行 | Pixel 8 真机 initialize、tools/list、runtime_info、echo 通过；当前只覆盖 arm64-v8a |
+| PC 内置 Node MCP | App 只启动随包 Node binary，不回退宿主机 `node` / `npx` / Docker / Podman | bundled Node 真实进程 smoke 与 macOS Flutter App integration 通过；macOS/Xcode、Linux/CMake、Windows/CMake 将 binary 放入 App 安装目录；运行时输出 `SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY` |
+| Android / PC Node 文档 | 已补齐实现、生命周期、构建、平台矩阵和真实证据边界 | `docs/MCP_BUNDLED_NODE_RUNTIME.md`、`docs/runtime-manifest.example.json` |
 | 移动端 Skills | 本地缓存恢复、下载大小 / 编码 / SHA-256 边界、搜索竞态已收口 | Pixel 8 / iPhone13 Skills Hub UI 和逻辑专项通过 |
 | 移动端记忆 | Key Point、SQLite FTS、semantic、索引预热 / 修复和搜索竞态已收口 | Pixel 8 / iPhone13 全局搜索 UI 与 162 项专项通过 |
 | Android 构建 | Debug APK 构建通过 | `build/app/outputs/flutter-apk/app-debug.apk` |
-| 全量测试 | 672 项通过 | `flutter --no-version-check test --no-pub --no-test-assets -r expanded` |
+| 全量测试 | 680 项通过 | `flutter --no-version-check test --no-pub --no-test-assets -r compact` |
 | 本机真实 Ollama | 当前未验证 | 本机没有 `ollama` 命令，`127.0.0.1:11434` 当前不可连接 |
 | 真机 / 长会话 | 当前未在本轮重新验证 | 不能由静态分析、mock 或 APK 构建替代 |
+| Android 16 KB page-size / 非 arm64 ABI | 当前未完成 | 现有 Pixel 8 是 `arm64-v8a` / 4 KB page；不能外推到 16 KB 设备或其他 ABI |
 
 ## 二、本轮修复逐项记录
 
@@ -120,6 +124,24 @@ docs/verification-baseline-2026-08-08.md
 docs/mobile-mcp-skills-memory-quality-2026-08-08.md
 ```
 
+内置 Node Runtime 专项：
+
+```text
+docs/MCP_BUNDLED_NODE_RUNTIME.md
+```
+
+当前已复现的专项命令：
+
+```bash
+SIMICHAT_MCP_RUNTIME_PORT=37651 ./scripts/smoke_bundled_node_runtime.sh
+```
+
+预期输出：
+
+```text
+SIMICHAT_DESKTOP_BUNDLED_NODE_PROCESS_READY
+```
+
 ## 四、尚未完成的真实证据
 
 以下项目不能仅凭当前测试标记为已完成：
@@ -135,6 +157,9 @@ docs/mobile-mcp-skills-memory-quality-2026-08-08.md
 
 ## 五、当前工作树边界
 
-本轮没有执行 reset、clean、删除、覆盖、commit 或 push。当前仓库仍保留原有未提交代码、测试、平台生成文件和未跟踪功能实现；工作树状态不能直接等同于“可发布提交”。
+本轮内置 Node Runtime 变更包含 Android native bridge、PC bundled runtime controller、
+manifest、准备 / smoke 脚本、集成测试和文档；Android native library 使用 Git LFS。
+平台构建生成的 macOS SwiftPM / CocoaPods 文件不属于本功能源变更，提交前应清理并
+在 `git diff --check` 后确认工作树边界。工作树状态不能直接等同于“可发布提交”。
 
 整理文档时只新增或更新入口、状态和专题说明，不删除未跟踪实现文件，不把静态测试结果写成真机成功。

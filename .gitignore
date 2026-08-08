@@ -88,3 +88,10 @@ linux/flutter/ephemeral/
 .omx/
 
 artifacts/
+
+.cache/node-runtime/
+tools/node_runtime/bundled/*
+!tools/node_runtime/bundled/.gitkeep
+!tools/node_runtime/bundled/macos-arm64/
+!tools/node_runtime/bundled/macos-arm64/node
+!tools/node_runtime/bundled/macos-arm64/LICENSE

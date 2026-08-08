@@ -321,7 +321,7 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
 
     if (!mounted) return;
     final message = usesExternalRuntime
-        ? '已安装为禁用: ${item.name}。旧 stdio MCP 依赖宿主机命令，优先使用 SimiChat Node 容器 Runtime。'
+        ? '已安装为禁用: ${item.name}。旧 stdio MCP 依赖宿主机命令，优先使用 SimiChat Node 容器 Runtime 或内置 Node Runtime。'
         : connectError != null
         ? '已安装但连接失败: $connectError'
         : connected

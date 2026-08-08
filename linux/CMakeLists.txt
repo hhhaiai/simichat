@@ -60,6 +60,25 @@ add_subdirectory("runner")
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
+# The desktop Node executable is an application-owned runtime.  It is copied
+# into the installed bundle rather than Flutter assets so Android APKs never
+# receive a foreign desktop executable.
+set(SIMICHAT_NODE_RUNTIME_PLATFORM "linux-x64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  set(SIMICHAT_NODE_RUNTIME_PLATFORM "linux-arm64")
+endif()
+if(DEFINED ENV{SIMICHAT_NODE_RUNTIME_PLATFORM} AND NOT "$ENV{SIMICHAT_NODE_RUNTIME_PLATFORM}" STREQUAL "")
+  set(SIMICHAT_NODE_RUNTIME_PLATFORM "$ENV{SIMICHAT_NODE_RUNTIME_PLATFORM}")
+endif()
+set(SIMICHAT_BUNDLED_NODE_SOURCE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../tools/node_runtime/bundled/${SIMICHAT_NODE_RUNTIME_PLATFORM}/node")
+if(NOT EXISTS "${SIMICHAT_BUNDLED_NODE_SOURCE}")
+  message(FATAL_ERROR
+    "Missing bundled Node runtime: ${SIMICHAT_BUNDLED_NODE_SOURCE}. "
+    "Run SIMICHAT_NODE_RUNTIME_PLATFORM=${SIMICHAT_NODE_RUNTIME_PLATFORM} "
+    "./scripts/prepare_node_runtime.sh before building Linux.")
+endif()
+
 # Only the install-generated bundle's copy of the executable will launch
 # correctly, since the resources must in the right relative locations. To avoid
 # people trying to run the unbundled copy, put it in a subdirectory instead of
@@ -111,6 +130,11 @@ set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
    COMPONENT Runtime)
+
+install(PROGRAMS "${SIMICHAT_BUNDLED_NODE_SOURCE}"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/node_runtime/${SIMICHAT_NODE_RUNTIME_PLATFORM}"
+  RENAME node
+  COMPONENT Runtime)
 
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.

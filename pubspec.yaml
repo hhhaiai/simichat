@@ -88,3 +88,4 @@ flutter:
     - tools/mcp_runtime/container/Dockerfile
     - tools/mcp_runtime/container/package.json
     - tools/mcp_runtime/container/runtime-server.mjs
+    - tools/node_runtime/manifest.json

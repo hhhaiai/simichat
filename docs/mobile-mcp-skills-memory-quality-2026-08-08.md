@@ -182,18 +182,42 @@ flutter --no-version-check analyze --no-pub
 git diff --check
 ```
 
-本轮结果：全量 Flutter 测试 **672 项通过**；Dart analyze `No issues found!`；`git diff --check` 无输出。
+本轮结果：全量 Flutter 测试 **680 项通过**；Dart analyze `No issues found!`；`git diff --check` 无输出。
 
-## 5. Android Node.js 容器决策
+## 5. Android Node.js 初始决策与后续实现
 
-当前移动端内建 MCP 不需要 Android Node.js 容器：
+### 5.1 App Native 基线
+
+移动端内建 MCP 不需要 Android Node.js 容器：
 
 - `AppNativeMcpTransport` 在 App 进程内完成 MCP JSON-RPC 初始化、工具发现和工具调用。
 - Pixel 8 / iPhone13 已在真实设备上通过 `McpManager` 调用 `simichat.runtime_info` 和 `simichat.now`。
 - 该路径不启动 `node`、`npx`、Python、Docker、Podman、HTTP mock 或远程 SSE。
 - 移动端 `stdio` 仍然明确拒绝，避免把宿主机命令依赖伪装成移动端稳定能力。
 
-因此本轮不添加 Android Node.js 容器。只有当产品要求在手机上运行任意第三方 Node MCP 包时，才需要新增独立的 Android Node runtime 方案。那不是 Docker 容器直接复用：需要随 APK 提供 arm64 / 其他 ABI 二进制、Node 模块安装来源、沙箱目录、权限模型、进程生命周期、升级和 APK 体积门禁，并重新做 Android 真机验证。当前仓库的 Node 容器实现是 **PC Docker / Podman 侧车**，不应误称为 Android 内置 runtime。
+当时结论是不把 PC Docker / Podman 方案误称为 Android runtime。随后产品明确要求
+“Android App / PC App 直接内置 Node 框架”，因此新增了独立的 APK 内 Node 路径，
+不是把容器搬进手机。
+
+### 5.2 当前 Android Bundled Node
+
+- Android APK 内置 `nodejs-mobile v18.20.4` 的 `arm64-v8a/libnode.so`。
+- JNI bridge 在 App 进程 native thread 中调用 `node::Start`，不启动宿主机命令。
+- `runtime-server.mjs` 从 Flutter assets 复制到 App 私有目录，再通过本地 SSE 提供
+  `tools/list`、`simichat.node_runtime_info` 和 `simichat.echo`。
+- Pixel 8 / Android 16 / API 36 真机已重复通过 Android bundled Node smoke；输出
+  `SIMICHAT_ANDROID_BUNDLED_NODE_MCP_READY`。
+- APK 内容已确认包含 `libnode.so`、`libsimichat_node_bridge.so`、`libc++_shared.so`
+  和 `runtime-server.mjs`。
+- 当前只交付 `arm64-v8a`。`libnode.so` 的 ELF `LOAD` 对齐仍为 `0x1000`，Pixel 8
+  logcat 出现 `PageSizeMismatchDialog`；因此 16 KB page-size 设备仍是
+  `UNVERIFIED`，不能宣称全 Android ABI / 16 KB 兼容。
+
+完整实现和发布门禁见：
+
+```text
+docs/MCP_BUNDLED_NODE_RUNTIME.md
+```
 
 ## 6. 尚未被本轮证明的边界
 
@@ -204,4 +228,4 @@ git diff --check
 - Android OEM 严格后台限制、跨日 / 长期 Doze 和长时间进程回收；本轮只复用了既有后台专项代码 / provider 回归。
 - 真实 Ollama `gemma4` 权重、移动端局域网地址、长上下文本地模型质量；详见 `docs/local-model.md` 和 `docs/verification-baseline-2026-08-08.md`。
 
-因此本轮结论是：**App Native MCP 已在 Pixel 8 和 iPhone13 上完成不依赖外部环境的真实连接与工具调用；MCP、Skills、记忆的核心移动 UI 路径也已通过，相关逻辑专项在两台真机目标上重复通过；第三方 Node MCP、系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**
+因此本轮结论是：**App Native MCP 已在 Pixel 8 和 iPhone13 上完成不依赖外部环境的真实连接与工具调用；Android arm64 Bundled Node MCP 已在 Pixel 8 真机完成真实 Node、SSE 和工具调用；MCP、Skills、记忆的核心移动 UI 路径也已通过，相关逻辑专项在两台真机目标上重复通过；16 KB page-size、非 arm64 ABI、系统后台、长时外部网络和真实本地模型仍保持单独的未证明边界。**

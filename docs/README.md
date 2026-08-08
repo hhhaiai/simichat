@@ -34,6 +34,7 @@
 | [本地 Ollama 接入与稳定性](local-model.md) | Ollama 安装、Base URL、模型列表、协议稳定性、故障排查 |
 | [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md) | 当前静态分析、全量测试、构建、mock smoke 和真实 runtime 边界 |
 | [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
+| [Android / PC 内置 Node Runtime](MCP_BUNDLED_NODE_RUNTIME.md) | APK 内 `libnode.so`、PC bundled Node、构建准备、SSE 链路、真实验证矩阵和未覆盖边界 |
 | [功能实现差距分析（2026-08-07）](implementation-gap-analysis-2026-08-07.md) | 功能项逐项标注已实现、需真机补证或需外部资源 |
 | [产品需求总纲](requirements.md) | 产品目标、模块、页面、隐私和路线需求 |
 
@@ -58,14 +59,14 @@
 | [技能市场](skills-market.md) | SkillHub、通用 HTTP 技能源、安装和 SHA-256 校验 |
 | [社交平台接入](social-channels.md) | Telegram、Discord、飞书、Webhook 平台和 AI 网关 |
 | [数字孪生 / 镜像数字人](digital-twin.md) | 画像、媒体信号、替身授权、审计和直播脚本 |
-| [MCP Runtime 容器化](MCP_RUNTIME_CONTAINERIZATION.md) | PC Node、容器、SSE、内建工具和权限边界 |
+| [MCP Runtime 容器化](MCP_RUNTIME_CONTAINERIZATION.md) | App Native、Bundled Node、PC 容器、SSE、内建工具和权限边界 |
 
 ## 三、当前专题补充
 
 | 文档 | 主题 |
 | --- | --- |
 | [DW Chainless 中转站集成（2026-08-07）](dwchainless-relay-integration-2026-08-07.md) | 中转站预设、注册引导、一键接入和关于页鸣谢 |
-| [运行时配置示例](runtime-manifest.example.json) | 仅作格式示例，不放真实地址、密钥或设备路径 |
+| [运行时配置示例](runtime-manifest.example.json) | App Native、Bundled Node、容器三条路径的格式示例，不放密钥或真实设备私有路径 |
 
 ## 四、验证记录与历史归档
 

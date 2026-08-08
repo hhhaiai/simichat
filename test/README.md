@@ -57,8 +57,8 @@ benchmark 通过根目录 `scripts/benchmark_*.sh` 运行。脚本内部统一�
 
 截至本次整理：
 
-- `test/` 共 151 个文件；
-- 其中 134 个 `_test.dart`；
+- `test/` 共 153 个文件；
+- 其中 135 个 `_test.dart`；
 - 其中 17 个 `_benchmark.dart`；
 - `test/` 下没有分类子目录；
 - `integration_test/` 继续作为独立的移动端设备测试目录。

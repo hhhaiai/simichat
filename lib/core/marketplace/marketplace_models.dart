@@ -48,6 +48,18 @@ const builtinMcpServers = <MarketplaceItem>[
     installCount: 100000,
   ),
   MarketplaceItem(
+    id: 'simichat-node-bundled',
+    name: 'SimiChat 内置 Node Runtime',
+    description:
+        'Android / PC App 随包提供 Node.js Runtime，第三方 Node MCP 通过本地 SSE 运行，不依赖宿主机 node、npx、Docker 或 Podman。',
+    category: '工具',
+    transport: 'sse',
+    url: 'http://127.0.0.1:37651/mcp/sse/simichat-node',
+    author: 'SimiChat',
+    tags: ['内置', 'Android', 'PC', 'Node', '无需 npx'],
+    installCount: 100000,
+  ),
+  MarketplaceItem(
     id: 'simichat-node-container',
     name: 'SimiChat Node 容器 Runtime',
     description: 'PC 端 Node MCP 容器侧车，容器内自带 Node，通过本地 SSE 连接，不依赖宿主机 npx。',

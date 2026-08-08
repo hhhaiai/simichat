@@ -6,6 +6,24 @@ project(ai_chat_app LANGUAGES CXX)
 # the on-disk name of your application.
 set(BINARY_NAME "ai_chat_app")
 
+# The desktop Node executable is installed beside the Windows application,
+# not as a Flutter asset. This keeps Android APKs free of desktop binaries.
+set(SIMICHAT_NODE_RUNTIME_PLATFORM "windows-x64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  set(SIMICHAT_NODE_RUNTIME_PLATFORM "windows-arm64")
+endif()
+if(DEFINED ENV{SIMICHAT_NODE_RUNTIME_PLATFORM} AND NOT "$ENV{SIMICHAT_NODE_RUNTIME_PLATFORM}" STREQUAL "")
+  set(SIMICHAT_NODE_RUNTIME_PLATFORM "$ENV{SIMICHAT_NODE_RUNTIME_PLATFORM}")
+endif()
+set(SIMICHAT_BUNDLED_NODE_SOURCE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../tools/node_runtime/bundled/${SIMICHAT_NODE_RUNTIME_PLATFORM}/node.exe")
+if(NOT EXISTS "${SIMICHAT_BUNDLED_NODE_SOURCE}")
+  message(FATAL_ERROR
+    "Missing bundled Node runtime: ${SIMICHAT_BUNDLED_NODE_SOURCE}. "
+    "Run SIMICHAT_NODE_RUNTIME_PLATFORM=${SIMICHAT_NODE_RUNTIME_PLATFORM} "
+    "./scripts/prepare_node_runtime.sh before building Windows.")
+endif()
+
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
@@ -92,6 +110,11 @@ set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
    COMPONENT Runtime)
+
+install(PROGRAMS "${SIMICHAT_BUNDLED_NODE_SOURCE}"
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}/node_runtime/${SIMICHAT_NODE_RUNTIME_PLATFORM}"
+  RENAME node.exe
+  COMPONENT Runtime)
 
 # Fully re-copy the assets directory on each build to avoid having stale files
 # from a previous install.

@@ -8,6 +8,8 @@ const port = Number.parseInt(process.env.MCP_RUNTIME_PORT || '37651', 10);
 const connections = new Map();
 const workspaceRoot = path.resolve(process.env.MCP_RUNTIME_WORKSPACE_ROOT || process.cwd());
 const maxTextBytes = Number.parseInt(process.env.MCP_RUNTIME_MAX_TEXT_BYTES || '65536', 10);
+const runtimeKind = process.env.SIMICHAT_NODE_RUNTIME_KIND || 'container';
+const appManaged = process.env.SIMICHAT_NODE_APP_MANAGED === 'true';
 
 function jsonResponse(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -39,11 +41,19 @@ function textResult(payload) {
 
 function runtimeInfo() {
   return {
-    runtime: 'simichat-node-container',
-    dependencyMode: 'container',
-    externalProcess: false,
+    runtime: runtimeKind === 'container'
+      ? 'simichat-node-container'
+      : 'simichat-node-embedded',
+    dependencyMode: runtimeKind === 'container'
+      ? 'container'
+      : runtimeKind === 'android-embedded'
+      ? 'bundled_nodejs_mobile'
+      : 'bundled_node',
+    externalProcess: runtimeKind !== 'android-embedded',
+    appManaged,
     requiresHostNode: false,
     requiresHostNpx: false,
+    requiresDocker: runtimeKind === 'container',
     nodeVersion: process.version,
     platform: process.platform,
     pid: process.pid,
@@ -59,12 +69,12 @@ function tools() {
   return [
     {
       name: 'simichat.node_runtime_info',
-      description: '返回 SimiChat Node 容器 MCP Runtime 状态。Node 在容器内，不依赖宿主机 node/npx。',
+      description: '返回 SimiChat Node MCP Runtime 状态。运行时由 SimiChat App 管理，不依赖宿主机 node/npx。',
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'simichat.echo',
-      description: '回显传入文本，用于验证容器 MCP 工具调用链路。',
+      description: '回显传入文本，用于验证 Node MCP 工具调用链路。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -74,7 +84,7 @@ function tools() {
     },
     {
       name: 'simichat.fs_list',
-      description: '列出容器授权工作目录内的文件。路径会被限制在 MCP_RUNTIME_WORKSPACE_ROOT 内。',
+      description: '列出授权工作目录内的文件。路径会被限制在 MCP_RUNTIME_WORKSPACE_ROOT 内。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -85,7 +95,7 @@ function tools() {
     },
     {
       name: 'simichat.fs_read_text',
-      description: '读取容器授权工作目录内的 UTF-8 文本文件，自动限制最大字节数。',
+      description: '读取授权工作目录内的 UTF-8 文本文件，自动限制最大字节数。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -97,7 +107,7 @@ function tools() {
     },
     {
       name: 'simichat.fetch_text',
-      description: '从容器内发起只读 HTTP(S) GET 请求并返回文本摘要，用于替代宿主机 npx fetch 类 MCP。',
+      description: '从 Node Runtime 内发起只读 HTTP(S) GET 请求并返回文本摘要，用于替代宿主机 npx fetch 类 MCP。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -114,14 +124,14 @@ function resources() {
   return [
     {
       uri: 'simichat-container://runtime/info',
-      name: 'SimiChat Node 容器 Runtime',
-      description: 'PC 端 Node MCP 容器侧车运行状态。',
+      name: 'SimiChat Node Runtime',
+      description: '当前 App 管理的 Node MCP Runtime 运行状态。',
       mimeType: 'application/json',
     },
     {
       uri: 'simichat-container://workspace/info',
-      name: 'SimiChat MCP 容器工作目录',
-      description: '当前容器授权工作目录与读取限制。',
+      name: 'SimiChat MCP 工作目录',
+      description: '当前 Node Runtime 授权工作目录与读取限制。',
       mimeType: 'application/json',
     },
   ];
@@ -223,7 +233,12 @@ async function handleMcp(message) {
       return {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: 'SimiChat Node Container MCP', version: '1.1.0' },
+      serverInfo: {
+        name: runtimeKind === 'container'
+          ? 'SimiChat Node Container MCP'
+          : 'SimiChat Bundled Node MCP',
+        version: '1.2.0',
+      },
       };
     case 'tools/list':
       return { tools: tools() };

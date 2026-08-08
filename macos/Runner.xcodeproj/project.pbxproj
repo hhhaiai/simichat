@@ -240,6 +240,7 @@
 				33CC10EB2044A3C60003C045 /* Resources */,
 				33CC110E2044A8840003C045 /* Bundle Framework */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
+				A1B2C3D4E5F60718293A4B5C /* Bundle Node Runtime */,
 				E0E0A0C93A364467422A69E3 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
@@ -382,6 +383,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"$FLUTTER_ROOT\"/packages/flutter_tools/bin/macos_assemble.sh && touch Flutter/ephemeral/tripwire";
+		};
+		A1B2C3D4E5F60718293A4B5C /* Bundle Node Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../tools/node_runtime/bundled/macos-arm64/node",
+				"$(SRCROOT)/../tools/node_runtime/bundled/macos-x64/node",
+			);
+			name = "Bundle Node Runtime";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/node_runtime",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nrepo_root=\"$SRCROOT/..\"\nplatform=\"${SIMICHAT_NODE_RUNTIME_PLATFORM:-}\"\nif [ -z \"$platform\" ]; then\n  arch=\"${CURRENT_ARCH:-}\"\n  if [ -z \"$arch\" ] || [ \"$arch\" = \"undefined_arch\" ]; then arch=`uname -m`; fi\n  case \"$arch\" in\n    arm64|aarch64) platform=macos-arm64 ;;\n    x86_64|x64) platform=macos-x64 ;;\n    *) echo \"error: unsupported macOS Node runtime architecture: $arch\" >&2; exit 1 ;;\n  esac\nfi\nsource=\"$repo_root/tools/node_runtime/bundled/$platform/node\"\nif [ ! -x \"$source\" ]; then\n  echo \"error: missing executable bundled Node runtime: $source\" >&2\n  echo \"Run SIMICHAT_NODE_RUNTIME_PLATFORM=$platform ./scripts/prepare_node_runtime.sh first.\" >&2\n  exit 1\nfi\ndestination=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/node_runtime/$platform\"\nmkdir -p \"$destination\"\ncp \"$source\" \"$destination/node\"\nchmod 700 \"$destination/node\"\nif [ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"NO\" ] && command -v codesign >/dev/null 2>&1; then\n  identity=\"${EXPANDED_CODE_SIGN_IDENTITY:-}\"\n  if [ -z \"$identity\" ]; then identity=-; fi\n  codesign --force --sign \"$identity\" \"$destination/node\"\nfi\necho \"Bundled Node runtime: $destination/node\"\n";
 		};
 		775D4B663A62424A449585C4 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;

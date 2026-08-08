@@ -81,7 +81,7 @@ flutter --no-version-check test --no-pub --no-test-assets -r expanded
 
 覆盖内容：内建传输初始化、工具调用、时区参数、市场首项为移动端可运行内建 MCP、`McpManager` 无 stdio command 连接内建 MCP；随后 analyzer 无问题，全量 Flutter 测试 461 项通过。
 
-## 2026-08-08 移动端真机决策：App Native 优先，不内置 Android Node.js 容器
+## 2026-08-08 移动端真机决策：App Native 优先，Android 另提供内置 Node Runtime
 
 本轮新增独立真机 smoke：
 
@@ -97,9 +97,22 @@ integration_test/mobile_mcp_app_native_real_smoke_test.dart
 - 调用 `simichat.now` 并校验 UTC+08:00 转换；
 - 校验 `externalProcess=false`、`requiresNode=false`、`requiresNpx=false`、`requiresPython=false`、`mobileReady=true`。
 
-这条验证链不启动 HTTP mock、远程 SSE、`node`、`npx`、Python、Docker 或 Podman。证明移动端内建 MCP 不依赖外部运行时，因此当前不增加 Android Node.js 容器。
+这条验证链不启动 HTTP mock、远程 SSE、`node`、`npx`、Python、Docker 或 Podman。证明 App Native 移动端 MCP 不依赖外部运行时。
 
-当前边界保持明确：移动端 `stdio` 继续拒绝；PC 端第三方 Node MCP 继续使用 Docker / Podman Runtime 侧车。若未来要求 Android 运行任意第三方 Node MCP，必须另行引入随 APK 分发的 Android Node runtime，而不能直接把 PC Docker 方案当作手机容器；届时需要重新评估 ABI、APK 体积、模块来源、沙箱、权限、进程生命周期、升级和真机长时间运行。
+随后为满足“Android App / PC App 直接内置 Node 框架”的要求，新增独立的
+`simichat-node-bundled` 路径：Android APK 使用 `nodejs-mobile v18.20.4` 的
+`arm64-v8a/libnode.so` 和 JNI bridge；PC 使用构建前由
+`scripts/prepare_node_runtime.sh` 准备的官方 Node executable。两条路径都由
+`BundledNodeRuntime` / `McpManager` 管理，不回退到宿主机 `node`、`npx`、Docker
+或 Podman。Android Pixel 8 真机已完成 initialize、tools/list、runtime_info 和
+echo 的真实 Node 链路验证。
+
+当前边界保持明确：移动端 `stdio` 继续拒绝；`simichat-node-container` 仍作为
+PC 可选隔离侧车保留，但不再是 PC 内置 Node 的唯一路径。Android 当前只交付
+arm64-v8a，16 KB page-size 设备、非 arm64 ABI 和 Android 长时间后台仍需单独
+验收。PC host-side bundled process smoke 与 macOS Flutter PC App 集成已通过；
+Linux / Windows 发布包仍需逐平台生成并启动验证。实现、命令和证据矩阵详见
+`docs/MCP_BUNDLED_NODE_RUNTIME.md`。
 
 ---
 
@@ -157,7 +170,7 @@ flutter --no-version-check test --no-pub --no-test-assets -r expanded
 - 新增 `tools/mcp_runtime/container/runtime-server.mjs`，提供 MCP SSE 兼容端点：`/mcp/sse/:serverId` 与 `/mcp/messages/:connectionId`。
 - 新增内建容器工具：`simichat.node_runtime_info`、`simichat.echo`；健康检查：`/health`。
 - 新增 `scripts/mcp_runtime_container.sh`，支持 `build/start/stop/restart/status/logs/smoke`，自动选择 Docker / Podman，但脚本本身不调用宿主机 Node/npm/npx；`smoke` 会启动容器并验证 `/health`、MCP SSE `tools/list` 和 `simichat.echo` 调用链路。
-- 新增 `docs/runtime-manifest.example.json`，同时记录移动端 `app_native` 和 PC `node-container` 两条自依赖路径。
+- 新增 `docs/runtime-manifest.example.json`，同时记录 App Native、Android / PC bundled Node 和 PC `node-container` 三条自依赖路径。
 - MCP 市场新增 `SimiChat Node 容器 Runtime`，默认连接 `http://127.0.0.1:37651/mcp/sse/simichat-node`。
 - MCP 市场旧 `stdio` / `npx` 条目安装后默认禁用，不再自动连接或弹出直接连接动作，避免移动端 / 普通 PC 路径继续依赖宿主机命令；需要旧 stdio 的用户只能作为高级手动配置处理，默认推荐容器 Runtime。
 
@@ -576,6 +589,24 @@ Runtime 需要独立日志：
 3. **连接状态与安装状态耦合**
    - 需要拆成：installed / running / healthy / failed
 
+### 2026-08-08 实现边界更新：Bundled Node 已落地
+
+在保留容器侧车的前提下，当前实现已经增加一条不依赖 Docker / Podman 的
+Bundled Node 路径：
+
+- Android 使用 APK 内的 `nodejs-mobile v18.20.4`、`arm64-v8a/libnode.so`、
+  JNI bridge 和 `runtime-server.mjs`；
+- PC 使用 `tools/node_runtime/manifest.json` 固定的官方 Node 版本和归档
+  SHA-256，由 `scripts/prepare_node_runtime.sh` 在构建前准备 binary；
+- `BundledNodeRuntime` 只查找明确的随应用路径，不执行 `command -v node`，也
+  不回退到 `npm`、`npx`、Docker 或 Podman；
+- `McpManager` 通过 `marketplaceId == simichat-node-bundled` 先拉起 bundled
+  runtime，再建立本地 SSE 连接。
+
+这条路径的完整命令、文件清单、验证矩阵和未覆盖边界以
+`docs/MCP_BUNDLED_NODE_RUNTIME.md` 为准。本文件继续保留容器方案的设计、
+权限和治理说明，不再把容器描述成 PC Node 的唯一交付方式。
+
 ---
 
 ## 数据模型建议补充
@@ -690,21 +721,21 @@ Runtime 需要独立日志：
 
 ## 当前建议的下一刀
 
-不是再继续补零碎兼容，而是开始一个明确实现切片：
+Bundled Node 的主链路已经完成代码接入；下一步不应把“继续增加容器依赖”误当
+作完成，而应补真实发布证据和运行时治理：
 
-### 推荐下一实现切片
+1. 解决 macOS `sqlite3` native asset 下载前置条件，完成 PC Flutter App
+   integration；
+2. 在 Windows / Linux 目标机器上生成并启动对应 bundled Node 发布包；
+3. 对 Android 16 KB page-size、非 arm64 ABI、冷启动、锁屏和长时间运行做真机
+   验收；
+4. 把 `installed / running / healthy / failed` 和 PID / 日志落到
+   `mcp_runtime_instances`、`mcp_runtime_logs` 等状态表；
+5. 对第三方 MCP 包建立签名 / SHA-256 / 权限白名单，必要时再选择容器作为
+   隔离后端。
 
-> **Runtime 状态表 + App 自动管理容器生命周期 + 第三方 MCP 包接入**
-
-当前 `app_native` 已满足移动端直接运行的最低基线，`simichat-node-container` 已提供 PC 端 Node 容器侧车基线。下一刀应把“手动脚本启动容器”推进为 App 可观察 / 可管理的 Runtime：
-
-1. `mcp_runtime_instances` 表
-2. Runtime 状态 Provider
-3. 设置页 Runtime 状态 / 启动 / 停止 / 日志入口
-4. 第三方 Node MCP 包白名单安装到容器镜像或容器 volume 中，不读取宿主机 `npx`
-5. 当前 `mcp_provider.dart` 对外部型 MCP 改成“调用 runtime client / runtime-managed SSE”
-
-这会是 `simichat` 从“高级客户端”迈向“团队级内部 AI 调度工具”的第一道真正分水岭。
+只有完成真实设备 / 发布包证据后，才能把对应平台从 `implemented` 提升为
+`runtime_verified`。
 
 ---
 

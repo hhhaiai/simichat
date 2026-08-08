@@ -20,6 +20,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    private lateinit var nodeRuntime: SimiChatNodeRuntime
     private var recorder: MediaRecorder? = null
     private var audioPlayer: MediaPlayer? = null
     private var audioPlayerChannel: MethodChannel? = null
@@ -46,6 +47,24 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        nodeRuntime = SimiChatNodeRuntime(this)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SimiChatNodeRuntime.CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "status" -> result.success(nodeRuntime.status())
+                "start" -> {
+                    try {
+                        result.success(nodeRuntime.start())
+                    } catch (error: Throwable) {
+                        result.error("NODE_RUNTIME_START_FAILED", error.message, null)
+                    }
+                }
+                "stop" -> result.success(nodeRuntime.stop())
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             DATA_EXPORT_SHARE_CHANNEL,
