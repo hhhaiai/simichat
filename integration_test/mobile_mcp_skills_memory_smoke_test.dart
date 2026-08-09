@@ -155,6 +155,10 @@ void main() {
     );
     expect(find.text('移动端记忆稳定性'), findsWidgets);
     _expectNoFlutterException(tester, 'global search results');
+    // All HTTP data above comes from an in-process MockClient; no external
+    // service, Node executable, npx command, or remote MCP is used.
+    // ignore: avoid_print
+    print('SIMICHAT_MCP_SKILLS_MEMORY_UI_READY');
   });
 }
 

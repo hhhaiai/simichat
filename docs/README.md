@@ -34,6 +34,7 @@
 | [本地 Ollama 接入与稳定性](local-model.md) | Ollama 安装、Base URL、模型列表、协议稳定性、故障排查 |
 | [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md) | 当前静态分析、全量测试、构建、mock smoke 和真实 runtime 边界 |
 | [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
+| [MCP / Skills / 记忆纯本地真机验收（2026-08-09）](mobile-mcp-skills-memory-local-device-2026-08-09.md) | Pixel 8 / iPhone13 的 App Native MCP、内置 Node、Skill 本地安装、SQLite 重开、Key Point 重载和 UI marker |
 | [Android / PC 内置 Node Runtime](MCP_BUNDLED_NODE_RUNTIME.md) | APK 内 `libnode.so`、PC bundled Node、构建准备、SSE 链路、真实验证矩阵和未覆盖边界 |
 | [移动端纯 JS MCP 与 stdio / npx 兼容层](MOBILE_MCP_RUNTIME.md) | `mobile-mcp-v1`、`stdio-compat-v1`、已审核 npx in-process adapter、安装注册链路和真机 marker |
 | [Android / iOS 移动端 MCP、Skills、Agent 安装协议](MOBILE_EXTENSIONS.md) | 统一扩展 manifest、SHA-256、权限、原子安装、registry、quarantine、Skills / Agent / App Native MCP 接入和 iOS 边界 |
@@ -77,6 +78,7 @@
 
 - [当前验证基线（2026-08-08）](verification-baseline-2026-08-08.md)
 - [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md)
+- [MCP / Skills / 记忆纯本地真机验收（2026-08-09）](mobile-mcp-skills-memory-local-device-2026-08-09.md)
 - [当前项目状态](current-status.md)
 - [移动端 Node / stdio / npx 真机验证（2026-08-09）](mobile-node-mcp-runtime-2026-08-09.md)
 

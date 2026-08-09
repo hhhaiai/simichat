@@ -17,17 +17,18 @@ final keyPointMemoryProvider =
 
 class KeyPointMemoryNotifier extends StateNotifier<List<KeyPointMemoryItem>>
     implements KeyPointMemoryStore {
-  KeyPointMemoryNotifier() : super(const []) {
+  KeyPointMemoryNotifier({String storageKey = kKeyPointMemoryStorageKey})
+    : _storageKey = storageKey,
+      super(const []) {
     ready = _load();
   }
 
+  final String _storageKey;
   late final Future<void> ready;
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = decodeKeyPointMemoryItems(
-      prefs.getString(kKeyPointMemoryStorageKey),
-    );
+    state = decodeKeyPointMemoryItems(prefs.getString(_storageKey));
   }
 
   @override
@@ -99,9 +100,6 @@ class KeyPointMemoryNotifier extends StateNotifier<List<KeyPointMemoryItem>>
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      kKeyPointMemoryStorageKey,
-      encodeKeyPointMemoryItems(state),
-    );
+    await prefs.setString(_storageKey, encodeKeyPointMemoryItems(state));
   }
 }
