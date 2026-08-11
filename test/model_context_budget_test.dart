@@ -48,6 +48,26 @@ void main() {
       expect(gpt35.contextWindowTokens, 16384);
     });
 
+    test('short o-series names require model-token boundaries', () {
+      for (final ordinaryName in ['foo1', 'audio4', 'mirror1']) {
+        final ordinary = resolveModelContextBudget(
+          protocol: 'custom',
+          modelName: ordinaryName,
+        );
+        expect(
+          ordinary.contextWindowTokens,
+          8192,
+          reason: '$ordinaryName 不是 OpenAI o 系列短代号',
+        );
+      }
+
+      final o3 = resolveModelContextBudget(
+        protocol: 'custom',
+        modelName: 'openai/o3-mini',
+      );
+      expect(o3.contextWindowTokens, 128000);
+    });
+
     test('raises compression threshold for long-context models', () {
       final budget = resolveModelContextBudget(
         protocol: 'openai_chat',

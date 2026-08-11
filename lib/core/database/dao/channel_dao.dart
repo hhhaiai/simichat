@@ -58,6 +58,7 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
                 channelModels.capability.isIn([
                   ModelCapability.chat,
                   ModelCapability.vision,
+                  ModelCapability.reasoner,
                 ]),
           )
           ..orderBy([OrderingTerm.asc(modelChannels.name)]);
@@ -118,12 +119,8 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
         ..where(channelModels.channelId.equals(id));
 
       await (update(sessions)
-            ..where(
-              (t) => t.defaultChannelModelId.isInQuery(channelModelIds),
-            ))
-          .write(
-            const SessionsCompanion(defaultChannelModelId: Value(null)),
-          );
+            ..where((t) => t.defaultChannelModelId.isInQuery(channelModelIds)))
+          .write(const SessionsCompanion(defaultChannelModelId: Value(null)));
       await (update(messages)
             ..where((t) => t.channelModelId.isInQuery(channelModelIds)))
           .write(const MessagesCompanion(channelModelId: Value(null)));
@@ -150,13 +147,11 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
 
   Future<void> deleteModel(String id) {
     return transaction(() async {
-      await (update(sessions)
-            ..where((t) => t.defaultChannelModelId.equals(id)))
-          .write(
-            const SessionsCompanion(defaultChannelModelId: Value(null)),
-          );
-      await (update(messages)..where((t) => t.channelModelId.equals(id)))
-          .write(const MessagesCompanion(channelModelId: Value(null)));
+      await (update(sessions)..where((t) => t.defaultChannelModelId.equals(id)))
+          .write(const SessionsCompanion(defaultChannelModelId: Value(null)));
+      await (update(messages)..where((t) => t.channelModelId.equals(id))).write(
+        const MessagesCompanion(channelModelId: Value(null)),
+      );
       await (delete(channelModels)..where((t) => t.id.equals(id))).go();
     });
   }

@@ -225,9 +225,132 @@ void main() {
     expect(find.textContaining('TTS API Key 加密保存在本机'), findsOneWidget);
     expect(find.textContaining('tts-ui-key'), findsNothing);
   });
+  simiRouterTtsAndAsrUiTests();
 }
 
 class _FakeSpeechEngine implements SpeechToTextEngine {
   @override
   Future<String> transcribe(AudioTranscriptionInput input) async => 'text';
+}
+
+class _VoiceInputSimiRouterHelper {
+  static Future<void> openTtsDialog(WidgetTester tester) async {
+    await tester.scrollUntilVisible(
+      find.text('语音播报'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('语音播报'));
+    await tester.pumpAndSettle();
+    expect(find.text('语音播报 TTS 配置'), findsOneWidget);
+  }
+
+  static Future<void> selectSimiRouterTtsPreset(WidgetTester tester) async {
+    final presetDropdown = find.byType(DropdownButtonFormField<String>).first;
+    await tester.ensureVisible(presetDropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(presetDropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SimiRouter AI').last);
+    await tester.pumpAndSettle();
+  }
+}
+
+// ---- SimiRouter mimo TTS / ASR UI ----
+
+void simiRouterTtsAndAsrUiTests() {
+  testWidgets('TTS dialog shows SimiRouter modes, voices, speed and format', (
+    tester,
+  ) async {
+    // 兼容旧配置里大小写不同的模型名：弹窗应归一到规范下拉值，不能
+    // 因 DropdownButton initialValue 与 items 不完全相等而崩溃。
+    SharedPreferences.setMockInitialValues({
+      kTextToSpeechBaseUrlStorageKey: 'https://api.dwchainless.com',
+      kTextToSpeechModelStorageKey: 'MIMO-V2.5-TTS',
+      kTextToSpeechVoiceStorageKey: 'alloy',
+    });
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _VoiceInputSimiRouterHelper.openTtsDialog(tester);
+
+    // 模型下拉（3 种 mimo 模式）出现。
+    expect(find.text('模型（SimiRouter）'), findsOneWidget);
+    expect(find.text('mimo-v2.5-tts · 语音合成'), findsOneWidget);
+
+    // 标准模式：8 种音色下拉 + 语速滑条 + 输出格式。
+    expect(find.text('音色'), findsOneWidget);
+    expect(find.text('冰糖 · 活泼少女'), findsOneWidget);
+    expect(find.byType(Slider), findsOneWidget);
+    expect(find.text('输出格式'), findsOneWidget);
+  });
+
+  testWidgets('TTS voice design mode shows style field', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _VoiceInputSimiRouterHelper.openTtsDialog(tester);
+
+    await _VoiceInputSimiRouterHelper.selectSimiRouterTtsPreset(tester);
+
+    // 切到声音设计模型 → 风格描述输入框出现。
+    await tester.ensureVisible(find.text('mimo-v2.5-tts · 语音合成'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('mimo-v2.5-tts · 语音合成'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('mimo-v2.5-tts-voicedesign · 声音设计').last);
+    await tester.pumpAndSettle();
+    expect(find.text('声音风格描述'), findsOneWidget);
+  });
+
+  testWidgets('STT dialog shows language dropdown for mimo asr', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('语音输入'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('语音输入'));
+    await tester.pumpAndSettle();
+    expect(find.text('语音输入与 STT 配置'), findsOneWidget);
+
+    // 模型填入 mimo-v2.5-asr → 识别语言下拉出现。
+    await tester.enterText(
+      find.widgetWithText(TextField, '模型'),
+      'mimo-v2.5-asr',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('识别语言'), findsOneWidget);
+    expect(find.text('自动检测'), findsOneWidget);
+  });
 }

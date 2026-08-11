@@ -1,4 +1,4 @@
-# Android / iOS 移动端 MCP、Skills、Agent 安装协议
+# Android / iOS / PC 本地 MCP、Skills、Agent 安装协议
 
 ## 1. 目标与当前边界
 
@@ -17,15 +17,15 @@ SimiChat 的移动端扩展不是一个任意 npm / npx 安装器，而是 App �
   -> enable / platform adapter
 ```
 
-目标承诺是：**Android / iOS 可以直接安装经过 manifest、SHA-256 和权限校验的 MCP、Skills、Agents。**
+目标承诺是：**Android / iOS / PC 可以直接安装经过 manifest、SHA-256 和权限校验的 MCP、Skills、Agents。**
 
 | 类型 | Android | iOS | 当前执行方式 |
 | --- | --- | --- | --- |
 | App Native MCP | 支持并可直接连接 | 支持并可直接连接 | Flutter / Dart 内建 handler |
-| `runtime=node-mobile` 纯 JS MCP | APK 内置 Node，支持纯 JS 包安装、注册和 SSE | App 内置 NodeMobile framework，支持纯 JS 包安装、注册和 SSE | App-owned Node runtime |
+| `runtime=node-mobile` 纯 JS MCP | APK 内置 Node，支持纯 JS 包安装、注册和 JSONL stdio session | App 内置 NodeMobile framework，支持纯 JS 包安装、注册和 JSONL stdio session | macOS / Linux / Windows 使用随包 Node 和同一 JSONL stdio bridge |
 | Markdown Skill | 支持 | 支持 | Dart 读取并注入 system prompt |
 | Declarative Agent | 支持 | 支持 | Dart 编排；默认模型 `gemma4` |
-| `stdio` / `npx` MCP | 已审核包转为 in-process adapter；未知包拒绝 | 已审核包转为 in-process adapter；未知包拒绝 | 不启动 stdio / npx 进程 |
+| `stdio` / `npx` MCP | `stdio-v1` 走 App-owned JSONL stdin/stdout session；旧 `stdio-compat-v1` / 已审核 npx 保留 adapter 兼容；未知包拒绝 | `stdio-v1` 走 App-owned JSONL stdin/stdout session；旧 `stdio-compat-v1` / 已审核 npx 保留 adapter 兼容；未知包拒绝 | 不启动宿主机 stdio / npx 进程；使用随 App 提供的 Runtime |
 | native addon / 下载二进制 | 不支持动态安装 | 不支持动态安装 | 构建时集成，不能由包引入 |
 
 这份文档区分“包已安装”和“运行时已连接”。安装成功不等于任意 MCP 已经具备可用执行端点。

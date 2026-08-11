@@ -37,10 +37,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('API Key（可选）'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Ollama 本地模型'), findsOneWidget);
+    // 内置预设一键接入：名称 / Base URL 不再作为可编辑输入框出现。
+    expect(find.widgetWithText(TextField, 'Ollama 本地模型'), findsNothing);
     expect(
       find.widgetWithText(TextField, 'http://localhost:11434'),
-      findsOneWidget,
+      findsNothing,
     );
+    // 预设仍显示在下拉框与提示卡中。
+    expect(find.text('Ollama 本地模型'), findsWidgets);
   });
 }

@@ -1,15 +1,38 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 
 import '../ai/http_helper.dart';
 import '../ai/sse_helper.dart';
+import 'speech_provider_preset.dart';
 import 'text_to_speech_service.dart';
 
 const kDefaultTextToSpeechBaseUrl = 'https://api.openai.com';
 const kDefaultTextToSpeechModel = 'tts-1';
 const kDefaultTextToSpeechVoice = 'alloy';
 const kTextToSpeechMaxAudioBytes = 10 * 1024 * 1024;
+const kTextToSpeechMaxReferenceAudioBytes = 10 * 1024 * 1024;
+
+/// 校验语速：mimo 支持 0.25-4。
+String normalizeTextToSpeechSpeed(String speed) {
+  final value = double.tryParse(speed.trim());
+  if (value == null ||
+      value < kSimiRouterTtsMinSpeed ||
+      value > kSimiRouterTtsMaxSpeed) {
+    throw const TextToSpeechException('语速需在 0.25 - 4 之间');
+  }
+  return speed.trim();
+}
+
+/// 校验输出格式：mp3 / wav / opus / aac / flac。
+String normalizeTextToSpeechResponseFormat(String format) {
+  final value = format.trim().toLowerCase();
+  if (!kSimiRouterTtsResponseFormats.contains(value)) {
+    throw const TextToSpeechException('不支持的输出格式');
+  }
+  return value;
+}
 
 String normalizeTextToSpeechBaseUrl(String baseUrl) {
   final normalized = normalizeOpenAiBaseUrl(baseUrl);
@@ -34,16 +57,110 @@ String normalizeTextToSpeechModel(String model) {
   return value;
 }
 
+/// 根据模型模式构造 /v1/audio/speech 请求体。
+///
+/// - `mimo-v2.5-tts`（standard）：`voice` 音色 + 可选 `speed` / `response_format`
+/// - `mimo-v2.5-tts-voicedesign`：`style` 音色描述 + `speed` / `response_format`
+/// - `mimo-v2.5-tts-voiceclone`：`voice` 传参考音频 base64 data URI
+/// - 其他模型（如 tts-1）：保持原 4 字段行为，不带 speed / format 扩展字段
+Map<String, dynamic> _buildRequestBody({
+  required String model,
+  required String voice,
+  required String text,
+  required String speed,
+  required String format,
+  required String style,
+  String? referenceAudioPath,
+}) {
+  final mode = simiRouterTtsModeOf(model);
+  switch (mode) {
+    case SimiRouterTtsMode.voiceDesign:
+      if (style.trim().isEmpty) {
+        throw const TextToSpeechException('声音设计模式需要填写声音风格描述');
+      }
+      return {
+        'model': model,
+        'input': text,
+        'style': style.trim(),
+        'speed': speed,
+        'response_format': format,
+      };
+    case SimiRouterTtsMode.voiceClone:
+      final referencePath = referenceAudioPath;
+      if (referencePath == null || referencePath.isEmpty) {
+        throw const TextToSpeechException('声音克隆需要选择参考音频');
+      }
+      return {
+        'model': model,
+        'input': text,
+        'voice': _referenceAudioDataUri(referencePath),
+        'speed': speed,
+        'response_format': format,
+      };
+    case SimiRouterTtsMode.standard:
+      return {
+        'model': model,
+        'voice': voice,
+        'input': text,
+        'speed': speed,
+        'response_format': format,
+      };
+    case null:
+      // 非 SimiRouter 模型（OpenAI tts-1 等）保持原有请求体。
+      return {
+        'model': model,
+        'voice': voice,
+        'input': text,
+        'response_format': 'mp3',
+      };
+  }
+}
+
+/// 把参考音频文件编码为 `data:audio/wav;base64,...` 请求值。
+String _referenceAudioDataUri(String path) {
+  final File file = File(path);
+  if (!file.existsSync()) {
+    throw const TextToSpeechException('参考音频文件不存在，请重新选择');
+  }
+  final byteLength = file.lengthSync();
+  if (byteLength <= 0) {
+    throw const TextToSpeechException('参考音频文件为空');
+  }
+  if (byteLength > kTextToSpeechMaxReferenceAudioBytes) {
+    throw const TextToSpeechException('参考音频超过 10 MB，请压缩后重试');
+  }
+  // 先检查长度再读取，避免异常大的外部文件瞬间占满内存。
+  final bytes = file.readAsBytesSync();
+  final ext = path.toLowerCase().endsWith('.wav') ? 'wav' : 'audio';
+  return 'data:audio/$ext;base64,${base64Encode(bytes)}';
+}
+
 class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
   const OpenAiCompatibleTextToSpeechEngine({
     required this.baseUrl,
     required this.apiKey,
     this.model = kDefaultTextToSpeechModel,
+    this.speed = '1.0',
+    this.responseFormat = 'mp3',
+    this.style = '',
+    this.referenceAudioPath,
   });
 
   final String baseUrl;
   final String apiKey;
   final String model;
+
+  /// mimo TTS 语速（0.25-4，字符串存储）。
+  final String speed;
+
+  /// 输出格式：mp3 / wav / opus / aac / flac。
+  final String responseFormat;
+
+  /// 声音设计模式的音色文字描述（mimo-v2.5-tts-voicedesign）。
+  final String style;
+
+  /// 声音克隆模式的参考音频本地路径（mimo-v2.5-tts-voiceclone）。
+  final String? referenceAudioPath;
 
   @override
   Future<List<int>> synthesize(TextToSpeechInput input) async {
@@ -56,6 +173,13 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
       throw const TextToSpeechException('TTS API Key 未配置');
     }
 
+    final normalizedSpeed = normalizeTextToSpeechSpeed(speed);
+    final normalizedFormat = normalizeTextToSpeechResponseFormat(
+      responseFormat,
+    );
+    final mode = simiRouterTtsModeOf(normalizedModel);
+    // 非 mimo 的 OpenAI 兼容模型仍固定请求 mp3；mimo 才使用用户选择的格式。
+    final effectiveFormat = mode == null ? 'mp3' : normalizedFormat;
     final dio = createDio();
     try {
       final response = await dio.post<List<int>>(
@@ -64,16 +188,21 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
           headers: {
             'Authorization': 'Bearer $token',
             'Content-Type': 'application/json',
-            'Accept': 'audio/mpeg',
+            'Accept': _audioMimeType(effectiveFormat),
           },
           responseType: ResponseType.bytes,
         ),
-        data: jsonEncode({
-          'model': normalizedModel,
-          'voice': normalizedVoice,
-          'input': normalizedText,
-          'response_format': 'mp3',
-        }),
+        data: jsonEncode(
+          _buildRequestBody(
+            model: normalizedModel,
+            voice: normalizedVoice,
+            text: normalizedText,
+            speed: normalizedSpeed,
+            format: effectiveFormat,
+            style: style,
+            referenceAudioPath: referenceAudioPath,
+          ),
+        ),
       );
       final bytes = response.data ?? const <int>[];
       if (bytes.length > kTextToSpeechMaxAudioBytes) {
@@ -89,6 +218,16 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
     } finally {
       dio.close(force: true);
     }
+  }
+
+  static String _audioMimeType(String format) {
+    return switch (format) {
+      'wav' => 'audio/wav',
+      'opus' => 'audio/ogg',
+      'aac' => 'audio/aac',
+      'flac' => 'audio/flac',
+      _ => 'audio/mpeg',
+    };
   }
 
   static String _safeDioError(DioException error) {

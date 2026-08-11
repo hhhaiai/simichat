@@ -12,14 +12,23 @@ const workspaceRoot = path.resolve(process.env.MCP_RUNTIME_WORKSPACE_ROOT || pro
 const maxTextBytes = Number.parseInt(process.env.MCP_RUNTIME_MAX_TEXT_BYTES || '65536', 10);
 const runtimeKind = process.env.SIMICHAT_NODE_RUNTIME_KIND || 'container';
 const appManaged = process.env.SIMICHAT_NODE_APP_MANAGED === 'true';
+const isEmbeddedMobile = runtimeKind === 'android-embedded' || runtimeKind === 'ios-embedded';
+const isBundledDesktop = runtimeKind === 'desktop-bundled';
 const extensionRoot = path.resolve(
   process.env.MCP_RUNTIME_EXTENSION_ROOT || path.dirname(workspaceRoot),
 );
 const extensions = new Map();
+const stdioSessions = new Map();
 const extensionIdPattern = /^[a-z0-9][a-z0-9._-]{1,127}$/;
 const maxExtensionFiles = 256;
 const maxExtensionBytes = 20 * 1024 * 1024;
-const allowedProtocols = new Set(['mobile-mcp-v1', 'stdio-compat-v1']);
+const allowedProtocols = new Set(['mobile-mcp-v1', 'stdio-v1', 'stdio-compat-v1']);
+const mobileNpxPackages = new Map([
+  ['@modelcontextprotocol/server-time', 'time'],
+  ['@modelcontextprotocol/server-memory', 'memory'],
+  ['@modelcontextprotocol/server-fetch', 'fetch'],
+  ['@modelcontextprotocol/server-filesystem', 'filesystem'],
+]);
 // Keep the scanner's signatures assembled rather than placing forbidden
 // capability names in one literal. The manifest test scans this server source
 // too, so this prevents an accidental host-process signature in the server
@@ -70,13 +79,15 @@ function runtimeInfo() {
   return {
     runtime: runtimeKind === 'container'
       ? 'simichat-node-container'
+      : isBundledDesktop
+      ? 'simichat-node-desktop-bundled'
       : 'simichat-node-embedded',
     dependencyMode: runtimeKind === 'container'
       ? 'container'
-      : runtimeKind === 'android-embedded'
+      : isEmbeddedMobile
       ? 'bundled_nodejs_mobile'
       : 'bundled_node',
-    externalProcess: runtimeKind !== 'android-embedded',
+    externalProcess: !isEmbeddedMobile,
     appManaged,
     requiresHostNode: false,
     requiresHostNpx: false,
@@ -84,7 +95,7 @@ function runtimeInfo() {
     nodeVersion: process.version,
     platform: process.platform,
     pid: process.pid,
-    mobileDefault: false,
+    mobileDefault: isEmbeddedMobile,
     desktopReady: true,
     transport: 'sse',
     workspaceRoot,
@@ -274,7 +285,10 @@ async function verifyExtensionPackage({ id, root, entry, protocol, sha256 }) {
     if (totalBytes > maxExtensionBytes) {
       throw new Error('Extension files exceed the mobile size limit');
     }
-    if (!/\.(?:js|mjs|json)$/i.test(file)) continue;
+    // JSON is metadata, not executable code.  Scanning it for words such as
+    // "npm" or "exec" rejects valid package names/descriptions without
+    // improving the execution boundary; only JavaScript source is checked.
+    if (!/\.(?:js|mjs)$/i.test(file)) continue;
     const source = await fs.readFile(file, 'utf8');
     for (const pattern of forbiddenSourcePatterns) {
       if (pattern.test(source)) {
@@ -354,7 +368,9 @@ async function registerExtension(payload) {
     server,
     manifest: verified.manifest,
   };
-  await server.initialize(context);
+  // MCP initialize is a per-client handshake.  Do not invoke it during
+  // registration as that would double-initialize stateful extensions before
+  // the first stdio/SSE client connects.
   extensions.set(id, extension);
   return { id, protocol, loaded: true, entry };
 }
@@ -388,6 +404,314 @@ async function handleExtensionMcp(serverId, message) {
     default:
       throw new Error('Unsupported MCP method: ' + method);
   }
+}
+
+function normalizeMobilePackageSpec(packageSpec) {
+  const value = String(packageSpec || '').trim();
+  if (!value.startsWith('@')) return value;
+  const versionSeparator = value.indexOf('@', 1);
+  return versionSeparator === -1 ? value : value.substring(0, versionSeparator);
+}
+
+function resolveMobileNpxProfile(command, args = []) {
+  if (String(command || '').trim().toLowerCase() !== 'npx') return null;
+  const packageSpec = args.find((arg) => {
+    const value = String(arg || '').trim();
+    return value.startsWith('@') && !value.startsWith('--');
+  });
+  const packageName = normalizeMobilePackageSpec(packageSpec);
+  const profile = mobileNpxPackages.get(packageName);
+  return profile ? { packageName, profile } : null;
+}
+
+function mobileProfileTools(profile) {
+  const common = [
+    {
+      name: 'simichat.runtime_info',
+      description: '返回 SimiChat 移动 stdio Runtime 状态。',
+      inputSchema: { type: 'object', properties: {} },
+    },
+  ];
+  if (profile === 'time') {
+    common.unshift({
+      name: 'simichat.now',
+      description: '返回当前设备时间。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          timezoneOffsetMinutes: { type: 'integer' },
+        },
+      },
+    });
+  } else if (profile === 'memory') {
+    common.unshift(
+      {
+        name: 'simichat.memory_search',
+        description: '在移动 Runtime 可见的本地记忆文件中搜索。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            maxResults: { type: 'integer' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'simichat.memory_list',
+        description: '列出移动 Runtime 可见的本地记忆摘要。',
+        inputSchema: { type: 'object', properties: {} },
+      },
+    );
+  } else if (profile === 'fetch') {
+    common.unshift({
+      name: 'simichat.fetch',
+      description: '在移动 Runtime 内发起受限 HTTP(S) GET 请求。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          maxBytes: { type: 'integer' },
+        },
+        required: ['url'],
+      },
+    });
+  } else if (profile === 'filesystem') {
+    common.unshift(
+      {
+        name: 'simichat.fs_list',
+        description: '列出移动 Runtime 授权工作目录中的文件。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            maxEntries: { type: 'integer' },
+          },
+        },
+      },
+      {
+        name: 'simichat.fs_read_text',
+        description: '读取移动 Runtime 授权工作目录中的文本文件。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            maxBytes: { type: 'integer' },
+          },
+          required: ['path'],
+        },
+      },
+    );
+  }
+  return common;
+}
+
+function mobileProfileRuntimeInfo(session) {
+  return {
+    ...runtimeInfo(),
+    transport: 'stdio',
+    wireProtocol: 'jsonl',
+    sessionId: session.id,
+    command: session.command,
+    args: session.args,
+    packageName: session.packageName,
+    profile: session.profile,
+    externalProcess: false,
+    appOwned: true,
+  };
+}
+
+function mobileTextResult(payload) {
+  return textResult(payload);
+}
+
+async function handleMobileNpxMcp(session, message) {
+  const method = message.method;
+  const params = message.params && typeof message.params === 'object' ? message.params : {};
+  switch (method) {
+    case 'initialize':
+      return {
+        protocolVersion: '2024-11-05',
+        capabilities: { tools: {}, resources: {} },
+        serverInfo: {
+          name: 'SimiChat Mobile stdio ' + session.packageName,
+          version: '1.0.0',
+        },
+      };
+    case 'tools/list':
+      return { tools: mobileProfileTools(session.profile) };
+    case 'resources/list':
+      return { resources: [] };
+    case 'resources/read':
+      return { contents: [] };
+    case 'tools/call': {
+      const name = String(params.name || '');
+      const args = params.arguments && typeof params.arguments === 'object'
+        ? params.arguments
+        : {};
+      if (name === 'simichat.runtime_info') {
+        return mobileTextResult(mobileProfileRuntimeInfo(session));
+      }
+      if (name === 'simichat.now' && session.profile === 'time') {
+        const offset = Number.isInteger(args.timezoneOffsetMinutes)
+          ? args.timezoneOffsetMinutes
+          : null;
+        const now = offset === null
+          ? new Date()
+          : new Date(Date.now() + offset * 60 * 1000);
+        return mobileTextResult({
+          iso8601: now.toISOString(),
+          timezoneOffsetMinutes: offset === null ? -now.getTimezoneOffset() : offset,
+          runtime: 'stdio',
+        });
+      }
+      if (name === 'simichat.fetch' && session.profile === 'fetch') {
+        return fetchText(args);
+      }
+      if (name === 'simichat.fs_list' && session.profile === 'filesystem') {
+        return listWorkspaceDirectory(args);
+      }
+      if (name === 'simichat.fs_read_text' && session.profile === 'filesystem') {
+        return readWorkspaceText(args);
+      }
+      if (
+        (name === 'simichat.memory_search' || name === 'simichat.memory_list') &&
+        session.profile === 'memory'
+      ) {
+        return mobileTextResult({
+          query: name === 'simichat.memory_search' ? String(args.query || '') : undefined,
+          count: 0,
+          items: [],
+          note: '移动 stdio Runtime 不会读取宿主机进程或外部数据库。',
+        });
+      }
+      return {
+        content: [{ type: 'text', text: '未知移动 stdio 工具: ' + name }],
+        isError: true,
+      };
+    }
+    default:
+      throw new Error('Unsupported MCP method: ' + method);
+  }
+}
+
+function resolveStdioTarget(payload) {
+  const command = String(payload.command || '').trim();
+  const args = Array.isArray(payload.args) ? payload.args.map((arg) => String(arg)) : [];
+  const requestedServerId = String(payload.serverId || '').trim();
+  if (requestedServerId) {
+    if (!extensions.has(requestedServerId)) {
+      throw new Error('移动 stdio extension 未注册: ' + requestedServerId);
+    }
+    return {
+      serverId: requestedServerId,
+      command,
+      args,
+      source: 'extension',
+      profile: null,
+      packageName: null,
+    };
+  }
+  const resolution = resolveMobileNpxProfile(command, args);
+  if (!resolution) {
+    throw new Error(
+      '移动 Runtime 未打包该 stdio command/args：' +
+      JSON.stringify({ command, args }),
+    );
+  }
+  return {
+    serverId: 'mobile-npx:' + resolution.packageName,
+    command,
+    args,
+    source: 'bundled-mobile-package',
+    profile: resolution.profile,
+    packageName: resolution.packageName,
+  };
+}
+
+async function handleStdioMcp(session, message) {
+  if (session.source === 'bundled-mobile-package') {
+    return handleMobileNpxMcp(session, message);
+  }
+  return handleMcp(message, session.serverId);
+}
+
+function resolveStdioWaiter(session) {
+  const lines = session.output.splice(0, session.output.length);
+  return { lines, closed: session.closed };
+}
+
+function pushStdioLine(session, line) {
+  if (session.closed) return;
+  if (session.waiters.length > 0) {
+    const waiter = session.waiters.shift();
+    clearTimeout(waiter.timer);
+    waiter.resolve({ lines: [line], closed: false });
+    return;
+  }
+  session.output.push(line);
+}
+
+function closeStdioSession(session) {
+  if (session.closed) return;
+  session.closed = true;
+  for (const waiter of session.waiters.splice(0)) {
+    clearTimeout(waiter.timer);
+    waiter.resolve({ lines: [], closed: true });
+  }
+}
+
+async function processStdioLine(session, line) {
+  const rawLine = String(line || '').replace(/\r?\n$/, '');
+  if (!rawLine.trim()) return;
+  let message;
+  try {
+    message = JSON.parse(rawLine);
+  } catch (_) {
+    pushStdioLine(session, JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, message: 'Invalid JSON on MCP stdio stdin' },
+    }));
+    return;
+  }
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    pushStdioLine(session, JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: 'MCP stdio message must be an object' },
+    }));
+    return;
+  }
+  const hasId = message.id !== undefined && message.id !== null;
+  try {
+    const result = await handleStdioMcp(session, message);
+    if (hasId) {
+      pushStdioLine(session, JSON.stringify({
+        jsonrpc: '2.0',
+        id: message.id,
+        result,
+      }));
+    }
+  } catch (error) {
+    if (hasId) {
+      pushStdioLine(session, JSON.stringify({
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
+  }
+}
+
+function enqueueStdioLine(session, line) {
+  session.processing = session.processing
+    .then(() => processStdioLine(session, line))
+    .catch(() => undefined);
+  return session.processing;
 }
 
 async function listWorkspaceDirectory(args = {}) {
@@ -598,6 +922,97 @@ const server = http.createServer(async (req, res) => {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/runtime/stdio/start') {
+    try {
+      const payload = await readJsonBody(req, res);
+      const target = resolveStdioTarget(payload);
+      const sessionId = randomUUID();
+      const session = {
+        id: sessionId,
+        ...target,
+        output: [],
+        waiters: [],
+        processing: Promise.resolve(),
+        closed: false,
+      };
+      stdioSessions.set(sessionId, session);
+      return jsonResponse(res, 200, {
+        sessionId,
+        transport: 'stdio',
+        wireProtocol: 'jsonl',
+        source: target.source,
+        serverId: target.serverId,
+        command: target.command,
+        args: target.args,
+      });
+    } catch (error) {
+      return jsonResponse(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const stdioInputMatch = url.pathname.match(
+    /^\/runtime\/stdio\/([a-f0-9-]{36})\/stdin$/,
+  );
+  if (req.method === 'POST' && stdioInputMatch) {
+    const session = stdioSessions.get(stdioInputMatch[1]);
+    if (!session || session.closed) {
+      return jsonResponse(res, 404, { error: 'MCP stdio session not found or closed' });
+    }
+    try {
+      const payload = await readJsonBody(req, res);
+      if (typeof payload.line !== 'string') {
+        throw new Error('MCP stdio stdin requires a string line');
+      }
+      await enqueueStdioLine(session, payload.line);
+      return jsonResponse(res, 202, { accepted: true });
+    } catch (error) {
+      return jsonResponse(res, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const stdioOutputMatch = url.pathname.match(
+    /^\/runtime\/stdio\/([a-f0-9-]{36})\/stdout$/,
+  );
+  if (req.method === 'GET' && stdioOutputMatch) {
+    const session = stdioSessions.get(stdioOutputMatch[1]);
+    if (!session) {
+      return jsonResponse(res, 404, { error: 'MCP stdio session not found' });
+    }
+    if (session.output.length > 0 || session.closed) {
+      return jsonResponse(res, 200, resolveStdioWaiter(session));
+    }
+    const waitMs = clampInteger(url.searchParams.get('waitMs'), 1000, 1, 5000);
+    const result = await new Promise((resolve) => {
+      const waiter = {
+        resolve,
+        timer: setTimeout(() => {
+          const index = session.waiters.indexOf(waiter);
+          if (index >= 0) session.waiters.splice(index, 1);
+          resolve({ lines: [], closed: session.closed });
+        }, waitMs),
+      };
+      session.waiters.push(waiter);
+    });
+    return jsonResponse(res, 200, result);
+  }
+
+  const stdioCloseMatch = url.pathname.match(
+    /^\/runtime\/stdio\/([a-f0-9-]{36})\/close$/,
+  );
+  if (req.method === 'POST' && stdioCloseMatch) {
+    const session = stdioSessions.get(stdioCloseMatch[1]);
+    if (!session) {
+      return jsonResponse(res, 404, { error: 'MCP stdio session not found' });
+    }
+    closeStdioSession(session);
+    stdioSessions.delete(stdioCloseMatch[1]);
+    return jsonResponse(res, 200, { closed: true, sessionId: session.id });
   }
 
   const sseMatch = url.pathname.match(/^\/mcp\/sse\/([a-zA-Z0-9._-]+)$/);

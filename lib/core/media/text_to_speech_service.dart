@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'audio_player.dart';
 
 const kTextToSpeechMaxInputCharacters = 4000;
+const kTextToSpeechAudioFileExtensions = {'mp3', 'wav', 'opus', 'aac', 'flac'};
 
 class TextToSpeechInput {
   final String text;
@@ -39,12 +40,14 @@ class TextToSpeechService {
   final AudioPlayerPlatform player;
   final Future<Directory> Function() outputDirectory;
   final DateTime Function() now;
+  final String audioFileExtension;
 
   const TextToSpeechService({
     required this.engine,
     required this.player,
     this.outputDirectory = getTemporaryDirectory,
     this.now = DateTime.now,
+    this.audioFileExtension = 'mp3',
   });
 
   Stream<AudioPlaybackEvent> get playbackEvents => player.events;
@@ -61,6 +64,9 @@ class TextToSpeechService {
     if (bytes.isEmpty) {
       throw const TextToSpeechException('语音播报生成失败，请稍后重试');
     }
+    final extension = normalizeTextToSpeechAudioFileExtension(
+      audioFileExtension,
+    );
     final directory = Directory(
       p.join((await outputDirectory()).path, 'tts_audio'),
     );
@@ -68,7 +74,7 @@ class TextToSpeechService {
     final file = File(
       p.join(
         directory.path,
-        'simichat-tts-${now().millisecondsSinceEpoch}.mp3',
+        'simichat-tts-${now().millisecondsSinceEpoch}.$extension',
       ),
     );
     await file.writeAsBytes(bytes, flush: true);
@@ -77,6 +83,14 @@ class TextToSpeechService {
   }
 
   Future<void> stop() => player.stop();
+}
+
+String normalizeTextToSpeechAudioFileExtension(String extension) {
+  final value = extension.trim().toLowerCase();
+  if (!kTextToSpeechAudioFileExtensions.contains(value)) {
+    throw const TextToSpeechException('不支持的 TTS 音频文件格式');
+  }
+  return value;
 }
 
 String normalizeTextToSpeechInput(String text) {
@@ -95,7 +109,11 @@ String normalizeTextToSpeechVoice(String voice) {
   if (value.isEmpty) {
     throw const TextToSpeechException('TTS 音色不能为空');
   }
-  if (!RegExp(r'^[a-zA-Z0-9._-]{1,64}$').hasMatch(value)) {
+  // 声音克隆的 voice 是 base64 data URI（data:audio/...;base64,...）。
+  final isDataUri = RegExp(
+    r'^data:[a-zA-Z0-9]+/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+$',
+  ).hasMatch(value);
+  if (!isDataUri && !RegExp(r'^[a-zA-Z0-9._-]{1,64}$').hasMatch(value)) {
     throw const TextToSpeechException('TTS 音色格式无效');
   }
   return value;

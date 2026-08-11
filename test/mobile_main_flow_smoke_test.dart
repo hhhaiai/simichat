@@ -83,6 +83,13 @@ void main() {
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
     expect(find.text('设置'), findsOneWidget);
+    // 设置页首部 SimiRouter 推广卡片占位较高，滚动到目标分区。
+    await tester.scrollUntilVisible(
+      find.text('数据与档案'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     expect(find.text('数据与档案'), findsOneWidget);
 
     await tester.pageBack();
@@ -1177,7 +1184,7 @@ void main() {
     await tester.tap(find.text('去设置'));
     await tester.pumpAndSettle();
 
-    // 设置页首部 DW Chainless 推广卡片增加了页首高度，先滚动到 Dreaming tile。
+    // 设置页首部 SimiRouter AI 推广卡片增加了页首高度，先滚动到 Dreaming tile。
     await tester.scrollUntilVisible(
       find.text('Dreaming 夜间整理'),
       120,

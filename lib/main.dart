@@ -78,28 +78,88 @@ void main() async {
     return;
   }
 
-  try {
-    await syncDreamingBackgroundScheduleFromStorage();
-  } catch (e) {
-    debugPrint('Background Dreaming schedule failed: $e');
+  // 首帧必须优先于所有可选初始化。iOS 上通知、后台任务或 SQLite 的系统
+  // 调用可能慢于 Flutter 引擎启动；此前在 runApp 前等待它们会让用户只看到
+  // 启动页/白屏。AppBootstrap 在第一帧后用同一个 Provider 数据库实例完成
+  // 这些工作，任何单项失败都不会阻塞聊天主界面。
+  runApp(const ProviderScope(child: AppBootstrap()));
+}
+
+typedef AppStartupTask = Future<void> Function();
+typedef SkillSeedTask = Future<void> Function(AppDatabase database);
+typedef AppStartupErrorReporter =
+    void Function(String taskName, Object error, StackTrace stackTrace);
+
+/// 常规启动完成后的非关键任务。
+///
+/// 保持任务顺序与旧启动链一致，但绝不让单项失败阻断后续任务。调用方必须在
+/// 首帧后调用，确保慢速原生初始化不会阻塞可交互 UI。
+@visibleForTesting
+Future<void> runDeferredAppStartupTasks(
+  AppDatabase database, {
+  AppStartupTask? syncDreamingSchedule,
+  AppStartupTask? initializeNotifications,
+  SkillSeedTask? seedBuiltInSkills,
+  AppStartupErrorReporter? onError,
+}) async {
+  void report(String taskName, Object error, StackTrace stackTrace) {
+    if (onError != null) {
+      onError(taskName, error, stackTrace);
+      return;
+    }
+    debugPrint('$taskName failed: $error');
   }
 
-  try {
-    await NotificationService().init();
-  } catch (e) {
-    debugPrint('Notification init failed: $e');
+  Future<void> runStep(String taskName, AppStartupTask task) async {
+    try {
+      await task();
+    } catch (error, stackTrace) {
+      report(taskName, error, stackTrace);
+    }
   }
 
-  // 初始化数据库并植入内置 Skills
-  final db = AppDatabase();
-  try {
-    await _seedBuiltInSkills(db);
-  } catch (e) {
-    debugPrint('Seed built-in skills failed: $e');
-  }
-  await db.close();
+  await runStep(
+    'Background Dreaming schedule',
+    syncDreamingSchedule ?? syncDreamingBackgroundScheduleFromStorage,
+  );
+  await runStep(
+    'Notification init',
+    initializeNotifications ?? () => NotificationService().init(),
+  );
+  await runStep(
+    'Seed built-in skills',
+    () => (seedBuiltInSkills ?? _seedBuiltInSkills)(database),
+  );
+}
 
-  runApp(const ProviderScope(child: AiChatApp()));
+/// 将慢速启动任务移到首帧之后，保证即使原生插件或历史数据库异常，应用仍可
+/// 立即呈现并保持可恢复的聊天入口。
+class AppBootstrap extends ConsumerStatefulWidget {
+  const AppBootstrap({super.key, this.startupTasksRunner});
+
+  @visibleForTesting
+  final Future<void> Function(AppDatabase database)? startupTasksRunner;
+
+  @override
+  ConsumerState<AppBootstrap> createState() => _AppBootstrapState();
+}
+
+class _AppBootstrapState extends ConsumerState<AppBootstrap> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final runStartupTasks =
+          widget.startupTasksRunner ?? runDeferredAppStartupTasks;
+      // databaseProvider 的生命周期归 ProviderScope 管理。不要创建并关闭第二个
+      // AppDatabase，否则首次会话创建可能与 Skills 植入竞争同一个 SQLite 文件。
+      unawaited(runStartupTasks(ref.read(databaseProvider)));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const AiChatApp();
 }
 
 /// 首次启动时植入内置 Skills（幂等：已存在则跳过）

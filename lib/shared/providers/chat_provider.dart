@@ -98,6 +98,11 @@ bool canUseChannelSpeechToTextFallback(String protocol) {
 }
 
 @visibleForTesting
+bool canUseChannelImageGeneration(String protocol) {
+  return protocol == 'openai_chat' || protocol == 'openai_response';
+}
+
+@visibleForTesting
 bool isContextLimitErrorForTesting(String error) => _isContextLimitError(error);
 
 @visibleForTesting
@@ -267,13 +272,18 @@ Future<void> _appendConversationArchiveMessage({
       ),
     );
   } catch (e) {
-    await ref
-        .read(archiveRepairQueueProvider.notifier)
-        .recordFailure(
-          sessionId: sessionId,
-          operation: 'append-$role',
-          error: e,
-        );
+    try {
+      await ref
+          .read(archiveRepairQueueProvider.notifier)
+          .recordFailure(
+            sessionId: sessionId,
+            operation: 'append-$role',
+            error: e,
+          );
+    } catch (_) {
+      // 页面关闭后 WidgetRef 可能已销毁，档案修复队列记录不能
+      // 反向造成未处理异步异常。
+    }
   }
 }
 
@@ -389,10 +399,18 @@ SpeechToTextEngine? _resolveSpeechToTextEngineForMessage({
   final configured = ref.read(speechToTextEngineProvider);
   if (configured != null) engines.add(configured);
   if (canUseChannelSpeechToTextFallback(modelInfo.channel.protocol)) {
+    final channelModel = modelInfo.channelModel.modelName;
+    final channelModelIsAsr =
+        channelModel.contains('asr') ||
+        channelModel.contains('whisper') ||
+        channelModel.contains('transcribe');
     engines.add(
       OpenAiCompatibleSpeechToTextEngine(
         baseUrl: modelInfo.channel.baseUrl,
         apiKey: apiKey,
+        // 通道模型本身是 ASR 模型（如 SimiRouter 的 mimo-v2.5-asr）时
+        // 直接透传，否则保持默认 whisper-1（避免把聊天模型名传给转录接口）。
+        model: channelModelIsAsr ? channelModel : kDefaultSpeechToTextModel,
       ),
     );
   }
@@ -689,6 +707,7 @@ class StreamState {
   final bool isStreaming;
   final String currentContent;
   final String currentThinking;
+  final String? modelId;
   final String? error;
   final bool isWaitingForFirstToken; // 发送后等待第一个 token 的状态
 
@@ -696,6 +715,7 @@ class StreamState {
     this.isStreaming = false,
     this.currentContent = '',
     this.currentThinking = '',
+    this.modelId,
     this.error,
     this.isWaitingForFirstToken = false,
   });
@@ -704,6 +724,7 @@ class StreamState {
     bool? isStreaming,
     String? currentContent,
     String? currentThinking,
+    String? modelId,
     String? error,
     bool? isWaitingForFirstToken,
   }) {
@@ -711,6 +732,7 @@ class StreamState {
       isStreaming: isStreaming ?? this.isStreaming,
       currentContent: currentContent ?? this.currentContent,
       currentThinking: currentThinking ?? this.currentThinking,
+      modelId: modelId ?? this.modelId,
       error: error,
       isWaitingForFirstToken:
           isWaitingForFirstToken ?? this.isWaitingForFirstToken,
@@ -866,6 +888,7 @@ Future<bool> sendMessage({
   } catch (e) {
     ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
       isStreaming: false,
+      modelId: modelId,
       error: 'API Key 解密失败: $e',
     );
     return false;
@@ -876,8 +899,9 @@ Future<bool> sendMessage({
   );
   String? audioTranscriptForAi;
   if (hasAudioAttachment) {
-    ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
+    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
       isStreaming: true,
+      modelId: modelId,
       isWaitingForFirstToken: true,
     );
     audioTranscriptForAi = await _transcribeAudioAttachmentsForAi(
@@ -921,6 +945,19 @@ Future<bool> sendMessage({
       )
       .toList();
   final skillsPrompt = skill_model.buildSkillsSystemPrompt(skills);
+  // MCP rows auto-connect asynchronously during provider initialization. A
+  // cold-start send must wait briefly for that handshake, otherwise the first
+  // prompt silently omits every MCP tool. Keep the wait bounded so a broken
+  // remote SSE server never blocks ordinary chat input.
+  try {
+    await ref
+        .read(mcpManagerProvider.notifier)
+        .ready
+        .timeout(const Duration(seconds: 3));
+  } on Object {
+    // Continue with tools connected so far; a later send can include newly
+    // connected tools after the manager finishes loading.
+  }
   final mcpToolsPrompt = _buildMcpToolsPrompt(ref);
   String? memoryPrompt;
   try {
@@ -1013,8 +1050,9 @@ Future<bool> sendMessage({
     maxInputTokens: contextBudget.maxInputTokens,
   );
 
-  ref.read(streamStateProvider(sessionId).notifier).state = const StreamState(
+  ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
     isStreaming: true,
+    modelId: modelId,
     isWaitingForFirstToken: true,
   );
 
@@ -1037,7 +1075,7 @@ Future<bool> sendMessage({
   return true;
 }
 
-/// 生成图片：插入用户提示词消息，调用 OpenAI 兼容 `/v1/images/generations`，
+/// 生成图片：调用 OpenAI 兼容 `/v1/images/generations`，
 /// 把图片保存到应用私有目录，并将结果作为 assistant 消息（含图片附件）插入会话。
 ///
 /// 返回 null 表示成功，否则返回用户可读的错误信息（不向上抛出到 UI 层）。
@@ -1046,10 +1084,8 @@ Future<String?> generateImage({
   required String sessionId,
   required String prompt,
 }) async {
-  final messageDao = ref.read(messageDaoProvider);
   final sessionDao = ref.read(sessionDaoProvider);
   final channelDao = ref.read(channelDaoProvider);
-  final attachmentDao = ref.read(attachmentDaoProvider);
 
   final trimmedPrompt = prompt.trim();
   if (trimmedPrompt.isEmpty) return '请输入图片描述';
@@ -1063,34 +1099,11 @@ Future<String?> generateImage({
       : await channelDao.getModelWithChannel(modelId);
   if (modelInfo == null) return '请先选择一个模型';
   final channel = modelInfo.channel;
+  if (!canUseChannelImageGeneration(channel.protocol)) {
+    return '当前渠道不支持 OpenAI 兼容图片生成，请切换到支持 /v1/images/generations 的渠道';
+  }
 
-  // 1. 插入用户提示词消息，保持与普通发送一致的归档与 token 计数行为。
-  final userMsgId = _uuid.v4();
-  final userTokens = TokenEstimator.estimate(trimmedPrompt);
-  await messageDao.insertMessage(
-    id: userMsgId,
-    sessionId: sessionId,
-    role: 'user',
-    content: trimmedPrompt,
-    tokens: userTokens,
-  );
-  unawaited(
-    _appendConversationArchiveMessage(
-      ref: ref,
-      sessionId: sessionId,
-      sessionTitle: session.title,
-      messageId: userMsgId,
-      role: 'user',
-      content: trimmedPrompt,
-    ),
-  );
-  await sessionDao.updateLastMessageAt(sessionId);
-  await sessionDao.updateTotalTokens(
-    sessionId,
-    session.totalTokens + userTokens,
-  );
-
-  // 2. 调用图片生成服务：复用当前渠道的 Base URL / API Key，模型可配置。
+  // 先调用上游；失败时不写用户消息和 token，避免重试产生幽灵消息。
   final imageConfig = ref.read(imageGenerationConfigProvider);
   final service = ImageGenerationService(
     baseUrl: channel.baseUrl,
@@ -1102,58 +1115,178 @@ Future<String?> generateImage({
   try {
     generated = await service.generate(trimmedPrompt);
   } catch (e) {
-    ref.invalidate(messagesProvider(sessionId));
-    ref.invalidate(sessionsProvider);
     return '图片生成失败：$e';
   }
 
-  // 3. 保存图片并插入 assistant 消息 + 图片附件。
+  return _saveGeneratedImageConversation(
+    ref: ref,
+    session: session,
+    modelId: modelId,
+    userContent: trimmedPrompt,
+    assistantContent: '已生成图片',
+    filePrefix: 'generated',
+    image: generated,
+  );
+}
+
+/// 编辑图片：把参考图（`imagePath`）与编辑提示词发送到
+/// OpenAI 兼容 `/v1/images/edits`，结果作为 assistant 消息（含图片附件）插入会话。
+///
+/// 返回 null 表示成功，否则返回用户可读的错误信息（不向上抛出到 UI 层）。
+Future<String?> editImage({
+  required WidgetRef ref,
+  required String sessionId,
+  required String imagePath,
+  required String prompt,
+}) async {
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+
+  final trimmedPrompt = prompt.trim();
+  if (trimmedPrompt.isEmpty) return '请输入编辑提示词';
+
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+
+  final modelId = session.defaultChannelModelId;
+  final modelInfo = modelId == null
+      ? null
+      : await channelDao.getModelWithChannel(modelId);
+  if (modelInfo == null) return '请先选择一个模型';
+  final channel = modelInfo.channel;
+  final userContent = '编辑图片：$trimmedPrompt';
+  if (!canUseChannelImageGeneration(channel.protocol)) {
+    return '当前渠道不支持 OpenAI 兼容图片编辑，请切换到支持 /v1/images/edits 的渠道';
+  }
+
+  // 上游成功后才以事务写入会话，失败保留对话框内的提示词。
+  final imageConfig = ref.read(imageGenerationConfigProvider);
+  final service = ImageGenerationService(
+    baseUrl: channel.baseUrl,
+    apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
+    model: imageConfig.model,
+  );
+
+  final GeneratedImage edited;
+  try {
+    edited = await service.edit(imagePath: imagePath, prompt: trimmedPrompt);
+  } catch (e) {
+    return '图片编辑失败：$e';
+  }
+
+  return _saveGeneratedImageConversation(
+    ref: ref,
+    session: session,
+    modelId: modelId,
+    userContent: userContent,
+    assistantContent: '已编辑图片',
+    filePrefix: 'edited',
+    image: edited,
+  );
+}
+
+Future<String?> _saveGeneratedImageConversation({
+  required WidgetRef ref,
+  required Session session,
+  required String? modelId,
+  required String userContent,
+  required String assistantContent,
+  required String filePrefix,
+  required GeneratedImage image,
+}) async {
+  File? file;
+  late final String fileName;
+  late final String userMsgId;
+  late final String assistantMsgId;
   try {
     final root = await getApplicationSupportDirectory();
     final directory = Directory(p.join(root.path, 'generated_images'));
     await directory.create(recursive: true);
-    final fileName = 'generated-${DateTime.now().millisecondsSinceEpoch}.png';
-    final file = File(p.join(directory.path, fileName));
-    await file.writeAsBytes(generated.bytes, flush: true);
+    fileName = '$filePrefix-${_uuid.v4()}.png';
+    file = File(p.join(directory.path, fileName));
+    final part = File('${file.path}.part');
+    await part.writeAsBytes(image.bytes, flush: true);
+    await part.rename(file.path);
 
-    final assistantMsgId = _uuid.v4();
-    await messageDao.insertMessage(
-      id: assistantMsgId,
-      sessionId: sessionId,
-      role: 'assistant',
-      content: '已生成图片',
-      tokens: 0,
-      channelModelId: modelId,
-    );
-    await attachmentDao.insertAttachment(
-      id: _uuid.v4(),
-      messageId: assistantMsgId,
-      fileType: 'image',
-      localPath: file.path,
-      fileName: fileName,
-      fileSize: generated.bytes.lengthInBytes,
+    userMsgId = _uuid.v4();
+    assistantMsgId = _uuid.v4();
+    final userTokens = TokenEstimator.estimate(userContent);
+    final attachmentId = _uuid.v4();
+    final database = ref.read(databaseProvider);
+    final messageDao = ref.read(messageDaoProvider);
+    final sessionDao = ref.read(sessionDaoProvider);
+    final attachmentDao = ref.read(attachmentDaoProvider);
+    await database.transaction(() async {
+      await messageDao.insertMessage(
+        id: userMsgId,
+        sessionId: session.id,
+        role: 'user',
+        content: userContent,
+        tokens: userTokens,
+      );
+      await messageDao.insertMessage(
+        id: assistantMsgId,
+        sessionId: session.id,
+        role: 'assistant',
+        content: assistantContent,
+        tokens: 0,
+        channelModelId: modelId,
+      );
+      await attachmentDao.insertAttachment(
+        id: attachmentId,
+        messageId: assistantMsgId,
+        fileType: 'image',
+        localPath: file!.path,
+        fileName: fileName,
+        fileSize: image.bytes.lengthInBytes,
+      );
+      await sessionDao.updateLastMessageAt(session.id);
+      await sessionDao.updateTotalTokens(
+        session.id,
+        session.totalTokens + userTokens,
+      );
+    });
+  } catch (_) {
+    if (file != null) {
+      try {
+        final part = File('${file.path}.part');
+        if (await part.exists()) await part.delete();
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+    return '保存图片失败，请检查本机存储空间后重试';
+  }
+
+  // 数据库事务已提交，后续索引刷新/档案为派生动作；即使页面
+  // 此时被关闭，也不回滚或删除已被消息附件引用的图片。
+  try {
+    unawaited(
+      _appendConversationArchiveMessage(
+        ref: ref,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        messageId: userMsgId,
+        role: 'user',
+        content: userContent,
+      ),
     );
     unawaited(
       _appendConversationArchiveMessage(
         ref: ref,
-        sessionId: sessionId,
+        sessionId: session.id,
         sessionTitle: session.title,
         messageId: assistantMsgId,
         role: 'assistant',
-        content: '已生成图片',
+        content: assistantContent,
         channelModelId: modelId,
         attachmentNames: [fileName],
       ),
     );
-    await sessionDao.updateLastMessageAt(sessionId);
-  } catch (e) {
-    ref.invalidate(messagesProvider(sessionId));
+    ref.invalidate(messagesProvider(session.id));
     ref.invalidate(sessionsProvider);
-    return '保存生成图片失败：$e';
+  } catch (_) {
+    // Widget 已销毁时不再刷新 UI；已提交的图片与消息保持有效。
   }
-
-  ref.invalidate(messagesProvider(sessionId));
-  ref.invalidate(sessionsProvider);
   return null;
 }
 
@@ -1300,8 +1433,11 @@ Future<void> _runAssistantResponse({
       final cancelToken = CancelToken();
       _cancelTokens[sessionId] = cancelToken;
 
-      ref.read(streamStateProvider(sessionId).notifier).state =
-          const StreamState(isStreaming: true, isWaitingForFirstToken: true);
+      ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+        isStreaming: true,
+        modelId: modelId,
+        isWaitingForFirstToken: true,
+      );
 
       final stream = AiService.sendMessage(
         protocol: modelInfo.channel.protocol,
@@ -1319,8 +1455,9 @@ Future<void> _runAssistantResponse({
             firstTokenReceived = true;
             ref
                 .read(streamStateProvider(sessionId).notifier)
-                .state = const StreamState(
+                .state = StreamState(
               isStreaming: true,
+              modelId: modelId,
               isWaitingForFirstToken: false,
             );
           }
@@ -1330,6 +1467,7 @@ Future<void> _runAssistantResponse({
             isStreaming: true,
             currentContent: buffer.toString(),
             currentThinking: thinkingBuffer.toString(),
+            modelId: modelId,
             isWaitingForFirstToken: false,
           );
         },
@@ -1358,6 +1496,7 @@ Future<void> _runAssistantResponse({
       if (interruptedCancellationError != null) {
         ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
           isStreaming: false,
+          modelId: modelId,
           error: interruptedCancellationError,
         );
         return;
@@ -1376,8 +1515,9 @@ Future<void> _runAssistantResponse({
             contextMessages = trimmedMessages;
             ref
                 .read(streamStateProvider(sessionId).notifier)
-                .state = const StreamState(
+                .state = StreamState(
               isStreaming: true,
+              modelId: modelId,
               isWaitingForFirstToken: true,
             );
             continue;
@@ -1386,6 +1526,7 @@ Future<void> _runAssistantResponse({
 
         ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
           isStreaming: false,
+          modelId: modelId,
           error: _isContextLimitError(streamError!)
               ? _contextLimitUserMessage
               : streamError.toString(),
@@ -1426,8 +1567,10 @@ Future<void> _runAssistantResponse({
 
       if (responseContent.isEmpty && responseThinking.isEmpty) {
         if (toolCalls.isEmpty) {
-          ref.read(streamStateProvider(sessionId).notifier).state =
-              const StreamState(isStreaming: false);
+          ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+            isStreaming: false,
+            modelId: modelId,
+          );
           return;
         }
       }
@@ -1564,8 +1707,10 @@ Future<void> _runAssistantResponse({
       totalTokens += responseTokens;
       await sessionDao.updateTotalTokens(sessionId, totalTokens);
 
-      ref.read(streamStateProvider(sessionId).notifier).state =
-          const StreamState(isStreaming: false);
+      ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+        isStreaming: false,
+        modelId: modelId,
+      );
       ref.invalidate(messagesProvider(sessionId));
       ref.invalidate(sessionsProvider);
 
@@ -1610,6 +1755,7 @@ Future<void> _runAssistantResponse({
   } catch (e) {
     ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
       isStreaming: false,
+      modelId: modelId,
       error: e.toString(),
     );
   } finally {

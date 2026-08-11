@@ -39,11 +39,15 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
     required this.baseUrl,
     required this.apiKey,
     this.model = kDefaultSpeechToTextModel,
+    this.language = 'auto',
   });
 
   final String baseUrl;
   final String apiKey;
   final String model;
+
+  /// 识别语言：auto（自动）/ zh（中文）/ en（英文）。
+  final String language;
 
   @override
   Future<String> transcribe(AudioTranscriptionInput input) async {
@@ -84,6 +88,11 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
             input.audioPath,
             filename: input.fileName,
           ),
+          // OpenAI 兼容接口用“省略 language”表示自动检测；把字面值
+          // `auto` 作为 ISO-639-1 代码发送会被部分厂商拒绝。
+          if (language.trim().isNotEmpty &&
+              language.trim().toLowerCase() != 'auto')
+            'language': language.trim().toLowerCase(),
         }),
       );
       return _extractTranscriptText(response.data).trim();

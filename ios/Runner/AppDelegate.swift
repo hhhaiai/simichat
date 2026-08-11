@@ -2,6 +2,7 @@ import Flutter
 import UIKit
 import AVFoundation
 import Speech
+import WebKit
 import workmanager_apple
 
 @main
@@ -57,7 +58,29 @@ import workmanager_apple
     registerNativeSpeechToTextChannel(messenger: messenger)
     registerDeepLinkChannel(messenger: messenger)
     registerBackgroundRefreshStatusChannel(messenger: messenger)
+    registerInAppH5ProfileChannel(messenger: messenger)
     registerNodeRuntimeChannel(messenger: messenger)
+  }
+
+  private func registerInAppH5ProfileChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "simichat/in_app_h5_profile",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "flush" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      // WKWebsiteDataStore.default() 是持久数据仓库。读取 Cookie 列表作为
+      // 当前 cookieStore 操作的完成屏障；localStorage / IndexedDB 与磁盘
+      // 缓存由同一个默认 data store 自动持久化。
+      WKWebsiteDataStore.default().httpCookieStore.getAllCookies { _ in
+        DispatchQueue.main.async {
+          result(true)
+        }
+      }
+    }
   }
 
   private func registerNodeRuntimeChannel(messenger: FlutterBinaryMessenger) {

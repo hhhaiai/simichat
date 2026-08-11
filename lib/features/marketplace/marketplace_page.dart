@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/marketplace/marketplace_models.dart';
+import '../../core/mcp/bundled_node_runtime.dart';
+import '../../core/mcp/mobile_npx_resolver.dart';
 import '../../shared/providers/marketplace_provider.dart';
 import '../../shared/providers/mcp_provider.dart';
+import '../../shared/providers/mcp_runtime_provider.dart';
 
 /// MCP 市场页面
 class MarketplacePage extends ConsumerStatefulWidget {
@@ -31,11 +34,13 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
       appBar: AppBar(
         title: const Text('MCP 市场'),
         actions: [
-          IconButton(
-            tooltip: '移动端扩展',
-            icon: const Icon(Icons.extension_outlined),
-            onPressed: () => Navigator.pushNamed(context, '/mobile-extensions'),
-          ),
+          if (isAppManagedMcpExtensionPlatform)
+            IconButton(
+              tooltip: '本地扩展',
+              icon: const Icon(Icons.extension_outlined),
+              onPressed: () =>
+                  Navigator.pushNamed(context, '/mobile-extensions'),
+            ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showInfoDialog(context),
@@ -136,6 +141,11 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
   Widget _buildItemCard(MarketplaceItem item, ColorScheme scheme) {
     final servers = ref.watch(mcpManagerProvider);
     final installed = servers.any((s) => s.name == item.name);
+    // The container sidecar is deliberately a PC-only capability. Showing it
+    // on mobile as an ordinary SSE item would make users attempt a loopback
+    // connection that cannot start Docker/Podman on the device.
+    final pcOnlyContainer =
+        isMobileMcpPlatform && item.id == kContainerMcpServerId;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -258,10 +268,16 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      item.isAppNative
+                      pcOnlyContainer
+                          ? '仅 PC · 需要 Docker/Podman'
+                          : item.isAppNative
                           ? 'App 内建 · 移动端/PC 直接运行'
                           : item.isStdio
-                          ? '${item.command} ${(item.args).join(" ")}'
+                                ? _isMobileCompatibleStdio(item)
+                                ? isMobileMcpPlatform
+                                      ? '移动端 stdio · 内置 Runtime'
+                                      : 'PC stdio · 内置 Node Runtime'
+                                : '${item.command} ${(item.args).join(" ")}'
                           : item.url ?? '',
                       style: TextStyle(
                         fontSize: 11,
@@ -274,7 +290,15 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                installed
+                pcOnlyContainer
+                    ? FilledButton.tonal(
+                        onPressed: null,
+                        child: const Text(
+                          '仅 PC',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      )
+                    : installed
                     ? FilledButton.tonal(
                         onPressed: null,
                         child: const Text(
@@ -296,8 +320,29 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
   }
 
   Future<void> _installItem(MarketplaceItem item) async {
+    if (isMobileMcpPlatform && item.id == kContainerMcpServerId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Node 容器 Runtime 仅支持 PC + Docker/Podman')),
+      );
+      return;
+    }
+    if (item.id == kContainerMcpServerId) {
+      // The container entry is PC-only and still requires the user's Docker
+      // or Podman daemon. Start it explicitly before creating the SSE row so
+      // an install never looks successful while pointing at a dead loopback.
+      await ref.read(mcpRuntimeControllerProvider.notifier).start();
+      if (!mounted) return;
+      final runtime = ref.read(mcpRuntimeControllerProvider);
+      if (!runtime.isRunning) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PC 容器 Runtime 未启动：${runtime.message}')),
+        );
+        return;
+      }
+    }
     final manager = ref.read(mcpManagerProvider.notifier);
-    final usesExternalRuntime = item.isStdio;
+    final mobileCompatibleStdio = _isMobileCompatibleStdio(item);
+    final usesExternalRuntime = item.isStdio && !mobileCompatibleStdio;
 
     final config = McpServerConfig(
       id: const Uuid().v4(),
@@ -315,18 +360,24 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
 
     var connected = false;
     Object? connectError;
-    if (!usesExternalRuntime && (item.isAppNative || item.isSse)) {
+    if (!usesExternalRuntime &&
+        (item.isAppNative || item.isSse || mobileCompatibleStdio)) {
       try {
         await manager.connectServer(config);
         connected = true;
       } catch (e) {
         connectError = e;
+        // Keep the item installed for an explicit retry, but do not turn a
+        // failed connection into an auto-connect loop on every app launch.
+        await manager.updateServer(config.copyWith(isEnabled: false));
       }
     }
 
     if (!mounted) return;
     final message = usesExternalRuntime
-        ? '已安装为禁用: ${item.name}。旧 stdio MCP 依赖宿主机命令，优先使用 SimiChat Node 容器 Runtime 或内置 Node Runtime。'
+        ? isMobileMcpPlatform
+              ? '已安装为待启用: ${item.name}。该 stdio 服务需要移动兼容包，请从移动端扩展安装。'
+              : '已安装为禁用: ${item.name}。该 stdio 服务需要 PC Runtime。'
         : connectError != null
         ? '已安装但连接失败: $connectError'
         : connected
@@ -347,6 +398,18 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
     );
   }
 
+  bool _isMobileCompatibleStdio(MarketplaceItem item) {
+    if (!item.isStdio ||
+        (!isMobileMcpPlatform && !BundledNodeRuntime.isDesktop)) {
+      return false;
+    }
+    return MobileNpxResolver.resolve(
+          command: item.command ?? '',
+          args: item.args,
+        ) !=
+        null;
+  }
+
   void _showInfoDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -357,8 +420,8 @@ class _MarketplacePageState extends ConsumerState<MarketplacePage> {
           '如文件访问、数据库查询、网页搜索等。\n\n'
           '优先选择“App 内建”类型：移动端和 PC 端可直接运行，'
           '不依赖宿主机 Node / npx / Python。\n\n'
-          '传统 stdio / SSE 服务器属于 PC 高级连接，'
-          '可能需要后续 Runtime/容器层和额外密钥。',
+          '移动端的 stdio 配置会优先使用已审核适配器或移动扩展，'
+          '不启动手机外部命令；未知 stdio 服务请安装移动兼容包或改用 SSE。',
         ),
         actions: [
           FilledButton(

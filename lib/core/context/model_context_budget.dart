@@ -71,9 +71,9 @@ int _inferContextWindowTokens(String protocol, String modelName) {
   if (model.contains('128k') ||
       model.contains('gpt-4o') ||
       model.contains('gpt-4-turbo') ||
-      model.contains('o1') ||
-      model.contains('o3') ||
-      model.contains('o4')) {
+      _hasDelimitedModelToken(model, 'o1') ||
+      _hasDelimitedModelToken(model, 'o3') ||
+      _hasDelimitedModelToken(model, 'o4')) {
     return 128000;
   }
   if (model.contains('64k') ||
@@ -90,4 +90,14 @@ int _inferContextWindowTokens(String protocol, String modelName) {
   if (protocolKey.contains('ollama')) return 8192;
 
   return 8192;
+}
+
+/// OpenAI o 系列短代号必须是独立模型 token。
+///
+/// 直接 `contains('o1')` 会把 `foo1`、`mirror1` 等普通名称错误提升到
+/// 128K 上下文，进而延后压缩并增加真实小窗口模型的超限风险。
+bool _hasDelimitedModelToken(String modelName, String token) {
+  return RegExp(
+    '(^|[^a-z0-9])${RegExp.escape(token)}([^a-z0-9]|\$)',
+  ).hasMatch(modelName);
 }

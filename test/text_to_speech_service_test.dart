@@ -46,6 +46,22 @@ void main() {
       expect(player.playedPath, result.audioFile.path);
     });
 
+    test('uses configured audio extension for non-mp3 output', () async {
+      final player = _FakeAudioPlayer();
+      final service = TextToSpeechService(
+        engine: _FakeTextToSpeechEngine([0x52, 0x49, 0x46, 0x46]),
+        player: player,
+        outputDirectory: () async => tempDir,
+        now: () => DateTime.fromMillisecondsSinceEpoch(5678),
+        audioFileExtension: 'wav',
+      );
+
+      final result = await service.speak(text: '你好', voice: 'alloy');
+
+      expect(result.audioFile.path, endsWith('simichat-tts-5678.wav'));
+      expect(player.playedPath, result.audioFile.path);
+    });
+
     test('rejects empty text before calling engine', () async {
       final engine = _FakeTextToSpeechEngine([1]);
       final service = TextToSpeechService(

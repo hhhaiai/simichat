@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/ai/model_capability.dart';
 import '../../core/ai/model_switch_record.dart';
 import '../../core/media/audio_player.dart';
 import '../../core/media/audio_transcript_archive.dart';
@@ -17,6 +18,7 @@ import '../../shared/providers/session_provider.dart';
 import '../../shared/providers/text_to_speech_provider.dart';
 import '../../shared/widgets/message_bubble.dart';
 import '../../shared/widgets/streaming_bubble.dart';
+import 'image_edit_dialog.dart';
 import '../../shared/widgets/chat_input_bar.dart'
     show ChatInputBar, PendingAttachment;
 
@@ -32,6 +34,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
   final _hasTextNotifier = ValueNotifier<bool>(false);
+
+  /// 深度思考开关（会话内临时状态）：开启后发送走 reasoner 模型。
+  final _deepThinkEnabled = ValueNotifier<bool>(false);
 
   // 输入草稿缓存：按 sessionId 保存未发送文本
   static final Map<String, String> _draftCache = {};
@@ -69,6 +74,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _inputController.removeListener(_onTextChanged);
     _scrollController.removeListener(_onScrollChanged);
     _hasTextNotifier.dispose();
+    _deepThinkEnabled.dispose();
     _audioPlaybackSubscription?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
@@ -323,24 +329,51 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
 
     try {
-      final resolvedModelId = await _ensureModelBeforeSend(activeSessionId);
-      if (resolvedModelId == null) return false;
+      final selectedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (selectedModelId == null) return false;
+      var requestModelId = selectedModelId;
+
+      final hasImageAttachment = attachments.any(
+        (attachment) => attachment.type == 'image',
+      );
+
+      // 图片消息必须走当前渠道的 Vision 模型。优先自动切换，避免把图片
+      // 盲发给纯文本模型后才收到难理解的上游错误。
+      if (hasImageAttachment) {
+        final visionModelId = await _findVisionModelInCurrentChannel(
+          selectedModelId,
+        );
+        if (visionModelId == null) {
+          _showSnackBar('当前渠道没有支持识图的 Vision 模型，已保留图片和输入');
+          return false;
+        }
+        requestModelId = visionModelId;
+        if (_deepThinkEnabled.value) {
+          _showSnackBar('图片消息将使用 Vision 模型，深度思考本次不切换');
+        }
+      } else if (_deepThinkEnabled.value) {
+        // 深度思考开启：纯文本消息优先切换到当前渠道的 reasoner 模型。
+        final reasonerModelId = await _findReasonerModelInCurrentChannel(
+          selectedModelId,
+        );
+        if (reasonerModelId == null) {
+          _showSnackBar('当前渠道没有深度思考（reasoner）模型，已保留输入');
+          return false;
+        }
+        requestModelId = reasonerModelId;
+      }
 
       activeSessionId ??= await createNewSession(
         ref,
-        defaultModelId: resolvedModelId,
+        defaultModelId: selectedModelId,
       );
       if (!mounted) return false;
-
-      await ref
-          .read(sessionDaoProvider)
-          .updateDefaultModel(activeSessionId, resolvedModelId);
 
       final sent = await sendMessage(
         ref: ref,
         sessionId: activeSessionId,
         content: content,
-        overrideModelId: resolvedModelId,
+        overrideModelId: requestModelId,
         attachments: attachments,
       );
       if (!mounted) return false;
@@ -486,6 +519,102 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  /// 编辑图片：打开编辑对话框 → 调 /v1/images/edits → 结果插入会话。
+  Future<bool> _handleEditImage(String imagePath) async {
+    final activeSessionId = ref.read(activeSessionIdProvider);
+    if (activeSessionId == null) {
+      _showSnackBar('请先创建一个会话');
+      return false;
+    }
+    if (_isSubmitting) return false;
+
+    setState(() => _isSubmitting = true);
+    try {
+      final submitted = await showImageEditDialog(
+        context,
+        imagePath: imagePath,
+        onEdit: (prompt) async {
+          return editImage(
+            ref: ref,
+            sessionId: activeSessionId,
+            imagePath: imagePath,
+            prompt: prompt,
+          );
+        },
+      );
+      if (submitted) _scheduleScrollToBottom();
+      return submitted;
+    } catch (_) {
+      _showSnackBar('图片编辑失败，请稍后重试');
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      } else {
+        _isSubmitting = false;
+      }
+    }
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// 在当前渠道中查找深度思考（reasoner）模型，返回其 channel_model_id。
+  Future<String?> _findReasonerModelInCurrentChannel(
+    String currentModelId,
+  ) async {
+    final channelDao = ref.read(channelDaoProvider);
+    final current = await channelDao.getModelWithChannel(currentModelId);
+    if (current == null) return null;
+    if (ModelCapability.supportsReasonerModel(
+      capability: current.channelModel.capability,
+      modelId: current.channelModel.modelName,
+    )) {
+      return current.channelModel.id;
+    }
+    final models = await channelDao.getModelsByChannel(current.channel.id);
+    for (final model in models) {
+      if (ModelCapability.supportsReasonerModel(
+        capability: model.capability,
+        modelId: model.modelName,
+      )) {
+        return model.id;
+      }
+    }
+    return null;
+  }
+
+  /// 图片消息只在当前渠道内选择 Vision 模型；当前模型本身支持识图时不切换。
+  Future<String?> _findVisionModelInCurrentChannel(
+    String currentModelId,
+  ) async {
+    final channelDao = ref.read(channelDaoProvider);
+    final current = await channelDao.getModelWithChannel(currentModelId);
+    if (current == null) return null;
+
+    if (ModelCapability.supportsVisionModel(
+      capability: current.channelModel.capability,
+      modelId: current.channelModel.modelName,
+    )) {
+      return current.channelModel.id;
+    }
+
+    final models = await channelDao.getModelsByChannel(current.channel.id);
+    for (final model in models) {
+      if (ModelCapability.supportsVisionModel(
+        capability: model.capability,
+        modelId: model.modelName,
+      )) {
+        return model.id;
+      }
+    }
+    return null;
+  }
+
   void _showNetworkRestoredRetryPromptIfCurrentSession() {
     final blockedSessionId = _blockedSendWhileOfflineSessionId;
     if (blockedSessionId == null ||
@@ -541,6 +670,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<void> _handleSpeak(String messageId, String content) async {
+    // 同一页面只允许一个 TTS 合成请求进行。原生 stop 只能停止已经开始的
+    // 播放，不能取消另一个尚在网络合成中的请求；若并发合成，较旧请求
+    // 晚返回时会反向打断用户刚选择的新播报。
+    if (_isPreparingSpeech) {
+      _showSnackBar('正在生成语音，请稍候');
+      return;
+    }
     final text = content.trim();
     if (text.isEmpty) {
       ScaffoldMessenger.of(
@@ -754,6 +890,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                             fileName: attachment.fileName,
                                           )
                                         : null,
+                                    onEditImage: attachment.fileType == 'image'
+                                        ? () => _handleEditImage(
+                                            attachment.localPath,
+                                          )
+                                        : null,
                                   );
                                 })
                                 .toList();
@@ -804,6 +945,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           final streamingModelName = modelsAsync.whenOrNull(
                             data: (models) {
                               final id =
+                                  streamState.modelId ??
                                   _pendingModelId ??
                                   ref.read(selectedModelIdProvider);
                               if (id != null) {
@@ -861,9 +1003,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               controller: _inputController,
               focusNode: _focusNode,
               isStreaming: streamState.isStreaming,
+              isSubmitting: _isSubmitting,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
               onGenerateImage: _handleGenerateImage,
+              onEditImage: _handleEditImage,
+              deepThinkNotifier: _deepThinkEnabled,
               onPersonaReply: _handlePersonaReply,
               modelSelector: null,
             ),
@@ -1022,9 +1167,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           controller: _inputController,
           focusNode: _focusNode,
           isStreaming: false,
+          isSubmitting: _isSubmitting,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
           onGenerateImage: _handleGenerateImage,
+          onEditImage: _handleEditImage,
+          deepThinkNotifier: _deepThinkEnabled,
           onPersonaReply: _handlePersonaReply,
           modelSelector: null,
         ),

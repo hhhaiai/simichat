@@ -325,6 +325,10 @@ url: http://127.0.0.1:37651/mcp/sse/simichat-node
 docs/runtime-manifest.example.json
 ```
 
+> 本节中关于 `stdio-compat-v1` / legacy npx in-process adapter 的描述是旧版兼容层
+> 验收记录。当前标准 `transport: "stdio"` 已由移动端 `stdio-v1` JSONL session
+> 承载，完整实现、设备 marker 和边界以 `docs/MOBILE_MCP_RUNTIME.md` 为准。
+
 三条路径的边界：
 
 | 路径 | Android | iOS | PC | 宿主机 Node | Docker / Podman |

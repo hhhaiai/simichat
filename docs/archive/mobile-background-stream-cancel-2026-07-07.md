@@ -120,4 +120,4 @@ git diff --check
 - 本轮是后台切出时的“停止悬挂请求”保护，并把持久化 marker 从单值推进到列表恢复；仍不等同于完整后台请求自动恢复队列。
 - 恢复前台 / 冷启动后只提示，不自动重试，避免后台 / 前台切换造成重复 API 调用或费用；当前依赖错误条或 SnackBar 里的“重试”入口。
 - 当前列表恢复只负责标记“可手动重试”：后台切出写入和冷启动读取都会清洗 marker；冷启动会恢复所有仍存在且去重后的 marker 会话错误条，并切到第一条有效会话提示用户手动重试。单条恢复时 `重试` 只作用于当前会话；多条恢复时 `重试全部` 是显式用户动作，会逐条触发已恢复会话的最后一条 user 消息重试，但仍不会在恢复前台 / 冷启动时自动调用模型接口。若未来允许多个会话并行生成，还需要扩展为遍历所有 active stream 和更完整的队列 UI / 进度反馈。
-- 设备侧真实慢流取消补证见 `docs/mobile-background-stream-cancel-smoke-2026-07-07.md`；该 smoke 使用 Android 真机内真实 HTTP 慢流请求 + integration lifecycle 注入，物理 Home 恢复仍由独立后台恢复 smoke 覆盖。
+- 设备侧真实慢流取消补证见 `docs/archive/mobile-background-stream-cancel-smoke-2026-07-07.md`；该 smoke 使用 Android 真机内真实 HTTP 慢流请求 + integration lifecycle 注入，物理 Home 恢复仍由独立后台恢复 smoke 覆盖。

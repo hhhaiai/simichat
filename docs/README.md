@@ -36,7 +36,7 @@
 | [移动端 MCP / Skills / 记忆质量门禁（2026-08-08）](mobile-mcp-skills-memory-quality-2026-08-08.md) | Pixel 8 / iPhone13 的 MCP、Skills、Key Point、FTS、semantic、Dreaming / Reflection 逻辑与 UI 证据 |
 | [MCP / Skills / 记忆纯本地真机验收（2026-08-09）](mobile-mcp-skills-memory-local-device-2026-08-09.md) | Pixel 8 / iPhone13 的 App Native MCP、内置 Node、Skill 本地安装、SQLite 重开、Key Point 重载和 UI marker |
 | [Android / PC 内置 Node Runtime](MCP_BUNDLED_NODE_RUNTIME.md) | APK 内 `libnode.so`、PC bundled Node、构建准备、SSE 链路、真实验证矩阵和未覆盖边界 |
-| [移动端纯 JS MCP 与 stdio / npx 兼容层](MOBILE_MCP_RUNTIME.md) | `mobile-mcp-v1`、`stdio-compat-v1`、已审核 npx in-process adapter、安装注册链路和真机 marker |
+| [移动端纯 JS MCP 与 stdio / npx 兼容层](MOBILE_MCP_RUNTIME.md) | `mobile-mcp-v1`、真实 JSONL `stdio-v1`、已审核 npx command/args、安装注册链路和真机 marker |
 | [Android / iOS 移动端 MCP、Skills、Agent 安装协议](MOBILE_EXTENSIONS.md) | 统一扩展 manifest、SHA-256、权限、原子安装、registry、quarantine、Skills / Agent / App Native MCP 接入和 iOS 边界 |
 | [Bundled Runtime CI](../.github/workflows/bundled-runtime.yml) | macOS / Linux / Windows 发布包构建、随包 binary 检查和 exact-package MCP smoke |
 | [功能实现差距分析（2026-08-07）](implementation-gap-analysis-2026-08-07.md) | 功能项逐项标注已实现、需真机补证或需外部资源 |
@@ -82,49 +82,49 @@
 - [当前项目状态](current-status.md)
 - [移动端 Node / stdio / npx 真机验证（2026-08-09）](mobile-node-mcp-runtime-2026-08-09.md)
 
-### 4.2 移动端主链路和设备验证
+### 4.2 移动端主链路和设备验证（已归档至 docs/archive/）
 
-以下文档全部是带日期的历史证据，必须结合文档中的设备、构建类型、包名、cleanup 结果和“待补证”说明阅读：
+以下文档全部是带日期的历史证据，已归档至 `docs/archive/`（2026-06-27 ~ 2026-07-14 的单次真机 / 协议 / 稳定性验证）。必须结合文档中的设备、构建类型、包名、cleanup 结果和“待补证”说明阅读；当前可复现结果以 4.1 为准：
 
-- [移动端主链路](mobile-main-flow-smoke-2026-06-27.md)
-- [移动端设备集成发送](mobile-device-integration-send-smoke-2026-07-06.md)
-- [移动端真机安装与启动](mobile-device-install-smoke-2026-07-06.md)
-- [移动端真实发送 / 重试 / 停止 / 历史搜索](mobile-real-send-smoke-2026-07-06.md)
-- [移动端模型切换](mobile-model-switch-smoke-2026-07-06.md)
-- [移动端设置页](mobile-settings-smoke-2026-07-06.md)
-- [复杂 Markdown 滚动](mobile-markdown-scroll-smoke-2026-07-06.md)
-- [Android 后台恢复](mobile-background-restore-smoke-2026-07-07.md)
-- [Android 后台流式取消](mobile-background-stream-cancel-smoke-2026-07-07.md)
-- [移动端后台流式取消代码边界](mobile-background-stream-cancel-2026-07-07.md)
-- [Android 物理断网流式取消](mobile-network-stream-cancel-smoke-2026-07-07.md)
-- [移动端网络稳定性](mobile-network-stability-2026-07-06.md)
-- [iOS 后台恢复](mobile-ios-background-restore-smoke-2026-07-07.md)
-- [iOS release 发送](mobile-ios-release-send-smoke-2026-07-06.md)
-- [base64 语音发送](mobile-base64-audio-smoke-2026-07-06.md)
-- [STT 网络链路](mobile-stt-network-smoke-2026-07-06.md)
-- [TTS 网络链路](mobile-tts-network-smoke-2026-07-06.md)
-- [真实录音按钮](mobile-voice-recording-smoke-2026-07-06.md)
-- [原生音频播放](mobile-native-audio-player-smoke-2026-07-06.md)
-- [长音频播放](mobile-long-audio-playback-smoke-2026-07-06.md)
-- [音频播放替换 / 中断](mobile-audio-playback-replace-smoke-2026-07-06.md)
-- [音频焦点加固](mobile-audio-focus-hardening-2026-07-06.md)
-- [后台脚本加固](mobile-smoke-script-hardening-2026-07-06.md)
-- [Pixel 8 长会话 Dreaming / Reflection](mobile-long-conversation-reflection-smoke-2026-07-06.md)
-- [Dreaming / Reflection 失败恢复](mobile-dreaming-reflection-recovery-smoke-2026-07-14.md)
-- [Android 后台 Dreaming / Reflection](mobile-android-background-dreaming-smoke-2026-07-14.md)
-- [iOS 后台 Dreaming / Reflection](mobile-ios-background-dreaming-smoke-2026-07-14.md)
-- [移动端远程模型 Reflection 质量](mobile-remote-model-reflection-quality-2026-07-14.md)
-- [移动端模型驱动画像质量](mobile-model-user-profile-quality-2026-07-14.md)
+- [移动端主链路](archive/mobile-main-flow-smoke-2026-06-27.md)
+- [移动端设备集成发送](archive/mobile-device-integration-send-smoke-2026-07-06.md)
+- [移动端真机安装与启动](archive/mobile-device-install-smoke-2026-07-06.md)
+- [移动端真实发送 / 重试 / 停止 / 历史搜索](archive/mobile-real-send-smoke-2026-07-06.md)
+- [移动端模型切换](archive/mobile-model-switch-smoke-2026-07-06.md)
+- [移动端设置页](archive/mobile-settings-smoke-2026-07-06.md)
+- [复杂 Markdown 滚动](archive/mobile-markdown-scroll-smoke-2026-07-06.md)
+- [Android 后台恢复](archive/mobile-background-restore-smoke-2026-07-07.md)
+- [Android 后台流式取消](archive/mobile-background-stream-cancel-smoke-2026-07-07.md)
+- [移动端后台流式取消代码边界](archive/mobile-background-stream-cancel-2026-07-07.md)
+- [Android 物理断网流式取消](archive/mobile-network-stream-cancel-smoke-2026-07-07.md)
+- [移动端网络稳定性](archive/mobile-network-stability-2026-07-06.md)
+- [iOS 后台恢复](archive/mobile-ios-background-restore-smoke-2026-07-07.md)
+- [iOS release 发送](archive/mobile-ios-release-send-smoke-2026-07-06.md)
+- [base64 语音发送](archive/mobile-base64-audio-smoke-2026-07-06.md)
+- [STT 网络链路](archive/mobile-stt-network-smoke-2026-07-06.md)
+- [TTS 网络链路](archive/mobile-tts-network-smoke-2026-07-06.md)
+- [真实录音按钮](archive/mobile-voice-recording-smoke-2026-07-06.md)
+- [原生音频播放](archive/mobile-native-audio-player-smoke-2026-07-06.md)
+- [长音频播放](archive/mobile-long-audio-playback-smoke-2026-07-06.md)
+- [音频播放替换 / 中断](archive/mobile-audio-playback-replace-smoke-2026-07-06.md)
+- [音频焦点加固](archive/mobile-audio-focus-hardening-2026-07-06.md)
+- [后台脚本加固](archive/mobile-smoke-script-hardening-2026-07-06.md)
+- [Pixel 8 长会话 Dreaming / Reflection](archive/mobile-long-conversation-reflection-smoke-2026-07-06.md)
+- [Dreaming / Reflection 失败恢复](archive/mobile-dreaming-reflection-recovery-smoke-2026-07-14.md)
+- [Android 后台 Dreaming / Reflection](archive/mobile-android-background-dreaming-smoke-2026-07-14.md)
+- [iOS 后台 Dreaming / Reflection](archive/mobile-ios-background-dreaming-smoke-2026-07-14.md)
+- [移动端远程模型 Reflection 质量](archive/mobile-remote-model-reflection-quality-2026-07-14.md)
+- [移动端模型驱动画像质量](archive/mobile-model-user-profile-quality-2026-07-14.md)
 
-### 4.3 Relay / 协议专项验证
+### 4.3 Relay / 协议专项验证（已归档至 docs/archive/）
 
-- [OpenAI Relay Responses 流式兼容](openai-relay-responses-stream-2026-07-07.md)
-- [OpenAI Relay 流式错误收口](openai-relay-stream-error-2026-07-07.md)
-- [测试稳定性收口](test-stability-2026-07-06.md)
+- [OpenAI Relay Responses 流式兼容](archive/openai-relay-responses-stream-2026-07-07.md)
+- [OpenAI Relay 流式错误收口](archive/openai-relay-stream-error-2026-07-07.md)
+- [测试稳定性收口](archive/test-stability-2026-07-06.md)
 
 ### 4.4 历史基线
 
-- [历史验证基线（2026-06-27）](verification-baseline-2026-06-27.md)：保留当时的需求、测试、构建和设备证据，不覆盖当前基线。
+- [历史验证基线（2026-06-27）](archive/verification-baseline-2026-06-27.md)：保留当时的需求、测试、构建和设备证据，不覆盖当前基线。
 
 ## 五、状态标签解释
 

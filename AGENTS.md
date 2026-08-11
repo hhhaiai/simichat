@@ -73,16 +73,24 @@
 
 ### 0.2.4 2026-08-07 DW Chainless 中转站集成与图片生成
 
-- **需求**：模型部分预置自有中转站 `https://api.dwchainless.com/`；用户填 Key 即用，无 Key 可跳转 `https://api.dwchainless.com/sign-up` 注册；在关于页鸣谢中转站（带图标）。
+- **需求**：模型部分预置自有中转站 `https://api.dwchainless.com/`；用户填 Key 即用，无 Key 通过应用内 H5 打开 `https://api.dwchainless.com/sign-up?aff=Bslh` 直接注册；在关于页鸣谢中转站（带图标）。
 - **已确认能力**：官网 200；`/v1` 301；`/v1/models` 401（Bearer 鉴权，确认 OpenAI 兼容）。Base URL 取 `https://api.dwchainless.com/v1`。
 - **厂商预设**：`ModelProviderPreset` 新增可选 `signUpUrl`；新增 `dwchainless` OpenAI 兼容预设（推荐模型 `gpt-4o-mini` / `deepseek-chat` / `qwen-plus`，docsUrl 官网，signUpUrl 注册页），支持按 id / 显示名 / 别名查找。
-- **设置页渠道区**：顶部 DW Chainless 推广卡片三态（未接入 →「去注册获取 Key」跳转注册页 +「一键接入」预填预设 +「访问官网」；已接入未填 Key → 提示补充；已接入有 Key → 已接入）；预设提示卡对带 signUpUrl 的预设提供「去注册」按钮。
-- **外部链接**：新增 `ExternalUrlOpener` 抽象 + `SystemBrowserUrlOpener`（`url_launcher`，仅 HTTP(S)），通过 `externalUrlOpenerProvider` 注入可测；`pubspec.yaml` 新增 `url_launcher ^6.3.2`。
-- **关于页鸣谢**：新增「鸣谢 · DW Chainless 中转站」ListTile（图标 + 官网地址），点击系统浏览器打开。
+- **设置页渠道区**：顶部 SimiRouter 推广卡片保留未接入 / 缺 Key / 已接入三态；添加渠道预设提示改为紧凑品牌卡，只展示接入说明、推荐模型和「获取 Key / 访问官网」两个明确动作。
+- **应用内 H5**：新增 `InAppH5Page`，注册页与官网均通过 `webview_flutter` 在应用内打开，隐藏地址栏；当前策略已由 0.2.20 收紧为仅允许初始 host 的 HTTPS，阻止跨域、HTTP 降级以及 `intent:` / `mailto:` / `tel:` 等自定义 scheme；不再依赖 `url_launcher` 或系统浏览器。
+- **关于页鸣谢**：新增「鸣谢 · SimiRouter AI 中转站」ListTile，点击进入无地址栏的内置官网 H5 页面。
 - **图片生成 v1**：新增 `ImageGenerationService`（OpenAI 兼容 `/v1/images/generations`，优先 `b64_json` 本地保存、失败安全下载远端 URL、单图 10MB 上限）；`chat_provider.generateImage()` 编排（插入用户提示词消息 → 调用当前渠道 + 可配置图片模型 → 保存 `generated_images/` → 插入 assistant 消息 + 图片附件）；聊天输入框「✨」生成按钮（有文本且非流式时可用）；设置页新增「图片生成」区块 +「图片生成配置」弹窗（模型默认 `dall-e-3`，复用当前渠道 Base URL / Key）。生成图片本地保存不进入云端。
 - **测试**：新增 `settings_page_dwchainless_test`（5）、`model_provider_preset_test` dwchainless 断言（2）、`image_generation_service_test`（7）、`chat_input_bar_image_generation_test`（2）、`settings_page_image_generation_test`（1）；因推广卡片增加页首高度，`settings_page_font_scale_test` 3 项与 `mobile_main_flow_smoke_test` 1 项改为先滚动到目标 tile。
 - **验证**：`flutter --no-version-check analyze --no-pub` 无问题；全量 `flutter --no-version-check test --no-pub -r expanded` 586 项全部通过。
 - **差距分析**：所有未完成项已映射到 `docs/implementation-gap-analysis-2026-08-07.md`（标注已实现 / 需真机补证 / 需外部资源及方案依赖）。
+
+### 0.2.4.1 2026-08-09 SimiRouter 注册 / 官网内置 H5 体验
+
+- 注册入口固定为 `https://api.dwchainless.com/sign-up?aff=Bslh`，点击「获取 Key」或预设提示卡中的同名按钮后，使用 `InAppH5Page` 原生页面打开，不跳转系统浏览器、不展示地址栏。
+- 「访问官网」和关于页鸣谢使用同一套内置 H5 页面；页面顶部只保留返回、刷新和页面标题，WebView 历史优先于退出页面。
+- WebView 当前只允许初始 host 的 HTTPS 主导航，跨域、HTTP 降级、`intent:` / `mailto:` / `tel:` 等自定义 scheme 直接阻止；Android / iPhone / Mac 使用系统 WebView，其他平台显示原生不支持提示，不回退外部浏览器。
+- 添加渠道中的 SimiRouter 预设提示从完整 URL + 三个复制按钮收敛为品牌、接入说明、推荐模型和「获取 Key / 访问官网」两个主动作；官网地址不再作为可见文本出现在设置页。
+- 验证覆盖 `test/in_app_h5_page_test.dart`、`test/settings_page_dwchainless_test.dart`、`test/model_provider_preset_test.dart` 及设置页预设 / 导入回归；全量 Flutter 测试 696 项通过，Pixel 8 真机 H5 路由 smoke 通过；真实网页内容的网络加载仍需单独联网观察。
 
 ### 0.2.5 2026-08-07 社交 / 搜索 / 云备份 / 笔记同步 / 多源技能市场 v1
 
@@ -159,10 +167,68 @@
 - **验证**：`test/mobile_extension_installer_test.dart` 纳入全量测试；Android Pixel 8 与 iPhone13 真机运行 `scripts/smoke_device_mobile_extensions.sh` 均输出 `SIMICHAT_MOBILE_EXTENSIONS_APP_NATIVE_READY`，覆盖 Skill SHA-256、Agent `gemma4`、App Native MCP `initialize` / `tools/list` / `tools/call` 和 Agent 卸载；全量 Flutter 测试 **686 项通过**，`flutter analyze` 和 `git diff --check` 通过。
 - **未完成边界**：iOS `runtime=node-mobile` 的 `NodeMobile.framework` / native bridge 尚未纳入当前发布构建；纯 JS MCP 包可以校验和落盘，但 iOS 纯 JS MCP 真机运行仍需 framework、health、SSE 和工具调用证据。完整矩阵见 `docs/MOBILE_EXTENSIONS.md`。
 
+### 0.2.13 2026-08-09 内置 Node Runtime、纯 JS MCP 移动端运行与跨平台构建门禁
+
+- **内置 Node Runtime**：Android 用 `nodejs-mobile v18.20.4` 的 `arm64-v8a/libnode.so` + JNI bridge 在 App 进程内启动 Node，iOS 用 `NodeMobile.xcframework` + Objective-C++ / Swift bridge，PC 用随 App 分发的 Node binary（App 管理的本地子进程，`externalProcess=true` 只表示非宿主机 PATH）；Docker / Podman 仅保留为可选隔离侧车，不再被内置 Node 路径隐式调用。Android 16k page 支持与 runtime 矩阵可移植性已加固，桌面与 Android 包构建可复现。详见 `docs/MCP_BUNDLED_NODE_RUNTIME.md`。
+- **纯 JS MCP 移动端运行**：移动端运行时不调用 `node / npm / npx / shell / Docker / Podman / child_process / Process.start`；纯 JS 扩展通过 App 自有 Node runtime 或 App Native in-process adapter 运行，`runtime-server.mjs` 提供 health、扩展注册与 MCP SSE / message endpoint，注册时校验 manifest、entry SHA-256、路径边界、文件数量 / 大小、禁止能力和 `nativeAddon=false`；`stdio-compat-v1` 与 legacy npx adapter 走同一内置 runtime，MCP 配置可保留 `transport: stdio` 由管理器转接，未知第三方包、native addon、依赖 shell 的 CLI 和未审核 npx 包继续拒绝。iPhone13 真机 marker 已出现并验收通过。详见 `docs/mobile-node-mcp-runtime-2026-08-09.md` 与 `docs/MOBILE_MCP_RUNTIME.md`。
+- **CI 跨平台构建门禁**：Flutter 源码在包构建前生成、bundled runtime 矩阵可移植、桌面与 Android 包构建可复现，跨平台 package build 门禁全部收口。
+- **纯本地真机验收**：新增 `integration_test/mobile_mcp_skills_memory_local_real_smoke_test.dart` 与统一入口 `scripts/smoke_device_mobile_mcp_skills_memory_local.sh`，在 Pixel 8 与 iPhone13 上验证 App Native MCP `initialize` / `tools/list` / `tools/call`、Skill 本地安装 / SHA-256 / registry 恢复、真实 SQLite 重开后 FTS / semantic / 本地搜索、Key Point 用隔离 key 写入 / 重建 notifier 后召回、移动端页面与全局搜索 UI 可见，以及内置 NodeMobile / 纯 JS MCP / stdio-compat-v1 / legacy npx adapter 继续通过。`KeyPointMemoryNotifier` 新增可选 `storageKey`，生产默认 `key_point_memory_v1` 不变，真机测试用隔离 key 不覆盖用户记忆。详见 `docs/mobile-mcp-skills-memory-local-device-2026-08-09.md`。
+
+### 0.2.14 2026-08-09 SimiRouter AI 中转站品牌升级（dwchainless rebrand）
+
+- **品牌接入**：`dwchainless` 预置渠道显示名改为「SimiRouter AI 中转站」，Base URL / 官网 / 注册地址保持 `api.dwchainless.com` 不变，`id` 保持 `dwchainless` 兼容旧配置与批量导入；新增品牌 logo 资源 `assets/branding/simirouter.png`（预设 `logoAsset` 字段），渠道列表、模型选择器、预设提示卡和关于页鸣谢均显示真实 logo。
+- **卡片历史设计**：本轮曾使用品牌头像 + 6 项能力标签 + 三按钮；该长卡方案已由 0.2.20 的紧凑三态卡替代，不再作为当前 UI。
+- **验证**：全量 Flutter 测试 694 项通过，`flutter analyze` 与 `git diff --check` 通过；预设锁定一键接入（仅填 Key）与品牌图标回归覆盖在 `settings_page_dwchainless_test.dart`、`model_provider_preset_test.dart`。
+
+### 0.2.15 2026-08-09 移动端 stdio 兼容接入
+
+- **配置语义**：移动端设置页重新提供 `Stdio（移动兼容 / 内置 Runtime）`；已审核的 legacy `npx` 配置继续映射到 App Native adapter，已安装的 `node-mobile` / `stdio-compat-v1` 扩展保留 `transport: stdio`，由 App-owned Node Runtime 私下走 loopback bridge。
+- **边界**：移动端不启动宿主机 `node`、`npx`、shell 或任意外部子进程；未知命令不再显示笼统的“移动端不支持 stdio”，而是提示安装移动兼容包或改用 SSE。
+- **市场与 UI**：已审核 stdio 条目可在移动端自动启用并连接；未知 stdio 条目保持待启用，设置页按“App 内建适配器 / 内置 Node Runtime / 需要移动兼容 Runtime”显示具体状态。
+- **验证**：`flutter --no-version-check analyze --no-pub` 无问题；聚焦 MCP / Runtime / extension 测试 26 项通过；全量 Flutter 测试 698 项通过；Pixel 8 `37101FDJH0077P` 和 iPhone13 `00008110-0016349A3A20A01E` 均通过 `SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY`、`SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY`、`SIMICHAT_STDIO_CONFIG_MCP_DEVICE_READY` 和 `SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY`；Pixel 8 MCP / Skills / memory UI smoke 输出 `SIMICHAT_MCP_SKILLS_MEMORY_UI_READY`；两台设备均已恢复普通 release，Android release pid `19229`、iOS release pid `16318` 可见；`git diff --check` 通过。
+
+### 0.2.16 2026-08-09 移动端标准 stdio JSONL session 修正
+
+- **问题修正**：上一版把移动 `stdio` 配置映射到 `AppNativeMcpTransport` 或 loopback `SseTransport`，只保留了配置语义，没有真实 stdin / stdout 行协议；本轮明确废止这条作为新实现的路径。
+- **真实链路**：新增 `MobileStdioTransport`；移动 `McpManager` 将 `command` 与 `args` 送入 `BundledNodeRuntime.startStdioSession()`，Dart 逐行写入 `/runtime/stdio/<session-id>/stdin`，逐行读取 `/runtime/stdio/<session-id>/stdout`，支持 `initialize`、`tools/list`、`tools/call`、通知和 `close`。已审核 `npx` 只作为随包 profile 的命令选择器，未知命令在 start 阶段拒绝，不调用宿主机 `npx` / shell / `Process.start()`。
+- **扩展协议**：新增 `stdio-v1` manifest 协议名；`stdio-compat-v1` 仅保留旧安装包兼容，不再作为新 stdio 语义的证明。
+- **代码级验证**：`test/mobile_stdio_transport_test.dart` 启动真实 `runtime-server.mjs`，完成 `health -> stdio/start(command,args) -> stdin JSON line -> stdout JSON line -> initialize -> tools/list -> tools/call -> close`；未知 command 也覆盖 start 阶段拒绝。`node --check`、聚焦测试和 `flutter analyze` 通过。
+- **真机验证**：Android Pixel 8（`37101FDJH0077P`）与 iPhone13（`00008110-0016349A3A20A01E`）均已通过真实设备 marker `SIMICHAT_MOBILE_STDIO_PROTOCOL_DEVICE_READY`；`stdio-v1 / JSONL mobile stdio` 现标记为 `runtime_verified`。旧 `stdio-compat-v1` marker 仍保留为历史兼容证据，不把旧对象 adapter 误写成新 stdio 实现。
+
+### 0.2.17 2026-08-09 内置 H5 登录态 Cookie 持久化与关闭入口
+
+- **历史方案**：本轮曾新增 `InAppH5CookieStore` 手工读取 / 重建 WebView Cookie；复审确认 Dart `WebViewCookie` 无法保留 Secure / HttpOnly / SameSite / expires 等完整属性，该方案已由 0.2.20 删除，不能作为当前登录态实现。
+- **关闭入口**：H5 顶栏新增「关闭」按钮直接退出页面，登录 / 注册完成后无需一步步返回。
+- **历史验证**：曾完成“清空引擎后从 App store 恢复”的测试，但该测试会鼓励丢失安全属性的重建路径，不再作为现行门禁；当前门禁见 0.2.20。
+
+### 0.2.18 2026-08-09 SimiRouter mimo TTS 三模式与 ASR 接入
+
+- **TTS 三种模式**（`/v1/audio/speech`）：`mimo-v2.5-tts` 语音合成（8 种预设音色：冰糖-alloy / 茉莉-echo / mia-nova / Chioe-shimmer / 苏打-onyx / 白桦-fable / milo-milo / Dean-dean）、`mimo-v2.5-tts-voicedesign` 声音设计（style 文字描述）、`mimo-v2.5-tts-voiceclone` 声音克隆（参考音频 base64 data URI）；统一支持语速 0.25-4 与输出格式 mp3 / wav / opus / aac / flac。引擎按模型名自动切换请求体，非 SimiRouter 模型保持原 4 字段行为。
+- **ASR**：`mimo-v2.5-asr` multipart 支持 `language`（auto / zh / en）；`auto` 表示服务端自动检测，因此请求中省略 `language`，只在 zh / en 时发送明确语言代码，避免 OpenAI 兼容服务把字面值 `auto` 当作无效 ISO-639-1 代码；通道 fallback 引擎在模型名含 asr / whisper / transcribe 时透传模型名，避免聊天模型名误传转录接口。
+- **配置与 UI**：`TextToSpeechConfig` 新增 speed / responseFormat / style / referenceAudioPath（加密外字段均为普通 SharedPreferences 键），`SpeechToTextConfig` 新增 language；TTS 配置对话框在 SimiRouter 模型下显示三模式模型下拉、8 音色下拉、声音风格输入、参考音频选择（file_picker）、语速滑条与输出格式下拉；STT 对话框在 mimo-v2.5-asr 下显示识别语言下拉。语音预设新增 `dwchainless`（mimo TTS + ASR 一键填充）。
+- **2026-08-10 稳定性复核**：声音克隆 wav 选择改用 `FileType.custom`，避免 `allowedExtensions` 与 `FileType.audio` 的真机参数冲突；保存时校验存在、WAV、非空和 10 MB 上限，再以唯一临时目录中的 `.part -> rename` 复制到 `Application Support/tts/reference_audio/`，不再长期依赖文件选择器缓存路径；替换 / 清空配置只删除 App 自己管理的旧副本，不删除用户外部原文件。声音设计在启用配置保存时即校验 style；mimo 响应的 Accept MIME、本地临时文件扩展名与 mp3 / wav / opus / aac / flac 选择保持一致，非 mimo 模型继续固定 mp3；配置摘要按模式显示音色 / 声音设计 / 声音克隆，不再展示不适用字段。
+- **验证**：全量 Flutter 测试 **724 项通过**（新增引擎三模式请求体断言、语音设计缺 style / 克隆缺参考音频拒绝、provider 扩展字段持久化与校验、预设 / 音色 / 模式判断、TTS / STT 对话框 UI），`flutter analyze` 无问题，Pixel 8 真机设置页 smoke 通过。真实合成 / 识别需 dwchainless API Key，人工验证。
+
+### 0.2.19 2026-08-09 图片编辑 / 深度思考 / 输入栏整理 / Markdown 样式
+
+- **图片生成 / 编辑事务**：`ImageGenerationService` 新增 `edit()`（`POST /v1/images/edits` multipart：image 文件 + prompt + model + n + size）；生成 / 编辑先做渠道能力预检并调用上游，成功后才以 `.part -> rename` 保存图片，再在单个 SQLite 事务内写入 user、assistant、attachment 和 token。上游失败不写幽灵消息或 token；数据库失败删除未引用图片；事务提交后页面销毁或 Markdown 派生档案失败不会误删已引用图片。编辑弹窗在 320×568、120% 字号下使用有限宽度预览；业务错误只在弹窗内显示一次，保留提示词可重试，回调意外抛错也会恢复按钮，不再永久卡在“编辑中”。入口两处：输入栏加号菜单「编辑图片」和消息图片长按「编辑此图」。
+- **识图 / 深度思考能力门禁**：`ModelCapability` 新增 `reasoner` 位、显式元数据和模型名推断；Vision 与 Reasoner 支持使用可重叠判定，不让带 reasoning 后缀的视觉模型因单标签推断而失去识图能力。`o1 / o3 / o4 / r1` 等短代号按分隔符精确匹配，不再把 `foo1 / mirror1 / audio4` 一类普通名称误判为 Reasoner；上下文预算的 o 系列判断同步使用 token 边界，避免普通模型被错误提升到 128K 窗口。显式 `embedding` 能力会否决宽泛名称提示，避免 `gemini-embedding-*` 被误选为 Vision。聊天模型查询已纳入 `reasoner` 并继续排除 `embedding`，只有推理模型的渠道也可直接选择。输入栏新增「深度思考」toggle（`deepThinkNotifier`）。纯文本开启后发送自动查找当前渠道 reasoner 模型；当前渠道无 reasoner 时明确阻止并保留输入。图片附件发送前自动选择当前渠道 Vision 模型；无 Vision 时明确阻止并保留图片 / 输入。Vision / Reasoner 仅通过 `overrideModelId` 路由本次请求，基础模型、会话默认模型和顶部选择器保持用户原选择；流式气泡及最终 assistant 消息记录本次实际模型。图片与深度思考同时启用时 Vision 优先并明确提示本次不切换 reasoner。
+- **输入栏整理**：加号菜单重排（拍照 / 相册 / 文件 / 编辑图片 / 替身），常规宽度 Row 按钮顺序为加号、文本框、麦克风、生成图片、深度思考、发送；小于 380px 时把生成图片 / 深度思考收进可滚动的加号菜单，320×568、120% 字号下文本框宽度保持至少 120 logical pixels，避免功能图标把输入区挤成单字竖排。
+- **Markdown 样式**：标题 h1-h3 配色映射 primary 系；引用块左侧竖条加粗（primary 6px）；新增自定义表格 builder（表头背景 + 斑马纹 + 圆角边框，替换默认表格样式）。代码块语言标签 / 行号 / 复制 / 折叠为既有能力。
+- **验证**：全量 Flutter 基线 **757 项通过**；最后边界修正后的渠道 / H5 / Vision / Reasoner / TTS / STT / 图片聚焦回归 **123 项通过**，上下文预算边界 **5 项通过**，日志扫描无 RenderFlex overflow、Flutter exception、未处理异步异常或点击命中警告。覆盖图片无 Vision / 自动切 Vision、深度无 reasoner / 自动切 reasoner、短模型代号与 embedding 误判保护、reasoner-only 渠道可选择、短 o 系列上下文预算边界、单次模型覆盖不改会话默认值、显式 Reasoner 元数据、Vision + Reasoner 重叠能力、OpenAI Chat `image_url` / Responses `input_image` 的 MIME + 完整 base64、图片上游 / 数据库失败不污染会话、编辑异常可重试、TTS 合成请求串行门禁 / 非 mp3 扩展名 / 声音设计必填 / 声音克隆私有归档、mimo TTS / ASR 精确模型识别与大写历史配置回显、STT auto 省略语言字段，以及 320px / 120% 字号输入区与编辑弹窗。`flutter analyze` 与 `git diff --check HEAD` 无问题；Android Release APK 与 iOS unsigned Release `Runner.app` 已在上述收口后重新构建通过。本轮按要求未做真机和真实云端质量复验。
+
+### 0.2.20 2026-08-09 SimiRouter 紧凑渠道卡、H5 预热与登录态加固
+
+- **紧凑渠道卡**：移除六项常驻营销标签；未接入只显示一句定位和「获取 Key / 一键接入 / 官网」，缺 Key 显示「获取 Key / 补充 Key / 官网」，已接入只显示状态与「管理 / 官网」。已有渠道直接编辑，不重复创建；Base URL 仅在 HTTPS、精确 host `api.dwchainless.com`、443 端口且无 userInfo 时识别。三个动作改为单排等宽布局，320×568、120% 字号下整卡小于 170 logical pixels且每个按钮保持至少 44 logical pixels 点击高度。
+- **网页加载体验**：设置页以最多 12 秒的隐藏 WebView 预热官网，同一 App 进程同 origin 成功后只执行一次，完成 / 失败 / 超时后立即释放；官网与注册页复用系统 WebView 磁盘缓存。第三方主 JS / CSS 不复制进 App assets，避免 3MB 级 bundle、部署 hash、CSP / CORS 与登录 origin 漂移；本地只保留品牌 logo 和原生加载壳。
+- **账号登录态**：官网、获取 Key、关于页共用系统 WebView 默认持久 profile（Cookie、localStorage、IndexedDB、磁盘缓存）；线上 bundle 会把账号资料写入同 origin `localStorage['user']`。App 不读取、复制或重建认证 Cookie；Android 通过 `CookieManager.flush()`，iOS 使用 `WKWebsiteDataStore.default()` 完成屏障。页面完成、SPA 路由和生命周期触发的 flush 会合并；补齐 drain 循环退出到完成回调之间的尾随请求竞态，确保最后一次 flush 不会悬空。关闭交互最多等待 2 秒，平台通道异常不会卡住退出。
+- **安全修正**：删除 0.2.17 的 `InAppH5CookieStore` 手工 fallback，因为 `WebViewCookie` 只能重建 name / value / domain / path，会丢失 Secure / HttpOnly / SameSite / expires 并可能覆盖原始 Cookie。H5 主帧当前只允许初始 host / port 的 HTTPS 且拒绝 userInfo，阻止跨域、相似域名、非 443 端口和 HTTP 降级；非主帧仍允许验证码 / iframe 正常加载，被阻止的主帧跳转提供明确 SnackBar 反馈。
+- **验证边界**：H5 / 渠道定向测试覆盖紧凑高度、120% 字号、44px 点击目标、三态动作、编辑原渠道、相似域名 / 自定义端口 / userInfo 拒绝、预热入口、HTTPS / 同 host / 同 port 导航、关闭 / 返回和原生 profile flush 超时；全量 Flutter 基线 **757 项通过**，最后能力聚焦回归 **123 项通过**，上下文预算边界 **5 项通过**，`flutter analyze`、`git diff --check HEAD` 无问题；Android Release APK 与 iOS unsigned Release `Runner.app` 均基于最终代码重新构建并确认包含品牌资源。真机集成门禁仍需验证带期限 Cookie + localStorage 在关闭 / 重开后复用，不主动 `clearCookies()`；按用户当前要求未执行安装或真机验证。真实账号首次登录 → 关闭 → 重开 → App 进程重启仍需使用用户账号做最终 UI 验收。
+
 ### 0.3 2026-07-14 模型增强 Reflection 验证补充
 
 - 2026-07-14 22:57 将非流式远程 Reflection 修复推进到 Pixel 8 正式后台真机闭环。首次 wrapper 预检收到临时 `401`，在构建前安全退出、设备未变化；为预检新增最多 3 次有界重试，只重试 `401 / 408 / 429 / 5xx / curl 失败 / 200 空内容`，manifest 红灯后转绿。复跑时 attempt 1 为 401、attempt 2 成功，独立 `backgroundmodelsmoke` build / install 后 READY pid `8925` 被回收，JobScheduler 未使用 shell force，在 elapsed `324` 秒时由 `SystemJobService` 冷启动 pid `10117`，完成 `status=completed digest=2026-07-14 reflection=2026-07-14`。prefs 同时含 Dreaming / Reflection 当前与历史，`generationMode=model`，无 pending / `model_fallback`，日志与 prefs 无配置地址 / key。cleanup 后隔离包和 sqlite hook 无残留，正式包 pid `10528`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 不变，跨日 job id `0` 仍 waiting；最终全量稳定门禁 557 项通过。取证：`/tmp/simichat-android-background-dreaming-20260714224926.log`、`/tmp/simichat-android-background-dreaming-prefs-20260714224926.xml`。
-- 2026-07-14 22:40 补远程模型三日长会话 Reflection 质量门禁。审计发现旧 live quality 工具仍默认 loopback 本地模型，已改为只读取仓库外 `MODEL_CONFIG_FILE`，要求 600 / 400、只允许远程 `openai_chat` 并拒绝 loopback；代码 / 脚本 / 测试 / 文档不包含真实地址、key 或模型默认值。真实流式采样两组三轮分别出现 1 次和 2 次 HTTP 200 空 content/thinking，因后台结构化 Reflection 不需要逐字展示，正式 `openai_chat` Reflection 改走非流式单次响应，普通聊天 SSE 和其他协议不变。真实非流式响应暴露 `<think>` + 首个 JSON + 重复 fenced JSON，解析器新增字符串 / 转义感知的平衡对象提取，保留全部既有安全过滤。远程 72 条长会话按 2026-07-14 / 15 / 16 三个 dayKey 严格门禁 3 / 3 通过，分别耗时 27.744 / 29.701 / 14.554 秒，attempts `[2,1,1]`，本地 5 / 4 均保留并合并为最终 8 / 8，合成密钥 / URL / 路径和虚假完成描述均未进入结果；第一轮一次临时 401 后重试成功，接口可用性波动如实保留。聚焦 38 项、全量稳定门禁 557 项、analyze、diff、hook / 泄漏扫描通过；跨日 job id `0` 仍 waiting，正式包 pid `5438`，隔离包无残留。详见 `docs/mobile-remote-model-reflection-quality-2026-07-14.md`。
+- 2026-07-14 22:40 补远程模型三日长会话 Reflection 质量门禁。审计发现旧 live quality 工具仍默认 loopback 本地模型，已改为只读取仓库外 `MODEL_CONFIG_FILE`，要求 600 / 400、只允许远程 `openai_chat` 并拒绝 loopback；代码 / 脚本 / 测试 / 文档不包含真实地址、key 或模型默认值。真实流式采样两组三轮分别出现 1 次和 2 次 HTTP 200 空 content/thinking，因后台结构化 Reflection 不需要逐字展示，正式 `openai_chat` Reflection 改走非流式单次响应，普通聊天 SSE 和其他协议不变。真实非流式响应暴露 `<think>` + 首个 JSON + 重复 fenced JSON，解析器新增字符串 / 转义感知的平衡对象提取，保留全部既有安全过滤。远程 72 条长会话按 2026-07-14 / 15 / 16 三个 dayKey 严格门禁 3 / 3 通过，分别耗时 27.744 / 29.701 / 14.554 秒，attempts `[2,1,1]`，本地 5 / 4 均保留并合并为最终 8 / 8，合成密钥 / URL / 路径和虚假完成描述均未进入结果；第一轮一次临时 401 后重试成功，接口可用性波动如实保留。聚焦 38 项、全量稳定门禁 557 项、analyze、diff、hook / 泄漏扫描通过；跨日 job id `0` 仍 waiting，正式包 pid `5438`，隔离包无残留。详见 `docs/archive/mobile-remote-model-reflection-quality-2026-07-14.md`。
 - 2026-07-14 22:06 对 21:56 SQLite-only 新进程恢复补丁完成最终复核：`bash -n` 覆盖恢复与跨日脚本，Dreaming / Reflection manifest、provider、background runner 聚焦 32 项通过；`scripts/smoke_full_stability_gate.sh -r expanded` 全量 550 项通过；`flutter --no-version-check analyze --no-pub` 无问题，`git diff --check`、sqlite hook 残留和外部模型真实地址 / key 仓库扫描均通过。Pixel 8 正式包仍为 pid `5438`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat`，SQLite-only / 远程模型隔离包均不存在，Android 跨日 job id `0` 继续 `waiting`。本轮没有启动、调用或探测 Ollama / 本地模型；现行模型验证只允许读取仓库外 600 / 400 配置文件调用远程接口。
 - 2026-07-14 21:56 Pixel 8 补 SQLite-only Dreaming / Reflection 新进程真机恢复：独立 `top.simitalk.aichat.dreamingsqlitesmoke` 第一次 pid `5157` 只落 completed SQLite report + Reflection pending，不写 Dreaming 当前 / history；`am force-stop` 后第二次新 pid `5263` 经正式 `ResponsiveShell` 启动任务回灌 Dreaming 当前 / history，生成 Reflection 当前 / history 并清 pending，输出 `dreamingHistory=1 reflectionHistory=1`。设备 prefs 确认 `dreaming_digest_v1`、Dreaming history、Reflection 当前 / history 均存在且 pending 不存在；cleanup 后隔离包和 sqlite hook 无残留，正式包 pid `5438`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 未变化，Android 跨日 job id `0` 仍 waiting。取证：`/tmp/simichat-dreaming-reflection-device-20260714215600.log`、`/tmp/simichat-dreaming-reflection-prefs-20260714215600.xml`。
 - 2026-07-14 21:38 补 Reflection pending 的 SQLite digest 回灌：旧 `_retryPendingAssistantReflection()` 从 `dreaming_reports` 解码目标 digest 后只用于局部 Reflection 生成，不同步当前 Dreaming / history，后台 runner 可能找不到来源 digest、漏掉完成通知，UI 也可能只见 Reflection 不见来源。既有按 dayKey 恢复测试新增 history 断言先红灯为 `Actual: []`；修复后 SQLite 恢复项总是记录 history，仅当当前 digest 为空或更旧时更新当前值。新增“当前缺失时发布 digest”和“新后台 ProviderContainer 从 SQLite 回灌后完成 Reflection / 通知”两条回归；Reflection provider + runner 18 项、移动端聚焦 20 项和全量稳定门禁 550 项通过，analyze 无问题。Android 跨日 job 仍为 `waiting`，未被扰动。
@@ -185,7 +251,7 @@
 - 模型候选仍只写入 `user_profile_change_proposals_v1`，提案持久化 `local / model / model_fallback` 来源；正式 `user_profile_v1` 只有用户整条或逐项采纳后才会更新。后台 runner 回归确认系统后台模型增强后正式画像仍为空，Reflection 能读取待确认数量；设置页明确展示隐私和授权边界，结构化备份 / 恢复已加入独立开关。
 - 仓库外配置驱动的真实远程质量门禁按 3 个 dayKey 连续 3 / 3 通过，attempts `[3,1,1]`，分别新增安全候选 `[2,3,4]`；本地候选全部保留，基础事实、密钥、URL、本机路径、诊断和“已修改正式画像”均未进入结果。接口首次曾超时，恢复后有界重试通过，如实保留远程可用性波动。
 - Pixel 8 独立 `top.simitalk.aichat.backgroundmodelsmoke` 真机复跑：仓库外配置预检前两次 401、第三次成功；READY pid `12526` 被回收后，JobScheduler 未使用 shell force，在 elapsed `127` 秒时由 `SystemJobService` 冷启动 pid `12911`，完成 Dreaming、模型画像候选和模型 Reflection。prefs 中画像提议为 `generationMode=model`，无 `model_fallback`，正式画像不存在，日志 / prefs 无地址或 key。cleanup 后隔离包 / sqlite hook 无残留，正式包 pid `13315`、firstInstallTime `2026-07-14 00:29:02`、dataDir `/data/user/0/top.simitalk.aichat` 不变，跨日 job id `0` 仍 waiting。取证：`/tmp/simichat-android-background-dreaming-20260714233159.log`、`/tmp/simichat-android-background-dreaming-prefs-20260714233159.xml`。
-- 模型画像 / provider / 后台 runner / 设置页 / 备份 / 真机 manifest 聚焦 41 项通过；最终全量稳定门禁 566 项通过，`flutter --no-version-check analyze --no-pub` 无问题，`git diff --check`、脚本语法、hook / 隔离包 / 真实远程值泄漏扫描通过。详见 `docs/mobile-model-user-profile-quality-2026-07-14.md`。
+- 模型画像 / provider / 后台 runner / 设置页 / 备份 / 真机 manifest 聚焦 41 项通过；最终全量稳定门禁 566 项通过，`flutter --no-version-check analyze --no-pub` 无问题，`git diff --check`、脚本语法、hook / 隔离包 / 真实远程值泄漏扫描通过。详见 `docs/archive/mobile-model-user-profile-quality-2026-07-14.md`。
 
 ---
 
@@ -441,7 +507,7 @@
 
 - [x] 生成 Drift 与本地化代码后，`flutter analyze` 通过。
 - [x] `flutter test` 全量通过（2026-07-02 复验：289 个测试通过；2026-06-27 旧基线为 286 个）。
-- [x] 建立移动端主链路冒烟脚本 / 记录：`scripts/smoke_mobile_main_flow.sh` + `docs/mobile-main-flow-smoke-2026-06-27.md`；2026-07-02 复验 4 个 smoke 测试通过。
+- [x] 建立移动端主链路冒烟脚本 / 记录：`scripts/smoke_mobile_main_flow.sh` + `docs/archive/mobile-main-flow-smoke-2026-06-27.md`；2026-07-02 复验 4 个 smoke 测试通过。
 - [x] 建立轻量性能基线：分析、测试、代码生成、搜索索引、Dreaming、Dreaming 通知调度、用户画像、本地数据导出、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出、Obsidian 增量同步、Obsidian 附件同步 / 链接重写、冲突详情界面、可选覆盖冲突策略、原始音频附件可选同步、同名附件链接精确去重、stale 文件安全清理、stale 冲突详情解释、语音转写状态 / 失败脱敏导出、聊天音频卡片转写状态读取、STT 配置加载 / 引擎创建、音频转写详情读取、TTS 配置加载 / 引擎 / 服务创建、TTS 播放停止控制、TTS 原生播放事件解析、STT/TTS 厂商预设推断、OpenAI Relay 健康检查端点、CORS 预检和 Responses API 非流式端点耗时已记录，Responses API 流式 SSE 已补局部兼容测试；真机和长会话基线仍待补。
 - [x] 建立轻量安全基线：密钥字面量、日志输出、对话档案提交风险已扫描；本地数据导出压缩包、移动端系统分享、安全导入、结构化备份 / 恢复、电脑端本地传输、Obsidian Vault 导出 / 增量同步 / 附件链接重写 / 冲突详情界面 / 可选覆盖冲突策略 / 原始音频附件可选同步 / 同名附件链接精确去重 / stale 文件安全清理 / stale 冲突详情解释 / 语音转写失败脱敏 / 聊天音频卡片转写状态展示 / OpenAI 兼容 STT 配置密钥 / 音频转写详情查看复制 / OpenAI 兼容 TTS 配置密钥 / 原生播放边界 / 停止播报控制 / 播放完成事件回传、STT/TTS 厂商预设、OpenAI Relay 健康检查端点、CORS 预检、Responses API 非流式 / 流式生命周期事件端点和本地通知 ID 专项已补，桌面分享 / 云同步 / 社交通道专项仍待补。
 
@@ -463,7 +529,7 @@
   - [x] iOS 系统 Speech 原生识别兜底 v1：当显式 STT / 当前 OpenAI 兼容聊天渠道音频接口失败或不可用时，iOS 通过 `simichat/native_speech_to_text` 调用 `SFSpeechURLRecognitionRequest` 识别应用私有目录内 `.m4a` 录音，并把识别文本写入 sidecar 后作为普通聊天内容发送。
   - [x] base64 语音文本输入 v1：聊天输入支持 `data:audio/...;base64,...` 或“base64 的语音字符：...”粘贴；发送前先解码为临时 `audio` 附件并复用现有 STT 级联，原始 base64 不写入聊天上下文 / Markdown，非法、超大或格式不明的 payload 会在本地拦截。
   - [x] 音频转写稿详情查看 / 复制 v1：音频卡片可打开转写详情弹窗，展示状态和脱敏正文 / 状态说明；`ready` 转写支持一键复制正文，不展示本机 sidecar 路径。
-  - [x] OpenAI 兼容 TTS 语音播报 v1：设置页可启用 TTS、配置 Base URL / 模型 / 音色 / 加密 API Key；AI 回复卡片提供播报按钮，生成临时 mp3 后通过 `simichat/audio_player` 调用 Android `MediaPlayer` / iOS `AVAudioPlayer`，原生侧限制只能播放应用私有目录内文件。
+  - [x] OpenAI 兼容 TTS 语音播报 v1：设置页可启用 TTS、配置 Base URL / 模型 / 音色 / 加密 API Key；AI 回复卡片提供播报按钮，按配置生成临时 mp3 / wav / opus / aac / flac 音频后通过 `simichat/audio_player` 调用 Android `MediaPlayer` / iOS `AVAudioPlayer`，原生侧限制只能播放应用私有目录内文件。
   - [x] TTS 播放停止控制 v1：播报生成中显示禁用的“正在生成语音”状态；开始播放后当前 assistant 回复显示“停止播报”，用户可主动停止原生播放并清除当前播报状态。
   - [x] TTS 播放完成事件回传 v1：Android / iOS 原生播放器在完成、停止、错误时回传终止事件，聊天页按当前音频路径自动清理“停止播报”状态，避免播放结束后 UI 仍显示播报中。
   - [x] STT/TTS 厂商预设 v1：设置页语音输入 / 语音播报弹窗提供厂商预设下拉，支持 OpenAI、Groq STT 与自定义 OpenAI 兼容配置，一键填充 Base URL、模型和音色；预设推断兼容 `/v1` 后缀。
@@ -560,7 +626,7 @@
 
 ## 八、进度记录
 
-> 说明：本节记录“能代表项目阶段推进”的里程碑；当前可复现的测试输出、构建结果、脚本结果和未补证边界沉淀到 `docs/verification-baseline-2026-08-08.md`。`docs/verification-baseline-2026-06-27.md` 仅保留历史基线。
+> 说明：本节记录“能代表项目阶段推进”的里程碑；当前可复现的测试输出、构建结果、脚本结果和未补证边界沉淀到 `docs/verification-baseline-2026-08-08.md`。`docs/archive/verification-baseline-2026-06-27.md` 仅保留历史基线。
 
 ### 8.1 总纲与账本
 
@@ -655,7 +721,7 @@
 | 2026-07-14 | 移动端 Dreaming / Reflection pending 连续失败退避复查 | 审计 `runDreamingBackgroundTask()` 时发现：已有 `assistant_reflection_pending_v1` 的后台任务再次恢复失败、且当天 Dreaming 已完成时，旧逻辑会返回 `notDue`，Android WorkManager 因而误判成功并停止退避重试。新增 `Android background retry stays pending when Reflection still fails`，先红灯得到 `Expected reflectionPending / Actual notDue`，再以最小状态标记修复；目标 4 项与全量稳定门禁 519 项通过。Pixel 8 当前默认 force 调度复跑未收到结果 marker，但不依赖 shell 强制命令的自然调度分支在 Home 后 36 秒由 SystemJobScheduler 完成 `status=completed digest=2026-07-14 reflection=2026-07-14`，正式包 `firstInstallTime` / `dataDir` 不变、pid `22864`，隔离包与临时 sqlite hook 已清理。iPhone13 release 隔离 smoke 解锁预检和 27.5MB 构建通过，但 BGTaskScheduler 仍显示 `There are no scheduled tasks`；cleanup 后正式 `top.simitalk.aichat` 存在并运行 pid `86399`。 | Android 真实自然后台链路通过，pending 连续失败会继续 retry；iOS 前台兜底可用，但系统后台仍待开启“后台 App 刷新” |
 | 2026-07-14 | Pixel 8 Android WorkManager 自然调度 Dreaming / Reflection | 新增自然调度 wrapper 和可配置 smoke initialDelay，harness 补齐生产任务的非低电量 / 非低存储约束。`scripts/smoke_device_android_background_dreaming_natural.sh 37101FDJH0077P` 安装隔离包后回到 Home，不调用 `cmd jobscheduler run`；30 秒 initialDelay 后 36 秒由 SystemJobScheduler 自行输出 `status=completed digest=2026-07-14 reflection=2026-07-14`。隔离 prefs 含 Dreaming、Reflection 最近报告和历史且无 pending；随后默认 force 分支复跑通过。两次 cleanup 后正式包 `firstInstallTime=2026-07-14 00:29:02` / `dataDir=/data/user/0/top.simitalk.aichat` 不变、最终 pid `24389`，无隔离包 / sqlite hook 残留；聚焦门禁 37 项、最终全量稳定门禁 518 项通过。取证：`/tmp/simichat_android_natural_background_final.log`、`/tmp/simichat-android-background-dreaming-20260714042907.log`。 | 自然与强制系统调度均通过 / Doze、OEM、跨小时跨天仍待补 |
 | 2026-07-14 | iOS BGTaskScheduler `BGProcessingTask` 代码基线、隔离 release smoke 与后台可用性诊断 | `AppDelegate` 启动完成前注册正式 task identifier，Info.plist 声明 permitted identifier / `processing`，Dart 一次性调度支持次日重排、15 分钟失败重试和 `ios_background` trigger；隔离 smoke 使用独立 bundle / task 子命名空间，并把 `Workmanager().printScheduledTasks()` 写入 READY JSON，避免 `workmanager 0.8.0` 吞掉 submit 错误后形成假成功。iPhone13 LLDB 只读复查确认 `UIApplication.backgroundRefreshStatus=1`（denied），系统未保留 pending task；新增原生 `simichat/background_refresh_status` 通道、Dart 状态映射、调度前拒绝静默成功和设置页“可用 / 已关闭 / 受限”提示。相关后台聚焦门禁 39 项通过，新增状态 / 设置页回归 23 项通过，最终全量稳定门禁 508 项通过，analyze 无问题；正式 iOS release `--no-codesign` 构建通过，Runner.app 33.3MB、arm64，产物含正式 task identifier、`processing` 和原生状态通道；正式包仍存在、隔离包和 sqlite hook 无残留。 | 代码 / 原生编译 / 失败诊断已完成；真机系统执行待开启“后台 App 刷新” |
-| 2026-07-14 | Pixel 8 Android WorkManager 系统后台 Dreaming / Reflection 独立包真机 smoke | 新增 `workmanager 0.8.0`、纯 Dart 下次运行时间计算、一次性唯一任务、后台 `ProviderContainer`、正式私有 SQLite、Dreaming / 画像候选 / Reflection / 通知链、成功后次日重排和 Reflection pending retry；自动路径使用 SQLite `dreaming-auto-YYYY-MM-DD` 原子 claim，防止前台与后台 isolate 重复 job / 报告 / Reflection / 通知。Android arm64 debug APK 构建通过，合并 manifest 可见 `WorkManagerInitializer`、`SystemJobService` 和 `RescheduleReceiver`。`scripts/smoke_device_android_background_dreaming.sh 37101FDJH0077P` 只安装隔离包 `top.simitalk.aichat.backgroundsmoke`，Home 后先尝试 Android 16 namespace `androidx.work.systemjobscheduler` 命令，因最终 `workmanager 0.8.0` 使用 legacy job 自动回退到无 namespace 命令并成功强制运行系统 job，输出 `status=completed digest=2026-07-14 reflection=2026-07-14`；隔离 prefs 含 Dreaming / Reflection 最近报告与历史。cleanup 后正式包 `firstInstallTime=2026-07-14 00:29:02`、`dataDir=/data/user/0/top.simitalk.aichat` 不变、pid `12024`，无隔离包和 sqlite hook 残留。最终全量稳定门禁 499 项通过，analyze 无问题，日志无 `WARNING (drift)` / `multiple databases`；取证文件为 `/tmp/simichat-android-background-dreaming-20260714013910.log` 和 `/tmp/simichat-android-background-dreaming-prefs-20260714013910.xml`。详见 `docs/mobile-android-background-dreaming-smoke-2026-07-14.md`。 | Android 系统后台真实执行已通过 / iOS 与自然调度长时间观察待补 |
+| 2026-07-14 | Pixel 8 Android WorkManager 系统后台 Dreaming / Reflection 独立包真机 smoke | 新增 `workmanager 0.8.0`、纯 Dart 下次运行时间计算、一次性唯一任务、后台 `ProviderContainer`、正式私有 SQLite、Dreaming / 画像候选 / Reflection / 通知链、成功后次日重排和 Reflection pending retry；自动路径使用 SQLite `dreaming-auto-YYYY-MM-DD` 原子 claim，防止前台与后台 isolate 重复 job / 报告 / Reflection / 通知。Android arm64 debug APK 构建通过，合并 manifest 可见 `WorkManagerInitializer`、`SystemJobService` 和 `RescheduleReceiver`。`scripts/smoke_device_android_background_dreaming.sh 37101FDJH0077P` 只安装隔离包 `top.simitalk.aichat.backgroundsmoke`，Home 后先尝试 Android 16 namespace `androidx.work.systemjobscheduler` 命令，因最终 `workmanager 0.8.0` 使用 legacy job 自动回退到无 namespace 命令并成功强制运行系统 job，输出 `status=completed digest=2026-07-14 reflection=2026-07-14`；隔离 prefs 含 Dreaming / Reflection 最近报告与历史。cleanup 后正式包 `firstInstallTime=2026-07-14 00:29:02`、`dataDir=/data/user/0/top.simitalk.aichat` 不变、pid `12024`，无隔离包和 sqlite hook 残留。最终全量稳定门禁 499 项通过，analyze 无问题，日志无 `WARNING (drift)` / `multiple databases`；取证文件为 `/tmp/simichat-android-background-dreaming-20260714013910.log` 和 `/tmp/simichat-android-background-dreaming-prefs-20260714013910.xml`。详见 `docs/archive/mobile-android-background-dreaming-smoke-2026-07-14.md`。 | Android 系统后台真实执行已通过 / iOS 与自然调度长时间观察待补 |
 | 2026-07-14 | Pixel 8 Dreaming / Reflection 失败恢复独立包真机 smoke | 新增可覆盖 Gradle applicationId、`dreaming_reflection_smoke_harness.dart`、静态 manifest 门禁和 `scripts/smoke_device_dreaming_reflection_recovery.sh`。最终安全路径只 build / adb 安装 `top.simitalk.aichat.dreamingsmoke`，内存 SQLite + 隔离 prefs；真机输出 pending `dayKey=2026-07-14 attempts=1`，Home / resumed 后 recovered `attempts=2 history=1`；cleanup 卸载隔离包、普通 release pid 可见，修正后 smoke 前后正式包 `firstInstallTime=2026-07-14 00:29:02` / `dataDir=/data/user/0/top.simitalk.aichat` 不变，稳定门禁 124 项和 analyze 通过。首次 `flutter test -d` 动态 applicationId 方案错误卸载正式包，`firstInstallTime` 从 `2026-07-07 12:51:06` 变为 `2026-07-14 00:29:02`，Pixel 8 应用私有数据丢失；LocalTransport / D2D restore 均 `-1000`，未能自动恢复，事故与防复发边界已写入独立文档。 | 最终隔离 smoke 通过 / 首次 runner 数据事故已记录且路径已禁用 |
 | 2026-07-13 | 移动端 Dreaming / Reflection 直接稳定性与独立失败恢复 | 补强 `test/mobile_main_flow_smoke_test.dart`：首次启动到期、恢复前台到期、持续前台定时三条移动端路径都会解码并校验最近 Dreaming、最近 Reflection 与 Reflection 历史，要求反思有内容、历史非空且来源 Dreaming 日期一致；新增 `assistant_reflection_pending_v1`，Reflection 开始前写 pending、报告和历史成功后清除，启动 / 恢复前台 / 前台定时自动重试，旧来源先从 Dreaming 历史、再从 SQLite 按 dayKey 恢复；设置页展示来源和次数并允许清除，手动失败有明确反馈，删除来源报告同步清理，结构化备份包含 pending。移动端 `--name dreaming` 9 项通过，Reflection/Dreaming 聚焦 55 项通过，含导出 / 导入的稳定门禁 120 项通过；`flutter --no-version-check analyze --no-pub` 无问题；1000 条消息 Dreaming 基准 `run_ms=78` / `digest_elapsed_ms=74` / `memory_candidates=40`。当前仍明确是“前台到期 · 非系统后台”；系统后台调度和模型驱动反思未完成。 | 已完成移动端前台链路与 Reflection 失败恢复 / 最终智能助理目标继续推进 |
 | 2026-07-08 | MCP PC Node 容器侧车静态门禁 | 验证 PC Node Runtime 容器文件不依赖宿主机 Node/npm/npx：Dockerfile 使用 `node:22-alpine`，runtime server 暴露 MCP SSE / message / tools 调用入口，脚本 `bash -n` 通过并只调用 Docker/Podman，市场项和 `docs/runtime-manifest.example.json` 均指向 `simichat-node-container` 本地 SSE。命令：`flutter --no-version-check test --no-pub --no-test-assets test/mcp_runtime_container_manifest_test.dart -r expanded`，4 项通过。 | 已完成静态和脚本门禁 / 实际 Docker build 与 App 内启动管理待补 |
@@ -804,6 +870,12 @@
 | `docs/local-model.md` | Ollama 本地模型配置、`gemma4` 默认勾选、协议稳定性和故障排查 |
 | `docs/verification-baseline-2026-08-08.md` | 当前静态分析、测试、构建、mock smoke 和真实 runtime 边界 |
 | `docs/mobile-mcp-skills-memory-quality-2026-08-08.md` | Pixel 8 / iPhone13 移动端 MCP、Skills、记忆逻辑与真实 UI 稳定性证据 |
+| `docs/mobile-mcp-skills-memory-local-device-2026-08-09.md` | Pixel 8 / iPhone13 的 MCP / Skills / 记忆纯本地真机验收：App Native MCP、真实 SQLite 重开、Key Point 隔离 key、UI 可见性 |
+| `docs/mobile-node-mcp-runtime-2026-08-09.md` | 移动端纯 JS Node-Mobile MCP 运行验收：内置 runtime、stdio-compat-v1 / legacy npx adapter、拒绝外部进程 |
+| `docs/MCP_BUNDLED_NODE_RUNTIME.md` | Android / iOS / PC 内置 Node Runtime 矩阵、进程边界、真机验证状态 |
+| `docs/MOBILE_MCP_RUNTIME.md` | 移动端 MCP 运行时边界（App Native / 移动兼容 stdio / SSE / 内置 Node） |
+| `docs/MOBILE_EXTENSIONS.md` | 移动端 MCP / Skill / Agent 扩展包安装协议与真机证据 |
+| `docs/deep-linking.md` | 深度链接方案与 release 真机验证 |
 | `docs/architecture.md` | 整体架构设计、模块边界、数据流、生产化门禁 |
 | `docs/model-integration.md` | 多模型接入、渠道、模型能力、接口中转方案 |
 | `docs/memory-system.md` | 记忆、Markdown 原始档案、本地检索增强生成、Key Points |
@@ -816,37 +888,8 @@
 | `docs/ui-design.md` | 移动端优先界面规范、主题、字体、可访问性 |
 | `docs/markdown-rendering.md` | 对话页扩展 Markdown 渲染能力、移动端字号指标和安全边界 |
 | `docs/media-attachments.md` | 语音、图片、文件附件、归档和多模态输入策略 |
-| `docs/mobile-main-flow-smoke-2026-06-27.md` | 移动端主链路冒烟脚本、自动化结果、真机待测清单 |
-| `docs/mobile-device-install-smoke-2026-07-06.md` | 当前提交 Android / iOS 真机覆盖安装、启动 / 进程可见性证据和后续真机长会话待测清单 |
-| `docs/mobile-long-conversation-reflection-smoke-2026-07-06.md` | Pixel 8 72 条长会话、Dreaming、Reflection、短期提示预览真机验证和 disposed ref 回归记录 |
-| `docs/mobile-android-background-dreaming-smoke-2026-07-14.md` | Pixel 8 Android WorkManager / JobScheduler 真正后台 Dreaming、Reflection、跨 isolate 防重、独立包数据安全和 Android 16 namespaced 命令失败后 legacy fallback 取证 |
-| `docs/mobile-ios-background-dreaming-smoke-2026-07-14.md` | iPhone13 iOS 后台 Dreaming / Reflection 隔离 release smoke、BGTaskScheduler 状态和系统设置阻断证据 |
-| `docs/mobile-dreaming-reflection-recovery-smoke-2026-07-14.md` | Pixel 8 独立包 Dreaming / Reflection 首次失败、pending、Home / resumed 自动恢复真机证据，以及首次 runner 卸载正式包的数据事故与防复发约束 |
-| `docs/mobile-real-send-smoke-2026-07-06.md` | Pixel 8 本地 mock OpenAI 真实发送、SSE、重试、停止慢流和历史搜索真机验证记录 |
-| `docs/mobile-model-switch-smoke-2026-07-06.md` | Pixel 8 顶部模型菜单切换、`model_switch` 落库和切换后真实发送真机验证记录 |
-| `docs/mobile-device-integration-send-smoke-2026-07-06.md` | 真机集成发送 smoke 入口 / 脚本、Pixel 8 通过证据、iPhone13 debug 排障历史、iOS release-only 运行边界 |
-| `docs/mobile-settings-smoke-2026-07-06.md` | 设置页真机 smoke 入口 / 脚本、Pixel 8 主题模式与字体缩放持久化验证记录 |
-| `docs/mobile-markdown-scroll-smoke-2026-07-06.md` | 复杂 Markdown 真机滚动 smoke 入口 / 脚本、Pixel 8 Mermaid / Draw.io 组件和底部哨兵滚动验证记录 |
-| `docs/mobile-base64-audio-smoke-2026-07-06.md` | base64 语音真机发送 smoke 入口 / 脚本、Pixel 8 fake STT、audio sidecar 和净化后模型请求验证记录 |
-| `docs/mobile-stt-network-smoke-2026-07-06.md` | OpenAI 兼容 STT 网络真机 smoke 入口 / 脚本、Pixel 8 multipart STT fallback、audio sidecar 和净化后聊天请求验证记录 |
-| `docs/mobile-voice-recording-smoke-2026-07-06.md` | 真机录音按钮 smoke 入口 / 脚本、Pixel 8 Android 原生录音、STT fallback、audio sidecar 和净化后聊天请求验证记录 |
-| `docs/mobile-tts-network-smoke-2026-07-06.md` | OpenAI 兼容 TTS 网络真机 smoke 入口 / 脚本、Pixel 8 TTS JSON 请求、临时音频写入和停止播报验证记录 |
-| `docs/mobile-native-audio-player-smoke-2026-07-06.md` | 原生音频播放通道真机 smoke 入口 / 脚本、Pixel 8 Android MediaPlayer、应用私有目录音频和 stopped 事件验证记录 |
-| `docs/mobile-long-audio-playback-smoke-2026-07-06.md` | 长音频原生播放真机 smoke 入口 / 脚本、Pixel 8 6.5 秒 WAV、Android MediaPlayer 和 completed 事件验证记录 |
-| `docs/mobile-smoke-script-hardening-2026-07-06.md` | 真机 smoke 脚本临时 sqlite hook 恢复机制、`mktemp` 模板修复和 Pixel 8 抽样复验记录 |
-| `docs/mobile-audio-playback-replace-smoke-2026-07-06.md` | 原生音频播放替换 / 中断真机 smoke 入口 / 脚本、Pixel 8 两段 WAV 替换播放和 stopped / completed 事件验证记录 |
-| `docs/mobile-audio-focus-hardening-2026-07-06.md` | 移动端原生音频播放焦点 / 中断基础处理、debug-only competing AudioFocus smoke、独立 helper APK 外部焦点抢占 smoke、Android 音频焦点 suite、测试边界、全量测试、Android / iOS 构建与 Pixel 8 静音原生音频 smoke 复验记录 |
-| `docs/mobile-ios-release-send-smoke-2026-07-06.md` | iOS release-only 发送 smoke 入口 / 脚本、people 真机发送闭环、iPhone13 停止慢流红灯修复、CancelToken 传播、Locked / timeout 预检和普通 release 恢复记录 |
-| `docs/mobile-network-stability-2026-07-06.md` | 移动端离线发送保护、联网恢复提示、会话隔离、网络状态 Provider 启动探测 / 归一化、输入保留、不写入失败消息、前台网络断开取消已加载 streaming 会话和手动重试提示边界 |
-| `docs/mobile-network-stream-cancel-smoke-2026-07-07.md` | Android 物理 Wi-Fi / data 断网触发前台 streaming 取消真机 smoke、READY / INTERRUPTED 标记、Pixel 8 通过、普通 release 恢复和网络状态复核 |
-| `docs/mobile-background-restore-smoke-2026-07-07.md` | Android 后台恢复真机 smoke 入口 / 脚本、Pixel 8 Home 后台再拉起、草稿保留和 release 恢复记录 |
-| `docs/mobile-ios-background-restore-smoke-2026-07-07.md` | iOS release 后台恢复 smoke 入口 / 脚本、iPhone13 release suspend / resume 通过取证、普通 release 恢复覆盖安装和 people 锁屏历史边界 |
-| `docs/mobile-background-stream-cancel-2026-07-07.md` | 移动端后台切出取消所有已加载 streaming 会话、恢复前台一次性可重试 / 重试全部提示、冷启动持久化待重试 marker、marker 会话切回、stale marker 清理、多 marker 列表恢复、数量提示、读写侧脏 marker 清洗、主动重试 DAO 兜底和自动重试禁用边界 |
-| `docs/mobile-background-stream-cancel-smoke-2026-07-07.md` | Android 设备内真实 HTTP 慢流后台取消 smoke、Dio cancel 红灯、SSE 取消传播修复、后台错误保持、不落库 assistant 半截回复和 Pixel 8 release 恢复记录 |
-| `docs/openai-relay-responses-stream-2026-07-07.md` | OpenAI Relay `/v1/responses` `stream=true` SSE 兼容、顶层 `item_reference` 安全降级、红灯从 400 到文本 delta / completed / DONE、令牌和 reference id 不回显的局部测试记录 |
-| `docs/openai-relay-stream-error-2026-07-07.md` | OpenAI Relay Chat Completions / Responses 流式上游异常安全 `error` / `response.failed` / `[DONE]` 收口记录 |
 
-| `docs/test-stability-2026-07-06.md` | Widget 测试数据库生命周期、Drift warning 清理、Dreaming 销毁中途通知闸门、全量理论门禁和临时 hook 卫生记录 |
+| `docs/archive/` | 2026-06-27 ~ 2026-07-14 的单次真机 / 协议 / 稳定性验证归档（33 份，主链路、Dreaming / Reflection、音频、网络、Relay 协议、测试稳定性等），均为带日期的历史证据，当前结果以 `docs/verification-baseline-2026-08-08.md` 为准 |
 | `docs/dwchainless-relay-integration-2026-08-07.md` | DW Chainless 中转站预置、注册引导、一键接入、关于页鸣谢与测试记录 |
 | `docs/implementation-gap-analysis-2026-08-07.md` | 所有未完成功能项的差距分析与实施计划（标注已实现 / 需真机补证 / 需外部资源） |
 | `docs/requirements.md` | 产品需求总纲、核心模块、阶段规划、页面需求、隐私安全原则 |
@@ -855,7 +898,6 @@
 | `docs/infinite-context.md` | 滚动压缩、摘要生成、令牌估算 |
 | `docs/ui.md` | 历史界面设计文档 |
 | `docs/MCP_RUNTIME_CONTAINERIZATION.md` | MCP 运行时 / 旁车容器化方案 |
-| `docs/verification-baseline-2026-06-27.md` | 历史功能、性能、安全和设备验证基线；不覆盖当前结果 |
 
 ---
 

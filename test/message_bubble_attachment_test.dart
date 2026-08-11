@@ -169,7 +169,53 @@ void main() {
 
     expect(opened, 1);
   });
+
+
+  testWidgets('image long press invokes edit image callback', (
+    tester,
+  ) async {
+    final imageFile = (await tester.runAsync(_createLocalAttachmentFile))!;
+    addTearDown(() {
+      if (imageFile.existsSync()) imageFile.deleteSync();
+      if (imageFile.parent.existsSync()) imageFile.parent.deleteSync();
+    });
+    var longPressed = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            role: 'user',
+            content: '图片预览',
+            isUser: true,
+            attachments: [
+              MessageAttachmentView(
+                fileName: 'editable-photo.png',
+                fileType: 'image',
+                fileSize: imageFile.lengthSync(),
+                localPath: imageFile.path,
+                onEditImage: () => longPressed = true,
+              ),
+            ],
+            attachmentImageBuilder: (_, _) => const ColoredBox(
+              key: ValueKey('fake-thumbnail-image'),
+              color: Colors.blue,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('edit-image-longpress')), findsOneWidget);
+    await tester.longPress(
+      find.byKey(const ValueKey('attachment-thumbnail-editable-photo.png')),
+    );
+    await tester.pumpAndSettle();
+    expect(longPressed, isTrue);
+  });
 }
+
 
 Future<File> _createLocalAttachmentFile() async {
   final dir = await Directory.systemTemp.createTemp('simichat_image_test_');

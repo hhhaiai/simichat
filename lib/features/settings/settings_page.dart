@@ -40,7 +40,6 @@ import '../../core/media/speech_provider_preset.dart';
 import '../../core/mcp/mcp_client.dart';
 import '../../core/relay/openai_compatible_relay_server.dart';
 import '../../shared/providers/database_provider.dart';
-import '../../shared/providers/external_url_provider.dart';
 import '../../shared/providers/audio_transcription_provider.dart';
 import '../../shared/providers/image_generation_provider.dart';
 import '../../shared/providers/webdav_backup_provider.dart';
@@ -74,6 +73,7 @@ import '../../shared/providers/skill_provider.dart';
 import '../../shared/providers/session_provider.dart';
 import '../../shared/providers/text_to_speech_provider.dart';
 import '../../shared/providers/user_profile_provider.dart';
+import '../../shared/widgets/in_app_h5_page.dart';
 import '../skills/skills_hub_page.dart';
 
 typedef SettingsModelTestRunner =
@@ -288,7 +288,7 @@ class SettingsPage extends ConsumerWidget {
           // 关于
           _buildSectionHeader(context, '关于'),
           const ListTile(title: Text('版本'), subtitle: Text('1.0.0')),
-          _buildCreditsTile(context, ref),
+          _buildCreditsTile(context),
         ],
       ),
     );
@@ -548,6 +548,7 @@ class SettingsPage extends ConsumerWidget {
         return Column(
           children: [
             _buildDwChainlessCard(context, ref, channels),
+            const InAppH5Prewarm(url: kSimiRouterHomeUrl),
             for (final channel in channels)
               _buildChannelTile(context, ref, channel),
             Padding(
@@ -576,33 +577,50 @@ class SettingsPage extends ConsumerWidget {
     );
   }
 
-  /// 找到已接入 DW Chainless 中转站的渠道（按 Base URL 域名匹配）。
+  /// 找到已接入 SimiRouter（dwchainless）中转站的渠道（按 Base URL 域名匹配）。
   ModelChannel? _findDwChainlessChannel(List<ModelChannel> channels) {
     for (final channel in channels) {
-      if (channel.baseUrl.toLowerCase().contains('api.dwchainless.com')) {
+      final uri = Uri.tryParse(channel.baseUrl.trim());
+      if (uri?.scheme == 'https' &&
+          uri?.host.toLowerCase() == 'api.dwchainless.com' &&
+          uri?.port == 443 &&
+          uri?.userInfo.isEmpty == true) {
         return channel;
       }
     }
     return null;
   }
 
-  /// 打开外部链接；失败时回退为复制链接到剪贴板，避免用户丢失目标地址。
-  Future<void> _openExternalUrl(
-    BuildContext context,
-    WidgetRef ref,
-    String url,
-  ) async {
-    final opened = await ref.read(externalUrlOpenerProvider).open(url);
-    if (!context.mounted) return;
-    if (opened) return;
-    await Clipboard.setData(ClipboardData(text: url));
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text('无法打开链接，已复制到剪贴板：$url')));
+  /// 在应用内打开 H5 页面，不调用系统浏览器，也不把地址展示给用户。
+  Future<void> _openInAppH5(
+    BuildContext context, {
+    required String url,
+    required String title,
+  }) async {
+    final uri = normalizeInAppH5Url(url);
+    if (uri == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('页面地址无效，暂时无法打开')));
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => InAppH5Page(
+          initialUrl: uri.toString(),
+          title: title,
+          brandAsset: 'assets/branding/simirouter.png',
+        ),
+      ),
+    );
   }
 
-  /// DW Chainless 中转站推广卡片：展示接入状态、无 Key 注册引导和一键接入。
+  /// SimiRouter AI 中转站紧凑接入卡片。
+  ///
+  /// 未接入时只保留一句定位和三个直接动作；接入后折叠为状态 + 管理/官网，
+  /// 不再长期占用设置页首屏展示六个营销标签。
   Widget _buildDwChainlessCard(
     BuildContext context,
     WidgetRef ref,
@@ -613,10 +631,16 @@ class SettingsPage extends ConsumerWidget {
     final hasKey = channel != null && channel.apiKeyEncrypted.isNotEmpty;
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    const actionStyle = ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(Size(0, 44)),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 4)),
+    );
 
     return Container(
+      key: const Key('simirouter_channel_card'),
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -626,7 +650,7 @@ class SettingsPage extends ConsumerWidget {
             scheme.surfaceContainerHighest.withValues(alpha: 0.35),
           ],
         ),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
@@ -636,25 +660,35 @@ class SettingsPage extends ConsumerWidget {
             children: [
               CircleAvatar(
                 radius: 18,
-                backgroundColor: scheme.primary,
-                child: Icon(Icons.hub, size: 20, color: scheme.onPrimary),
+                backgroundColor: scheme.surface,
+                backgroundImage: const AssetImage(
+                  'assets/branding/simirouter.png',
+                ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'DW Chainless 中转站',
+                      'SimiRouter AI 中转站',
                       style: textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                     Text(
-                      '一个 API Key 接入聚合主流模型',
+                      hasKey
+                          ? '已接入 · 可管理模型和 API Key'
+                          : channel != null
+                          ? '已添加 · 尚未填写 API Key'
+                          : '主流模型统一接入 · 智能路由',
                       style: textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                        color: hasKey
+                            ? scheme.primary
+                            : scheme.onSurfaceVariant,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -673,47 +707,51 @@ class SettingsPage extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            channel == null
-                ? '尚未接入：先去注册获取 API Key，再点“一键接入”即可开始使用。'
-                : hasKey
-                ? '已接入「${channel.name}」，可直接添加模型或自动获取模型列表。'
-                : '已添加「${channel.name}」但尚未填写 API Key，请补充后使用。',
-            style: textTheme.bodySmall?.copyWith(color: scheme.onSurface),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          const SizedBox(height: 8),
+          Row(
             children: [
-              if (!hasKey)
-                FilledButton.icon(
-                  icon: const Icon(Icons.person_add_alt_1, size: 18),
-                  label: const Text('去注册获取 Key'),
-                  onPressed: () {
-                    final signUpUrl =
-                        preset?.signUpUrl ??
-                        'https://api.dwchainless.com/sign-up';
-                    _openExternalUrl(context, ref, signUpUrl);
-                  },
+              if (!hasKey) ...[
+                Expanded(
+                  child: FilledButton(
+                    style: actionStyle,
+                    child: const Text('获取 Key'),
+                    onPressed: () {
+                      final signUpUrl =
+                          preset?.signUpUrl ?? kSimiRouterSignUpUrl;
+                      _openInAppH5(context, url: signUpUrl, title: '获取 Key');
+                    },
+                  ),
                 ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.add_link, size: 18),
-                label: const Text('一键接入'),
-                onPressed: () => _showChannelEditDialog(
-                  context,
-                  ref,
-                  initialPresetId: preset?.id,
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: OutlinedButton(
+                  style: actionStyle,
+                  child: Text(
+                    hasKey
+                        ? '管理'
+                        : channel != null
+                        ? '补充 Key'
+                        : '一键接入',
+                  ),
+                  onPressed: () => _showChannelEditDialog(
+                    context,
+                    ref,
+                    channel: channel,
+                    initialPresetId: channel == null ? preset?.id : null,
+                  ),
                 ),
               ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('访问官网'),
-                onPressed: () => _openExternalUrl(
-                  context,
-                  ref,
-                  preset?.docsUrl ?? 'https://api.dwchainless.com/',
+              const SizedBox(width: 4),
+              Expanded(
+                child: TextButton(
+                  style: actionStyle,
+                  child: const Text('官网'),
+                  onPressed: () => _openInAppH5(
+                    context,
+                    url: preset?.docsUrl ?? kSimiRouterHomeUrl,
+                    title: '访问官网',
+                  ),
                 ),
               ),
             ],
@@ -2379,22 +2417,19 @@ class SettingsPage extends ConsumerWidget {
   }
 
   /// 关于区：鸣谢为应用提供模型接入能力的中转站。
-  Widget _buildCreditsTile(BuildContext context, WidgetRef ref) {
-    const homeUrl = 'https://api.dwchainless.com/';
+  Widget _buildCreditsTile(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ListTile(
       leading: CircleAvatar(
         radius: 18,
-        backgroundColor: scheme.primaryContainer,
-        child: Icon(Icons.hub, size: 20, color: scheme.primary),
+        backgroundColor: scheme.surface,
+        backgroundImage: const AssetImage('assets/branding/simirouter.png'),
       ),
-      title: const Text('鸣谢 · DW Chainless 中转站'),
-      subtitle: const Text(
-        '为本应用提供 OpenAI 兼容模型接入服务\nhttps://api.dwchainless.com/',
-      ),
-      isThreeLine: true,
+      title: const Text('鸣谢 · SimiRouter AI 中转站'),
+      subtitle: const Text('为本应用提供 OpenAI 兼容模型接入服务 · 点击查看官网'),
       trailing: const Icon(Icons.open_in_new),
-      onTap: () => _openExternalUrl(context, ref, homeUrl),
+      onTap: () =>
+          _openInAppH5(context, url: kSimiRouterHomeUrl, title: '访问官网'),
     );
   }
 
@@ -2994,8 +3029,20 @@ class SettingsPage extends ConsumerWidget {
   ) {
     final selectedModelId = ref.watch(selectedModelIdProvider);
     final modelTestHistory = ref.watch(modelTestHistoryProvider);
+    final channelLogoAsset = getChannelLogoAsset(
+      channel.protocol,
+      channel.baseUrl,
+    );
     return ExpansionTile(
-      leading: Icon(getProtocolIcon(channel.protocol)),
+      leading: channelLogoAsset != null
+          ? CircleAvatar(
+              radius: 16,
+              backgroundColor: Theme.of(
+                context,
+              ).colorScheme.surfaceContainerHighest,
+              backgroundImage: AssetImage(channelLogoAsset),
+            )
+          : Icon(getChannelIcon(channel.protocol, channel.baseUrl)),
       title: Text(channel.name),
       subtitle: Text(
         '${channel.protocol} · ${channel.baseUrl}',
@@ -3408,6 +3455,12 @@ class SettingsPage extends ConsumerWidget {
         urlCtrl.text = preset.baseUrl;
         protocol = preset.protocol;
       }
+    } else if (channel != null) {
+      // 编辑内置渠道时同样锁定为预设配置，只留 API Key 可改。
+      selectedPresetId = findModelProviderPresetByBaseUrl(
+        channel.protocol,
+        channel.baseUrl,
+      )?.id;
     }
 
     showDialog(
@@ -3428,63 +3481,85 @@ class SettingsPage extends ConsumerWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 20),
-                    if (channel == null) ...[
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedPresetId,
-                        decoration: const InputDecoration(
-                          labelText: '厂商预设',
-                          helperText: '选择后自动填充渠道名称、Base URL 与协议，可再手动调整',
-                        ),
-                        items: [
-                          const DropdownMenuItem(
-                            value: '',
-                            child: Text('自定义渠道'),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedPresetId,
+                      decoration: InputDecoration(
+                        labelText: '厂商预设',
+                        helperText: selectedPresetId != null
+                            ? '内置渠道只需填写 API Key，名称 / Base URL / 协议已自动配置'
+                            : '选择预设后可一键接入；也可改为自定义渠道',
+                      ),
+                      items: [
+                        const DropdownMenuItem(value: '', child: Text('自定义渠道')),
+                        for (final preset in kModelProviderPresets)
+                          DropdownMenuItem(
+                            value: preset.id,
+                            child: Text(preset.name),
                           ),
-                          for (final preset in kModelProviderPresets)
-                            DropdownMenuItem(
-                              value: preset.id,
-                              child: Text(preset.name),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          final preset = value == null || value.isEmpty
+                      ],
+                      onChanged: (value) {
+                        final preset = value == null || value.isEmpty
+                            ? null
+                            : findModelProviderPreset(value);
+                        setDialogState(() {
+                          selectedPresetId = value?.isEmpty == true
                               ? null
-                              : findModelProviderPreset(value);
-                          setDialogState(() {
-                            selectedPresetId = value?.isEmpty == true
-                                ? null
-                                : value;
-                            if (preset != null) {
-                              nameCtrl.text = preset.name;
-                              urlCtrl.text = preset.baseUrl;
-                              protocol = preset.protocol;
-                            }
-                          });
+                              : value;
+                          if (preset != null) {
+                            nameCtrl.text = preset.name;
+                            urlCtrl.text = preset.baseUrl;
+                            protocol = preset.protocol;
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    if (selectedPresetId != null)
+                      _ProviderPresetHint(
+                        preset: findModelProviderPreset(selectedPresetId!)!,
+                        onOpenSignUp: () {
+                          final selected = findModelProviderPreset(
+                            selectedPresetId!,
+                          );
+                          if (selected?.signUpUrl == null) return;
+                          _openInAppH5(
+                            context,
+                            url: selected!.signUpUrl!,
+                            title: '获取 Key',
+                          );
+                        },
+                        onOpenDocs: () {
+                          final selected = findModelProviderPreset(
+                            selectedPresetId!,
+                          );
+                          if (selected == null) return;
+                          _openInAppH5(
+                            context,
+                            url: selected.docsUrl,
+                            title: '访问官网',
+                          );
                         },
                       ),
-                      const SizedBox(height: 12),
-                      if (selectedPresetId != null)
-                        _ProviderPresetHint(
-                          preset: findModelProviderPreset(selectedPresetId!)!,
+                    if (selectedPresetId != null) const SizedBox(height: 12),
+                    // 内置预设：名称 / Base URL / 协议由预设锁定，只留 API Key。
+                    if (selectedPresetId == null) ...[
+                      TextField(
+                        controller: nameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: '渠道名称',
+                          hintText: '如 OpenAI',
                         ),
-                      if (selectedPresetId != null) const SizedBox(height: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: urlCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Base URL',
+                          hintText: 'https://api.openai.com',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                     ],
-                    TextField(
-                      controller: nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: '渠道名称',
-                        hintText: '如 OpenAI',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: urlCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Base URL',
-                        hintText: 'https://api.openai.com',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
                     TextField(
                       controller: keyCtrl,
                       obscureText: obscureKey,
@@ -3508,33 +3583,34 @@ class SettingsPage extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: protocol,
-                      decoration: const InputDecoration(labelText: '协议类型'),
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'openai_chat',
-                          child: Text('OpenAI Chat'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'openai_response',
-                          child: Text('OpenAI Response'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'claude',
-                          child: Text('Claude'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'gemini',
-                          child: Text('Gemini'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'ollama',
-                          child: Text('Ollama'),
-                        ),
-                      ],
-                      onChanged: (v) => setDialogState(() => protocol = v!),
-                    ),
+                    if (selectedPresetId == null)
+                      DropdownButtonFormField<String>(
+                        initialValue: protocol,
+                        decoration: const InputDecoration(labelText: '协议类型'),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'openai_chat',
+                            child: Text('OpenAI Chat'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'openai_response',
+                            child: Text('OpenAI Response'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'claude',
+                            child: Text('Claude'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'gemini',
+                            child: Text('Gemini'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'ollama',
+                            child: Text('Ollama'),
+                          ),
+                        ],
+                        onChanged: (v) => setDialogState(() => protocol = v!),
+                      ),
                     const SizedBox(height: 24),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
@@ -3547,14 +3623,23 @@ class SettingsPage extends ConsumerWidget {
                         FilledButton(
                           onPressed: () async {
                             final channelDao = ref.read(channelDaoProvider);
-                            final name = nameCtrl.text.trim();
-                            final baseUrl = normalizeUrl(urlCtrl.text);
+                            // 内置预设锁定时名称 / Base URL / 协议以预设为准。
+                            final lockedPreset = selectedPresetId == null
+                                ? null
+                                : findModelProviderPreset(selectedPresetId!);
+                            final name =
+                                lockedPreset?.name ?? nameCtrl.text.trim();
+                            final baseUrl = normalizeUrl(
+                              lockedPreset?.baseUrl ?? urlCtrl.text,
+                            );
+                            final saveProtocol =
+                                lockedPreset?.protocol ?? protocol;
                             final apiKey = keyCtrl.text.trim();
                             final encryptedKey = KeyEncryptor.encrypt(apiKey);
                             final isNew = channel == null;
                             final channelId = channel?.id ?? const Uuid().v4();
                             final requiresApiKey = modelProtocolRequiresApiKey(
-                              protocol,
+                              saveProtocol,
                             );
 
                             if (name.isEmpty ||
@@ -3564,9 +3649,11 @@ class SettingsPage extends ConsumerWidget {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      requiresApiKey
-                                          ? '请完整填写渠道名称、Base URL 和 API Key'
-                                          : '请完整填写渠道名称和 Base URL',
+                                      lockedPreset != null
+                                          ? '请填写 API Key'
+                                          : (requiresApiKey
+                                                ? '请完整填写渠道名称、Base URL 和 API Key'
+                                                : '请完整填写渠道名称和 Base URL'),
                                     ),
                                   ),
                                 );
@@ -3580,7 +3667,7 @@ class SettingsPage extends ConsumerWidget {
                                 name: name,
                                 baseUrl: baseUrl,
                                 apiKeyEncrypted: encryptedKey,
-                                protocol: protocol,
+                                protocol: saveProtocol,
                               );
                             } else {
                               await channelDao.updateChannel(
@@ -3590,7 +3677,7 @@ class SettingsPage extends ConsumerWidget {
                                 apiKeyEncrypted: apiKey.isNotEmpty
                                     ? encryptedKey
                                     : null,
-                                protocol: protocol,
+                                protocol: saveProtocol,
                               );
                             }
                             refreshModels(ref);
@@ -3609,7 +3696,7 @@ class SettingsPage extends ConsumerWidget {
                                     name: name,
                                     baseUrl: baseUrl,
                                     apiKeyEncrypted: encryptedKey,
-                                    protocol: protocol,
+                                    protocol: saveProtocol,
                                     isEnabled: true,
                                     isDefault: false,
                                     createdAt:
@@ -3640,7 +3727,11 @@ class SettingsPage extends ConsumerWidget {
   ) {
     final modelCtrl = TextEditingController();
     final recommendedModels =
-        _findProviderPresetForChannel(channel)?.recommendedModels ?? const [];
+        findModelProviderPresetByBaseUrl(
+          channel.protocol,
+          channel.baseUrl,
+        )?.recommendedModels ??
+        const [];
     var capability = ModelCapability.chat;
     showDialog(
       context: context,
@@ -4285,6 +4376,7 @@ class SettingsPage extends ConsumerWidget {
     var enabled = config.enabled || hasSttEngine;
     var isSaving = false;
     String? errorText;
+    var language = config.language;
     var selectedPresetId =
         inferSpeechToTextPreset(
           baseUrl: config.baseUrl,
@@ -4367,11 +4459,32 @@ class SettingsPage extends ConsumerWidget {
                 TextField(
                   controller: modelController,
                   enabled: !isSaving,
+                  // 模型名决定是否显示识别语言下拉，输入后需重建。
+                  onChanged: isSaving ? null : (_) => setState(() {}),
                   decoration: const InputDecoration(
                     labelText: '模型',
                     hintText: 'whisper-1',
                   ),
                 ),
+                // mimo-v2.5-asr：识别语言选择。
+                if (isSimiRouterAsrModel(modelController.text)) ...[
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: language,
+                    decoration: const InputDecoration(
+                      labelText: '识别语言',
+                      helperText: '自动 / 中文 / 英文',
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'auto', child: Text('自动检测')),
+                      DropdownMenuItem(value: 'zh', child: Text('中文')),
+                      DropdownMenuItem(value: 'en', child: Text('英文')),
+                    ],
+                    onChanged: isSaving
+                        ? null
+                        : (value) => setState(() => language = value ?? 'auto'),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 TextField(
                   controller: apiKeyController,
@@ -4443,6 +4556,7 @@ class SettingsPage extends ConsumerWidget {
                               baseUrl: baseUrlController.text,
                               model: modelController.text,
                               apiKey: apiKeyController.text,
+                              language: language,
                             );
                         if (ctx.mounted) Navigator.pop(ctx);
                         if (context.mounted) {
@@ -4929,12 +5043,24 @@ class SettingsPage extends ConsumerWidget {
     required TextToSpeechConfig config,
   }) {
     final baseUrlController = TextEditingController(text: config.baseUrl);
-    final modelController = TextEditingController(text: config.model);
+    // mimo 模式识别大小写不敏感，但 Dropdown 的 value 必须与 items 精确
+    // 相等；旧配置若保存了大写模型名，先归一为规范值，避免打开弹窗时
+    // 触发 DropdownButton 的唯一 value 断言。
+    final modelController = TextEditingController(
+      text: simiRouterTtsModeOf(config.model) == null
+          ? config.model
+          : config.model.trim().toLowerCase(),
+    );
     final voiceController = TextEditingController(text: config.voice);
     final apiKeyController = TextEditingController();
+    final styleController = TextEditingController(text: config.style);
     var enabled = config.enabled || hasTtsEngine;
     var isSaving = false;
     String? errorText;
+    var speed = double.tryParse(config.speed) ?? 1.0;
+    var responseFormat = config.responseFormat;
+    String? referenceAudioPath = config.referenceAudioPath;
+    String? referenceAudioName = config.referenceAudioPath?.split('/').last;
     var selectedPresetId =
         inferTextToSpeechPreset(
           baseUrl: config.baseUrl,
@@ -4964,7 +5090,7 @@ class SettingsPage extends ConsumerWidget {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('启用 TTS 语音播报'),
-                  subtitle: const Text('点击 AI 回复下方播报按钮时生成临时 mp3 并调用系统播放。'),
+                  subtitle: const Text('点击 AI 回复下方播报按钮时生成临时音频并调用系统播放。'),
                   value: enabled,
                   onChanged: isSaving
                       ? null
@@ -5015,24 +5141,180 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: modelController,
-                  enabled: !isSaving,
-                  decoration: const InputDecoration(
-                    labelText: '模型',
-                    hintText: 'tts-1',
+                if (simiRouterTtsModeOf(modelController.text) != null)
+                  DropdownButtonFormField<String>(
+                    initialValue: modelController.text,
+                    decoration: const InputDecoration(
+                      labelText: '模型（SimiRouter）',
+                      helperText: '三种 mimo 模式：合成 / 声音设计 / 声音克隆',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'mimo-v2.5-tts',
+                        child: Text('mimo-v2.5-tts · 语音合成'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'mimo-v2.5-tts-voicedesign',
+                        child: Text('mimo-v2.5-tts-voicedesign · 声音设计'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'mimo-v2.5-tts-voiceclone',
+                        child: Text('mimo-v2.5-tts-voiceclone · 声音克隆'),
+                      ),
+                    ],
+                    onChanged: isSaving
+                        ? null
+                        : (value) {
+                            setState(() {
+                              modelController.text =
+                                  value ?? modelController.text;
+                              if (value == 'mimo-v2.5-tts' &&
+                                  !kSimiRouterTtsVoices.any(
+                                    (v) => v.value == voiceController.text,
+                                  )) {
+                                // 切回合成模式时确保音色在预设列表内。
+                                voiceController.text = 'alloy';
+                              }
+                            });
+                          },
+                  )
+                else
+                  TextField(
+                    controller: modelController,
+                    enabled: !isSaving,
+                    decoration: const InputDecoration(
+                      labelText: '模型',
+                      hintText: 'tts-1',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: voiceController,
-                  enabled: !isSaving,
-                  decoration: const InputDecoration(
-                    labelText: '音色',
-                    hintText: 'alloy',
-                    helperText: '仅允许字母、数字、点、下划线和短横线',
+                if (simiRouterTtsModeOf(modelController.text) ==
+                    SimiRouterTtsMode.standard) ...[
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue:
+                        kSimiRouterTtsVoices.any(
+                          (v) => v.value == voiceController.text,
+                        )
+                        ? voiceController.text
+                        : 'alloy',
+                    decoration: const InputDecoration(
+                      labelText: '音色',
+                      helperText: '8 种预设音色',
+                    ),
+                    items: [
+                      for (final voice in kSimiRouterTtsVoices)
+                        DropdownMenuItem(
+                          value: voice.value,
+                          child: Text(voice.label),
+                        ),
+                    ],
+                    onChanged: isSaving
+                        ? null
+                        : (value) {
+                            setState(
+                              () => voiceController.text = value ?? 'alloy',
+                            );
+                          },
                   ),
-                ),
+                ] else if (simiRouterTtsModeOf(modelController.text) == null)
+                  TextField(
+                    controller: voiceController,
+                    enabled: !isSaving,
+                    decoration: const InputDecoration(
+                      labelText: '音色',
+                      hintText: 'alloy',
+                      helperText: '仅允许字母、数字、点、下划线和短横线',
+                    ),
+                  ),
+                // 声音设计模式：风格描述。
+                if (simiRouterTtsModeOf(modelController.text) ==
+                    SimiRouterTtsMode.voiceDesign) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: styleController,
+                    enabled: !isSaving,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: '声音风格描述',
+                      hintText: '如：温柔自然的年轻女声，普通话标准',
+                    ),
+                  ),
+                ],
+                // 声音克隆模式：参考音频选择。
+                if (simiRouterTtsModeOf(modelController.text) ==
+                    SimiRouterTtsMode.voiceClone) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.audio_file_outlined, size: 18),
+                    label: Text(
+                      referenceAudioName == null
+                          ? '选择参考音频（wav）'
+                          : '参考音频：$referenceAudioName',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            final result = await FilePicker.platform.pickFiles(
+                              // file_picker 只有 FileType.custom 才允许同时
+                              // 传 allowedExtensions；否则真机会直接拒绝调用。
+                              type: FileType.custom,
+                              allowedExtensions: ['wav'],
+                              allowMultiple: false,
+                            );
+                            final path = result?.files.single.path;
+                            if (path == null || !ctx.mounted) return;
+                            setState(() {
+                              referenceAudioPath = path;
+                              referenceAudioName = path.split('/').last;
+                            });
+                          },
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '最大 10 MB；保存配置时会复制到应用私有目录，原文件后续移动或删除不影响使用。',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ],
+                // mimo 模式通用：语速 + 输出格式。
+                if (simiRouterTtsModeOf(modelController.text) != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Text(
+                        '语速 ${speed.toStringAsFixed(2)}x',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: speed.clamp(
+                            kSimiRouterTtsMinSpeed,
+                            kSimiRouterTtsMaxSpeed,
+                          ),
+                          min: kSimiRouterTtsMinSpeed,
+                          max: kSimiRouterTtsMaxSpeed,
+                          divisions: 60,
+                          label: speed.toStringAsFixed(2),
+                          onChanged: isSaving
+                              ? null
+                              : (value) => setState(() => speed = value),
+                        ),
+                      ),
+                    ],
+                  ),
+                  DropdownButtonFormField<String>(
+                    initialValue: responseFormat,
+                    decoration: const InputDecoration(labelText: '输出格式'),
+                    items: [
+                      for (final format in kSimiRouterTtsResponseFormats)
+                        DropdownMenuItem(value: format, child: Text(format)),
+                    ],
+                    onChanged: isSaving
+                        ? null
+                        : (value) =>
+                              setState(() => responseFormat = value ?? 'mp3'),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 TextField(
                   controller: apiKeyController,
@@ -5105,6 +5387,10 @@ class SettingsPage extends ConsumerWidget {
                               model: modelController.text,
                               voice: voiceController.text,
                               apiKey: apiKeyController.text,
+                              speed: speed.toStringAsFixed(2),
+                              responseFormat: responseFormat,
+                              style: styleController.text,
+                              referenceAudioPath: referenceAudioPath,
                             );
                         if (ctx.mounted) Navigator.pop(ctx);
                         if (context.mounted) {
@@ -5129,6 +5415,7 @@ class SettingsPage extends ConsumerWidget {
       modelController.dispose();
       voiceController.dispose();
       apiKeyController.dispose();
+      styleController.dispose();
     });
   }
 
@@ -7890,11 +8177,13 @@ class SettingsPage extends ConsumerWidget {
             title: Text(server.name),
             subtitle: Text(
               [
-                server.transport == kMcpTransportAppNative
+                isMobileMcpPlatform && isPcOnlyMcpConfig(server)
+                    ? '仅 PC · 需要 Docker/Podman'
+                    : server.transport == kMcpTransportAppNative
                     ? 'App 内建 · 无需 Node/npx/Python · 移动端/PC 直接运行'
                     : server.transport == kMcpTransportStdio
                     ? isMobileMcpPlatform
-                          ? '移动端不支持 stdio · 请改用 App 内建或 SSE'
+                          ? mobileStdioDescription(server)
                           : '${server.command} ${(server.args ?? []).join(' ')}'
                     : server.url ?? '',
                 if (manager.isConnected(server.id))
@@ -7918,12 +8207,20 @@ class SettingsPage extends ConsumerWidget {
               children: [
                 Switch(
                   value: server.isEnabled,
-                  onChanged: (v) async {
-                    await manager.updateServer(server.copyWith(isEnabled: v));
+                  onChanged: isMobileMcpPlatform && isPcOnlyMcpConfig(server)
+                      ? null
+                      : (v) async {
+                    final updated = server.copyWith(isEnabled: v);
+                    await manager.updateServer(updated);
                     if (v) {
                       try {
-                        await manager.connectServer(server);
+                        await manager.connectServer(updated);
                       } catch (e) {
+                        // Do not persist a broken enabled row. Otherwise the
+                        // next cold start repeats the same failed handshake.
+                        await manager.updateServer(
+                          updated.copyWith(isEnabled: false),
+                        );
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('MCP 连接失败: $e')),
@@ -7974,11 +8271,10 @@ class SettingsPage extends ConsumerWidget {
         value: kMcpTransportAppNative,
         child: Text('App 内建（移动端/PC 直接运行）'),
       ),
-      if (!isMobileMcpPlatform)
-        const DropdownMenuItem(
-          value: kMcpTransportStdio,
-          child: Text('Stdio（PC 高级 / Runtime）'),
-        ),
+      const DropdownMenuItem(
+        value: kMcpTransportStdio,
+        child: Text('Stdio（移动兼容 / 内置 Runtime）'),
+      ),
       const DropdownMenuItem(value: kMcpTransportSse, child: Text('SSE（远程服务）')),
     ];
 
@@ -8014,6 +8310,14 @@ class SettingsPage extends ConsumerWidget {
                     style: TextStyle(fontSize: 12),
                   ),
                 ] else if (transport == kMcpTransportStdio) ...[
+                  if (isMobileMcpPlatform)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        '移动端支持已审核适配器和移动扩展；不会启动手机外部命令。',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
                   TextField(
                     controller: commandCtrl,
                     decoration: const InputDecoration(
@@ -8069,6 +8373,7 @@ class SettingsPage extends ConsumerWidget {
                 try {
                   await manager.connectServer(config);
                 } catch (e) {
+                  await manager.updateServer(config.copyWith(isEnabled: false));
                   if (ctx.mounted) {
                     ScaffoldMessenger.of(
                       ctx,
@@ -8177,33 +8482,21 @@ String _formatDreamingMessageCoverage(DreamingDigest digest) {
   return '${digest.originalMessageCount} 条消息';
 }
 
-ModelProviderPreset? _findProviderPresetForChannel(ModelChannel channel) {
-  final channelBaseUrl = _normalizeProviderBaseUrl(channel.baseUrl);
-  for (final preset in kModelProviderPresets) {
-    if (preset.protocol != channel.protocol) continue;
-    if (_normalizeProviderBaseUrl(preset.baseUrl) == channelBaseUrl) {
-      return preset;
-    }
-  }
-  return null;
-}
-
-String _normalizeProviderBaseUrl(String value) {
-  var normalized = value.trim();
-  while (normalized.endsWith('/') && normalized.length > 1) {
-    normalized = normalized.substring(0, normalized.length - 1);
-  }
-  return normalized;
-}
-
+/// 推广卡片内的能力要点标签：小图标 + 短文案。
 class _ProviderPresetHint extends StatelessWidget {
   final ModelProviderPreset preset;
+  final VoidCallback? onOpenSignUp;
+  final VoidCallback? onOpenDocs;
 
-  const _ProviderPresetHint({required this.preset});
+  const _ProviderPresetHint({
+    required this.preset,
+    this.onOpenSignUp,
+    this.onOpenDocs,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+  bool get _isSimiRouter => preset.id == 'dwchainless';
+
+  Widget _buildSimiRouterHint(BuildContext context, ColorScheme scheme) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -8217,13 +8510,129 @@ class _ProviderPresetHint extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                preset.openAiCompatible
-                    ? Icons.hub_outlined
-                    : getProtocolIcon(preset.protocol),
-                size: 16,
-                color: scheme.primary,
+              if (preset.logoAsset != null)
+                CircleAvatar(
+                  radius: 9,
+                  backgroundColor: scheme.surface,
+                  backgroundImage: AssetImage(preset.logoAsset!),
+                )
+              else
+                Icon(
+                  getProviderIcon(preset.id),
+                  size: 18,
+                  color: scheme.primary,
+                ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  preset.name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                  ),
+                ),
               ),
+              Text(
+                '推荐接入',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '填写 API Key 即可完成接入。还没有 Key？先注册，注册页会在应用内打开。',
+            style: TextStyle(fontSize: 12),
+          ),
+          if (preset.recommendedModels.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '推荐模型 · ${preset.recommendedModels.join('、')}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '复制推荐模型名',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.copy_outlined, size: 16),
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: preset.recommendedModels.join('\n')),
+                    );
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context)
+                      ..clearSnackBars()
+                      ..showSnackBar(const SnackBar(content: Text('推荐模型名已复制')));
+                  },
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: onOpenSignUp,
+                icon: const Icon(Icons.person_add_alt_1, size: 16),
+                label: const Text('获取 Key'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onOpenDocs,
+                icon: const Icon(Icons.language, size: 16),
+                label: const Text('访问官网'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (_isSimiRouter) {
+      return _buildSimiRouterHint(context, scheme);
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (preset.logoAsset != null)
+                CircleAvatar(
+                  radius: 8,
+                  backgroundColor: scheme.surface,
+                  backgroundImage: AssetImage(preset.logoAsset!),
+                )
+              else
+                Icon(
+                  getProviderIcon(preset.id),
+                  size: 16,
+                  color: scheme.primary,
+                ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -8271,11 +8680,13 @@ class _ProviderPresetHint extends StatelessWidget {
               ),
             ),
           ],
-          const SizedBox(height: 6),
-          SelectableText(
-            preset.docsUrl,
-            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-          ),
+          if (!_isSimiRouter) ...[
+            const SizedBox(height: 6),
+            SelectableText(
+              preset.docsUrl,
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          ],
           Align(
             alignment: Alignment.centerRight,
             child: Wrap(
@@ -8284,22 +8695,7 @@ class _ProviderPresetHint extends StatelessWidget {
               children: [
                 if (preset.signUpUrl != null)
                   TextButton.icon(
-                    onPressed: () async {
-                      final opened = await ProviderScope.containerOf(
-                        context,
-                      ).read(externalUrlOpenerProvider).open(preset.signUpUrl!);
-                      if (!context.mounted) return;
-                      if (opened) return;
-                      await Clipboard.setData(
-                        ClipboardData(text: preset.signUpUrl!),
-                      );
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context)
-                        ..clearSnackBars()
-                        ..showSnackBar(
-                          const SnackBar(content: Text('无法打开注册链接，已复制到剪贴板')),
-                        );
-                    },
+                    onPressed: onOpenSignUp,
                     icon: const Icon(Icons.person_add_alt_1, size: 16),
                     label: const Text('去注册'),
                   ),

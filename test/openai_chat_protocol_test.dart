@@ -115,6 +115,63 @@ void main() {
       expect(jsonEncode(payload), isNot(contains('input_audio')));
     });
 
+    test('sends image attachments as OpenAI image_url data URLs', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'simichat_openai_image_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      });
+      final image = File('${tempDir.path}/photo.png');
+      const imageBytes = [0x89, 0x50, 0x4e, 0x47];
+      await image.writeAsBytes(imageBytes);
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seenPayload = Completer<Map<String, dynamic>>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          seenPayload.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: {"choices":[{"delta":{"content":"seen"}}]}\n\n',
+          );
+          await request.response.close();
+        }),
+      );
+
+      final chunks = await OpenAiChatProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}/v1',
+            apiKey: 'test-key',
+            model: 'gpt-vision-test',
+            messages: [
+              AiMessage(
+                role: 'user',
+                content: '描述图片',
+                attachments: [Attachment(type: 'image', path: image.path)],
+              ),
+            ],
+          )
+          .toList();
+
+      expect(chunks.single.content, 'seen');
+      final payload = await seenPayload.future;
+      final messages = payload['messages'] as List<dynamic>;
+      final content =
+          (messages.single as Map<String, dynamic>)['content'] as List<dynamic>;
+      expect(content.first, {'type': 'text', 'text': '描述图片'});
+      final imagePart = content.last as Map<String, dynamic>;
+      expect(imagePart['type'], 'image_url');
+      expect(imagePart['image_url'], {
+        'url': 'data:image/png;base64,${base64Encode(imageBytes)}',
+      });
+    });
+
     test(
       'cancels SSE cancel token when stream subscription is cancelled',
       () async {

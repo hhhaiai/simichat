@@ -11,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  /// 设置页首部的 DW Chainless 推广卡片增加了页首高度，操作下方 tile 前先滚动到可见。
+  /// 设置页首部的 SimiRouter AI 推广卡片增加了页首高度，操作下方 tile 前先滚动到可见。
   Future<void> scrollToVisible(WidgetTester tester, Finder finder) async {
     await tester.scrollUntilVisible(
       finder,
@@ -141,8 +141,12 @@ void main() {
 
       expect(find.text('OpenAI 兼容预设'), findsOneWidget);
       expect(find.text('DeepSeek'), findsWidgets);
-      expect(find.text('https://api.deepseek.com/v1'), findsOneWidget);
+      expect(find.text('https://api.deepseek.com/v1'), findsNothing);
       expect(find.textContaining('DeepSeek OpenAI 兼容接口'), findsOneWidget);
+      // 内置预设一键接入：只保留 API Key 输入框，名称 / Base URL / 协议隐藏。
+      expect(find.text('API Key'), findsOneWidget);
+      expect(find.text('渠道名称'), findsNothing);
+      expect(find.text('协议类型'), findsNothing);
     },
   );
 

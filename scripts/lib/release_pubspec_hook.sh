@@ -46,6 +46,12 @@ else:
 p.write_text(s)
 PY
 
+  if [[ "$remove_integration_test" == '1' ]]; then
+    # Flutter keeps this ignored generated file across pub-spec changes. Force
+    # the next Android build to regenerate it without integration_test.
+    rm -f android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+  fi
+
   "${FLUTTER_BIN:-flutter}" --no-version-check pub get
 }
 

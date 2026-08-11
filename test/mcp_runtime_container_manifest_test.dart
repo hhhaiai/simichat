@@ -29,6 +29,10 @@ void main() {
 
     expect(server, contains('mcp\\/sse'));
     expect(server, contains('mcp/messages/'));
+    expect(server, contains('/runtime/stdio/start'));
+    expect(server, contains('/stdin'));
+    expect(server, contains('jsonl'));
+    expect(server, contains('processStdioLine'));
     expect(server, contains('tools/list'));
     expect(server, contains('tools/call'));
     expect(server, contains("typeof payload === 'string'"));
@@ -36,6 +40,7 @@ void main() {
     expect(server, contains('simichat.fs_list'));
     expect(server, contains('simichat.fs_read_text'));
     expect(server, contains('simichat.fetch_text'));
+    expect(server, contains('mobileNpxPackages'));
     expect(server, contains('MCP_RUNTIME_WORKSPACE_ROOT'));
     expect(
       server,
@@ -74,15 +79,20 @@ void main() {
     },
   );
 
-  test('marketplace does not auto-enable legacy stdio npx entries', () {
+  test('marketplace enables audited mobile-compatible stdio entries', () {
     final pageSource = File(
       'lib/features/marketplace/marketplace_page.dart',
     ).readAsStringSync();
 
-    expect(pageSource, contains('final usesExternalRuntime = item.isStdio;'));
+    expect(
+      pageSource,
+      contains(
+        'final usesExternalRuntime = item.isStdio && !mobileCompatibleStdio;',
+      ),
+    );
     expect(pageSource, contains('isEnabled: !usesExternalRuntime'));
     expect(pageSource, contains('connected || usesExternalRuntime'));
-    expect(pageSource, contains('优先使用 SimiChat Node 容器 Runtime'));
+    expect(pageSource, contains('该 stdio 服务需要移动兼容包'));
   });
 
   test(

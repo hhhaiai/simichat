@@ -103,8 +103,80 @@ void main() {
     expect(payload['externalProcess'], isFalse);
   });
 
+  test('McpManager persists an enabled toggle without reconnecting', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final manager = McpManager(db.mcpDao);
+    addTearDown(manager.dispose);
+    await manager.ready;
+
+    const config = McpServerConfig(
+      id: 'toggle-mcp',
+      name: 'Toggle MCP',
+      transport: kMcpTransportAppNative,
+      isEnabled: false,
+    );
+    await manager.addServer(config);
+    await manager.connectServer(config);
+    expect(manager.isConnected(config.id), isTrue);
+
+    await manager.setServerEnabled(config.id, false);
+    expect(manager.state.single.isEnabled, isFalse);
+    expect((await db.mcpDao.getAllServers()).single.isEnabled, isFalse);
+    expect(manager.isConnected(config.id), isTrue);
+
+    await manager.setServerEnabled(config.id, true);
+    expect(manager.state.single.isEnabled, isTrue);
+    expect((await db.mcpDao.getAllServers()).single.isEnabled, isTrue);
+  });
+
+  test('McpManager connects audited stdio adapter on mobile', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final manager = McpManager(db.mcpDao, mobilePlatform: true);
+    addTearDown(manager.dispose);
+    await manager.ready;
+
+    const config = McpServerConfig(
+      id: 'mobile-stdio-time',
+      name: '移动端时间 stdio',
+      transport: kMcpTransportStdio,
+      command: 'npx',
+      args: ['--yes', '@modelcontextprotocol/server-time@latest'],
+    );
+
+    await manager.connectServer(config);
+
+    expect(manager.isConnected(config.id), isTrue);
+    expect(mobileStdioDescription(config), '移动端 stdio · 内置 Runtime');
+    final result = await manager.callTool(config.id, 'simichat.now', {});
+    expect(result.isError, isFalse);
+  });
+
+  test('mobile node extension keeps stdio semantics in its server row', () {
+    const config = McpServerConfig(
+      id: 'mobile-extension-stdio',
+      name: '移动扩展 stdio',
+      transport: kMcpTransportStdio,
+      marketplaceId: 'mobile-extension:weather-mobile',
+      headers: {
+        kMobileExtensionRootConfigKey: '/app/extensions/weather-mobile',
+        kMobileExtensionEntryConfigKey: 'index.mjs',
+        kMobileExtensionProtocolConfigKey: 'stdio-compat-v1',
+        kMobileExtensionSha256ConfigKey:
+            '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      },
+    );
+
+    expect(hasMobileExtensionRegistrationMetadata(config), isTrue);
+    expect(mobileExtensionIdForMcpConfig(config), 'weather-mobile');
+    expect(mobileStdioDescription(config), '移动端 stdio · Node Runtime');
+  });
+
   test(
-    'McpManager rejects stdio on mobile before starting a process',
+    'McpManager gives an actionable error for unknown mobile stdio',
     () async {
       final db = AppDatabase.forTesting(NativeDatabase.memory());
       addTearDown(db.close);
@@ -126,7 +198,7 @@ void main() {
           isA<McpUnsupportedTransportException>().having(
             (error) => error.message,
             'message',
-            contains('移动端不支持 stdio'),
+            contains('移动端 stdio 需要随 App 分发的移动 Runtime'),
           ),
         ),
       );
@@ -155,7 +227,7 @@ void main() {
   });
 
   test(
-    'McpManager startup does not block on a legacy enabled mobile stdio row',
+    'McpManager startup does not block on an unknown enabled mobile stdio row',
     () async {
       final db = AppDatabase.forTesting(NativeDatabase.memory());
       addTearDown(db.close);
@@ -171,14 +243,39 @@ void main() {
       addTearDown(manager.dispose);
       await manager.ready;
 
-      expect(manager.state.single.isEnabled, isTrue);
+      expect(manager.state.single.isEnabled, isFalse);
       expect(
         manager.connectionErrorFor('legacy-mobile-stdio'),
-        contains('移动端不支持 stdio'),
+        contains('移动端 stdio 需要随 App 分发的移动 Runtime'),
       );
       expect(manager.isConnected('legacy-mobile-stdio'), isFalse);
     },
   );
+
+  test('McpManager migrates a stale PC container row off mobile', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.mcpDao.insertServer(
+      id: 'legacy-pc-container',
+      name: '旧版 PC 容器',
+      transport: kMcpTransportSse,
+      url: 'http://127.0.0.1:37651/mcp/sse/simichat-node',
+      marketplaceId: kContainerMcpServerId,
+      isEnabled: true,
+    );
+
+    final manager = McpManager(db.mcpDao, mobilePlatform: true);
+    addTearDown(manager.dispose);
+    await manager.ready;
+
+    expect(manager.state.single.isEnabled, isFalse);
+    expect(manager.isConnected('legacy-pc-container'), isFalse);
+    expect(
+      manager.connectionErrorFor('legacy-pc-container'),
+      contains('仅支持 PC'),
+    );
+    expect((await db.mcpDao.getAllServers()).single.isEnabled, isFalse);
+  });
 
   test(
     'McpClient dispose is idempotent after app-native initialization',

@@ -11,16 +11,30 @@ import '../../shared/providers/mobile_extension_provider.dart';
 import '../../shared/providers/mcp_provider.dart';
 import '../../shared/providers/skill_provider.dart';
 
-/// Local package manager for Android / iOS MCP, Skill and Agent packages.
+/// Local package manager for verified MCP, Skill and Agent packages.
 class MobileExtensionsPage extends ConsumerWidget {
   const MobileExtensionsPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (!isAppManagedMcpExtensionPlatform) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('本地扩展')),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              '当前平台没有 App-owned MCP Runtime。\n请使用 App 内建工具或远程 SSE 服务。',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
     final extensions = ref.watch(installedMobileExtensionsProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('移动端扩展'),
+        title: const Text('本地扩展'),
         actions: [
           IconButton(
             tooltip: '导入扩展包',
@@ -33,7 +47,9 @@ class MobileExtensionsPage extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('读取扩展失败：$error')),
         data: (records) => records.isEmpty
-            ? const Center(child: Text('还没有扩展。点击右上角导入经过校验的 package JSON。'))
+            ? const Center(
+                child: Text('还没有扩展。点击右上角导入并完成哈希完整性检查的 package JSON。'),
+              )
             : ListView.separated(
                 padding: const EdgeInsets.all(16),
                 itemCount: records.length,
@@ -147,16 +163,25 @@ class MobileExtensionsPage extends ConsumerWidget {
   ) async {
     final manifest = record.manifest;
     final enabled = !record.enabled;
+    final managedMcp =
+        manifest.type == MobileExtensionType.mcp &&
+        (manifest.mcpTransport == 'app_native' ||
+            manifest.runtime == MobileExtensionRuntime.nodeMobile);
     try {
-      await ref
-          .read(mobileExtensionServiceProvider)
-          .setEnabled(manifest.id, enabled);
+      final extensionService = ref.read(mobileExtensionServiceProvider);
+      // For enable, mark the registry first so a process interruption before
+      // the handshake leaves a safe disabled MCP row. For disable, do the
+      // reverse: stop and persist the MCP row first, then mark the registry
+      // disabled. This prevents a crash window where the UI says disabled but
+      // McpManager still auto-connects the extension on the next launch.
+      if (!managedMcp || enabled) {
+        await extensionService.setEnabled(manifest.id, enabled);
+      }
       if (manifest.type == MobileExtensionType.skill) {
         await ref.read(skillDaoProvider).toggleEnabled(manifest.id, enabled);
         ref.invalidate(skillsProvider);
         ref.invalidate(enabledSkillsProvider);
-      } else if (manifest.type == MobileExtensionType.mcp &&
-          manifest.mcpTransport == 'app_native') {
+      } else if (managedMcp) {
         final serverId = 'mobile-extension-${manifest.id}';
         final manager = ref.read(mcpManagerProvider.notifier);
         if (enabled) {
@@ -164,15 +189,44 @@ class MobileExtensionsPage extends ConsumerWidget {
               .read(mcpManagerProvider)
               .where((server) => server.id == serverId)
               .toList(growable: false);
-          if (config.isNotEmpty) {
-            await manager.connectServer(config.first);
+          if (config.isEmpty) {
+            throw StateError('找不到 MCP 配置，请重新安装该扩展');
+          }
+          var connected = false;
+          try {
+            // Keep the database row disabled until the handshake succeeds;
+            // otherwise a failed reconnect would be retried on every cold
+            // start even though the registry rollback below marks the
+            // package disabled.
+            await manager.connectServer(config.first.copyWith(isEnabled: true));
+            connected = true;
+            await manager.setServerEnabled(serverId, true);
+          } catch (_) {
+            if (connected) {
+              await manager.disconnectServer(serverId);
+            }
+            await manager.setServerEnabled(serverId, false);
+            rethrow;
           }
         } else {
           await manager.disconnectServer(serverId);
+          await manager.setServerEnabled(serverId, false);
+          await extensionService.setEnabled(manifest.id, false);
         }
       }
       ref.invalidate(installedMobileExtensionsProvider);
     } on Object catch (error) {
+      if (enabled && manifest.type == MobileExtensionType.mcp) {
+        // A failed reconnect must not leave the registry enabled. Otherwise
+        // every cold start retries the same broken extension indefinitely.
+        try {
+          await ref
+              .read(mobileExtensionServiceProvider)
+              .setEnabled(manifest.id, false);
+        } on Object catch (_) {
+          // Preserve the original connection error for the user.
+        }
+      }
       if (!context.mounted) return;
       _showMessage(context, '启用状态更新失败：$error');
     }

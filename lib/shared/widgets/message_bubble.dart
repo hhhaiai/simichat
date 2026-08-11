@@ -19,6 +19,9 @@ class MessageAttachmentView {
   final AudioTranscriptStatus? audioTranscriptStatus;
   final VoidCallback? onOpenAudioTranscript;
 
+  /// 图片长按回调（如“编辑此图”）。为 null 时图片无长按交互。
+  final VoidCallback? onEditImage;
+
   const MessageAttachmentView({
     required this.fileName,
     required this.fileType,
@@ -26,6 +29,7 @@ class MessageAttachmentView {
     this.localPath,
     this.audioTranscriptStatus,
     this.onOpenAudioTranscript,
+    this.onEditImage,
   });
 
   bool get isImage => fileType == 'image';
@@ -35,6 +39,8 @@ class MessageAttachmentView {
   bool get hasLocalPath => localPath != null && localPath!.isNotEmpty;
 
   bool get canOpenAudioTranscript => isAudio && onOpenAudioTranscript != null;
+
+  bool get canEditImage => isImage && onEditImage != null;
 }
 
 /// ChatGPT-style message row: assistant answers are plain content blocks;
@@ -419,7 +425,7 @@ class _ImageAttachmentPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final file = File(attachment.localPath!);
-    return Semantics(
+    final preview = Semantics(
       label:
           '图片附件 ${attachment.fileName} ${formatAttachmentSize(attachment.fileSize)}',
       child: Container(
@@ -494,6 +500,13 @@ class _ImageAttachmentPreview extends StatelessWidget {
           ],
         ),
       ),
+    );
+    if (!attachment.canEditImage) return preview;
+    // 图片长按：编辑此图（外部分发编辑对话框）。
+    return GestureDetector(
+      key: const ValueKey('edit-image-longpress'),
+      onLongPress: attachment.onEditImage,
+      child: preview,
     );
   }
 }

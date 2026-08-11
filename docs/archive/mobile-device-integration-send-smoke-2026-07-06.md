@@ -2,7 +2,7 @@
 
 ## 目标
 
-> **iOS 运行边界更新**：用户已明确 iOS 必须使用 release 版本，否则不能作为有效运行证明。因此本文件中的 iPhone13 debug / integration_test 记录只保留为排障历史；iOS 有效运行证明以 `scripts/smoke_ios_release_install_launch.sh` 和 `docs/mobile-device-install-smoke-2026-07-06.md` 的 release 结果为准。`scripts/smoke_device_integration_send.sh` 现在会拒绝 iOS 设备并提示改用 release smoke。
+> **iOS 运行边界更新**：用户已明确 iOS 必须使用 release 版本，否则不能作为有效运行证明。因此本文件中的 iPhone13 debug / integration_test 记录只保留为排障历史；iOS 有效运行证明以 `scripts/smoke_ios_release_install_launch.sh` 和 `docs/archive/mobile-device-install-smoke-2026-07-06.md` 的 release 结果为准。`scripts/smoke_device_integration_send.sh` 现在会拒绝 iOS 设备并提示改用 release smoke。
 
 
 补一个可重复执行的真机级发送验证入口，用设备内本地 OpenAI 兼容 mock 服务验证对话页真实链路：Flutter UI 输入 → `sendMessage` → OpenAI Chat SSE → assistant 落库 → UI 展示。
@@ -364,7 +364,7 @@ result.status=passed
 result.runId=ios-release-send-20260706121606
 ```
 
-详见 `docs/mobile-ios-release-send-smoke-2026-07-06.md`。
+详见 `docs/archive/mobile-ios-release-send-smoke-2026-07-06.md`。
 
 ## Android 真机复跑与 release 恢复（2026-07-06 15:07）
 

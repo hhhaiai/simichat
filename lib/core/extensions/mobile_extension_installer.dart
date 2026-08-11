@@ -35,7 +35,11 @@ class MobileExtensionInstallResult {
   final MobileExtensionRecord record;
 }
 
-/// Installs signed-by-hash, data-only mobile extension packages.
+/// Installs hash-checked, data-only mobile extension packages.
+///
+/// The entry hash proves package self-consistency.  Unless the caller also
+/// supplies an expected package hash, it is not a publisher signature or a
+/// trust decision; marketplace callers must pin that value before installing.
 ///
 /// This installer never invokes npm, npx, a shell, Docker, Podman or a
 /// downloaded executable. Node MCP packages are copied as JavaScript files and

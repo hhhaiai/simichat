@@ -126,7 +126,11 @@ class LatexMarkdownWidget extends StatelessWidget {
       child: MarkdownBody(
         data: _normalizeLegacyMarkdown(data),
         selectable: selectable,
-        builders: {'code': _CodeBlockBuilder(), 'math': _InlineMathBuilder()},
+        builders: {
+          'code': _CodeBlockBuilder(),
+          'math': _InlineMathBuilder(),
+          'table': _StyledTableBuilder(),
+        },
         inlineSyntaxes: [_InlineMathSyntax()],
         checkboxBuilder: _buildCheckbox,
         paddingBuilders: {
@@ -319,7 +323,6 @@ class LatexMarkdownWidget extends StatelessWidget {
     final quoteBg = isDark
         ? Colors.white.withValues(alpha: 0.04)
         : const Color(0xFFF8F9FA);
-    final quoteBorder = isDark ? Colors.white24 : const Color(0xFFD0D7DE);
     final tableBorder = isDark ? Colors.white24 : const Color(0xFFD0D7DE);
 
     return MarkdownStyleSheet(
@@ -335,21 +338,21 @@ class LatexMarkdownWidget extends StatelessWidget {
         fontSize: 22,
         height: 1.35,
         fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
+        color: scheme.primary,
       ),
       h1Padding: const EdgeInsets.fromLTRB(0, 10, 0, 14),
       h2: TextStyle(
         fontSize: 20,
         height: 1.4,
         fontWeight: FontWeight.w700,
-        color: scheme.onSurface,
+        color: scheme.primary.withValues(alpha: 0.85),
       ),
       h2Padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
       h3: TextStyle(
         fontSize: 18,
         height: 1.45,
         fontWeight: FontWeight.w600,
-        color: scheme.onSurface,
+        color: scheme.primary.withValues(alpha: 0.7),
       ),
       h3Padding: const EdgeInsets.fromLTRB(0, 8, 0, 10),
       h4: TextStyle(
@@ -390,7 +393,9 @@ class LatexMarkdownWidget extends StatelessWidget {
       blockquoteDecoration: BoxDecoration(
         color: quoteBg,
         borderRadius: BorderRadius.circular(10),
-        border: Border(left: BorderSide(color: quoteBorder, width: 4)),
+        border: Border(
+          left: BorderSide(color: scheme.primary.withValues(alpha: 0.6), width: 6),
+        ),
       ),
       listBullet: TextStyle(fontSize: 15, height: 1.6, color: scheme.onSurface),
       listIndent: 22,
@@ -969,6 +974,104 @@ class _FootnoteSectionPaddingBuilder extends MarkdownPaddingBuilder {
   @override
   EdgeInsets getPadding() =>
       _isFootnotes ? const EdgeInsets.fromLTRB(0, 16, 0, 0) : EdgeInsets.zero;
+}
+
+/// 自定义表格：表头行背景 + 斑马纹交替行 + 圆角边框。
+///
+/// flutter_markdown 默认表格只有边框，这里解析 `table/tr/th/td` 结构
+/// 渲染为视觉更清晰的样式；不支持的复杂结构（如合并单元格）按普通行渲染。
+class _StyledTableBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    final rows = <List<String>>[];
+    final isHeader = <bool>[];
+    final elementChildren = element.children ?? const <md.Node>[];
+    for (final row in elementChildren.whereType<md.Element>()) {
+      final cells = <String>[];
+      var header = false;
+      final rowChildren = row.children ?? const <md.Node>[];
+      for (final cell in rowChildren.whereType<md.Element>()) {
+        final tag = cell.tag.toLowerCase();
+        header = header || tag == 'th';
+        cells.add(cell.textContent.trim());
+      }
+      if (cells.isNotEmpty) {
+        rows.add(cells);
+        isHeader.add(header);
+      }
+    }
+    if (rows.isEmpty) return null;
+    return _StyledTable(rows: rows, isHeader: isHeader);
+  }
+}
+
+class _StyledTable extends StatelessWidget {
+  final List<List<String>> rows;
+  final List<bool> isHeader;
+
+  const _StyledTable({required this.rows, required this.isHeader});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? Colors.white24 : const Color(0xFFD0D7DE);
+    final headerBg = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : const Color(0xFFF0F2F5);
+    final zebraBg = isDark
+        ? Colors.white.withValues(alpha: 0.03)
+        : const Color(0xFFFAFBFC);
+
+    final columnCount = rows.map((r) => r.length).fold(0, (a, b) => a > b ? a : b);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor),
+      ),
+      child: Table(
+        border: TableBorder(
+          horizontalInside: BorderSide(color: borderColor, width: 0.5),
+          verticalInside: BorderSide(color: borderColor, width: 0.5),
+        ),
+        defaultColumnWidth: const FlexColumnWidth(),
+        children: [
+          for (var r = 0; r < rows.length; r++)
+            TableRow(
+              decoration: BoxDecoration(
+                color: isHeader[r]
+                    ? headerBg
+                    : (r.isOdd ? zebraBg : null),
+              ),
+              children: [
+                for (var c = 0; c < columnCount; c++)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      c < rows[r].length ? rows[r][c] : '',
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.65,
+                        color: scheme.onSurface,
+                        fontWeight: isHeader[r]
+                            ? FontWeight.w700
+                            : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CodeBlockBuilder extends MarkdownElementBuilder {

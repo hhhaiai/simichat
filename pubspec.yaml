@@ -62,9 +62,6 @@ dependencies:
   photo_view: ^0.15.0
   gal: ^2.3.0
 
-  # 外部链接跳转（注册 / 文档 / 鸣谢）
-  url_launcher: ^6.3.2
-
   # WebDAV PROPFIND 响应解析（云备份）
   xml: ^6.6.1
   flutter_localizations:
@@ -84,8 +81,14 @@ flutter:
   uses-material-design: true
   generate: true
   assets:
+    - assets/branding/simirouter.png
     - scripts/mcp_runtime_container.sh
     - tools/mcp_runtime/container/Dockerfile
     - tools/mcp_runtime/container/package.json
     - tools/mcp_runtime/container/runtime-server.mjs
     - tools/node_runtime/manifest.json
+
+hooks:
+  user_defines:
+    sqlite3:
+      source: system

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:ai_chat_app/core/archive/structured_data_backup.dart';
+import 'package:ai_chat_app/core/media/audio_transcription_service.dart';
 import 'package:ai_chat_app/core/media/speech_provider_preset.dart';
 import 'package:ai_chat_app/shared/providers/audio_transcription_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -87,6 +88,39 @@ void main() {
     expect(
       inferSpeechToTextPreset(baseUrl: state.baseUrl, model: state.model)?.id,
       'groq',
+    );
+  });
+
+  test('mimo asr language persists and validates', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await container.read(speechToTextConfigProvider.notifier).ready;
+
+    await container
+        .read(speechToTextConfigProvider.notifier)
+        .saveOpenAiCompatible(
+          enabled: true,
+          baseUrl: 'https://api.dwchainless.com',
+          model: 'mimo-v2.5-asr',
+          apiKey: 'test-key',
+          language: 'zh',
+        );
+    final config = container.read(speechToTextConfigProvider);
+    expect(config.language, 'zh');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(kSpeechToTextLanguageStorageKey), 'zh');
+
+    await expectLater(
+      container
+          .read(speechToTextConfigProvider.notifier)
+          .saveOpenAiCompatible(
+            enabled: true,
+            baseUrl: 'https://api.dwchainless.com',
+            model: 'mimo-v2.5-asr',
+            apiKey: 'test-key',
+            language: 'jp',
+          ),
+      throwsA(isA<AudioTranscriptionException>()),
     );
   });
 }

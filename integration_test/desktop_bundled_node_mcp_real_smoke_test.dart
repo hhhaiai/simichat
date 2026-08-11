@@ -1,7 +1,10 @@
 import 'dart:convert';
 
+import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/core/mcp/bundled_node_runtime.dart';
 import 'package:ai_chat_app/core/mcp/mcp_client.dart';
+import 'package:ai_chat_app/shared/providers/mcp_provider.dart';
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -39,7 +42,7 @@ void main() {
     expect(result.isError, isFalse);
     final info =
         jsonDecode(result.content.single.text!) as Map<String, dynamic>;
-    expect(info['runtime'], 'simichat-node-embedded');
+    expect(info['runtime'], 'simichat-node-desktop-bundled');
     expect(info['dependencyMode'], 'bundled_node');
     expect(info['externalProcess'], isTrue);
     expect(info['appManaged'], isTrue);
@@ -49,6 +52,37 @@ void main() {
 
     // ignore: avoid_print
     print('SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop audited npx profile uses bundled JSONL runtime', (
+    tester,
+  ) async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final manager = McpManager(db.mcpDao, mobilePlatform: false);
+    addTearDown(manager.dispose);
+    await manager.ready;
+
+    const config = McpServerConfig(
+      id: 'desktop-audited-stdio',
+      name: 'Desktop bundled time profile',
+      transport: kMcpTransportStdio,
+      command: 'npx',
+      args: ['--yes', '@modelcontextprotocol/server-time@latest'],
+      isEnabled: true,
+    );
+    await manager.addServer(config);
+    await manager.connectServer(config);
+    expect(manager.isConnected(config.id), isTrue);
+    final result = await manager.callTool(
+      config.id,
+      'simichat.now',
+      const <String, dynamic>{},
+    );
+    expect(result.isError, isFalse);
+    // ignore: avoid_print
+    print('SIMICHAT_DESKTOP_AUDITED_STDIO_MCP_READY');
     expect(tester.takeException(), isNull);
   });
 }

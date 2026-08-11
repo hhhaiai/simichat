@@ -22,17 +22,28 @@ void main() {
     expect(source, isNot(contains("import 'dart:io'")));
   });
 
-  test('normal app startup initializes mobile Dreaming background work', () {
-    final main = File('lib/main.dart').readAsStringSync();
-    final pubspec = File('pubspec.yaml').readAsStringSync();
+  test(
+    'normal app startup initializes mobile Dreaming background work after first frame',
+    () {
+      final main = File('lib/main.dart').readAsStringSync();
+      final pubspec = File('pubspec.yaml').readAsStringSync();
 
-    expect(pubspec, contains('workmanager:'));
-    expect(main, contains('syncDreamingBackgroundScheduleFromStorage'));
-    expect(
-      main.indexOf('syncDreamingBackgroundScheduleFromStorage'),
-      lessThan(main.indexOf('runApp(const ProviderScope')),
-    );
-  });
+      expect(pubspec, contains('workmanager:'));
+      expect(main, contains('syncDreamingBackgroundScheduleFromStorage'));
+      // 后台任务调度不能阻塞 iOS/Android 的 Flutter 首帧；AppBootstrap 在首帧
+      // 呈现后才调度它，同时仍使用 Provider 管理的正常应用数据库。
+      expect(
+        main,
+        contains('runApp(const ProviderScope(child: AppBootstrap()))'),
+      );
+      expect(main, contains('WidgetsBinding.instance.addPostFrameCallback'));
+      expect(main, contains('runDeferredAppStartupTasks'));
+      expect(
+        main,
+        contains('unawaited(runStartupTasks(ref.read(databaseProvider)))'),
+      );
+    },
+  );
 
   test('Dreaming settings reschedule mobile system background work', () {
     final settings = File(

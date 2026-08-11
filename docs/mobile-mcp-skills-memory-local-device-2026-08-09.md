@@ -34,8 +34,9 @@ scripts/smoke_device_mobile_mcp_skills_memory_local.sh
 4. Key Point 使用生产 `KeyPointMemoryNotifier` 写入隔离的真实 SharedPreferences key，
    重建 notifier 后重新加载和召回。
 5. MCP / Skills / 记忆移动端页面、搜索索引和全局搜索结果在真实 UI 中可见。
-6. App 内置 NodeMobile、纯 JS MCP、`stdio-compat-v1` 和 legacy npx in-process
-   adapter 继续通过。
+6. App 内置 NodeMobile、纯 JS MCP、旧 `stdio-compat-v1` 和 legacy npx in-process
+   adapter 继续通过；标准 `stdio-v1` JSONL session 的独立真机证据见
+   `docs/mobile-node-mcp-runtime-2026-08-09.md`。
 
 `KeyPointMemoryNotifier` 新增可选 `storageKey`，生产默认值保持
 `key_point_memory_v1` 不变；真机测试使用隔离 key，结束后删除，不覆盖用户记忆。

@@ -1,6 +1,6 @@
 # 当前项目状态
 
-> **更新时间：2026-08-09**
+> **更新时间：2026-08-10**
 >
 > 本文档是当前状态的快速事实摘要。项目目标、长期待办和历史账本以根目录 `AGENTS.md` 为准；安装和使用入口以根目录 `README.md` 为准；具体实现方案以本目录专题文档为准；本次验证命令与结果以 `verification-baseline-2026-08-08.md` 为准；移动端 MCP / Skills / 记忆专项以 `mobile-mcp-skills-memory-quality-2026-08-08.md` 和 `mobile-mcp-skills-memory-local-device-2026-08-09.md` 为准；Node-Mobile 最新构建与真机边界以 `mobile-node-mcp-runtime-2026-08-09.md` 为准。
 
@@ -11,7 +11,7 @@
 | Dart / Flutter 代码 | 已完成本轮本地模型修复及相关整理 | 静态分析通过 |
 | 本地 Ollama 配置 | 已支持无 API Key，自动获取模型时默认勾选 `gemma4` | 设置页、模型预设、模型列表选择逻辑有回归覆盖 |
 | Ollama 协议 | 已处理 NDJSON、thinking/content、取消、超时、非 200 响应和可选 Bearer 鉴权 | mock HTTP 协议测试通过 |
-| 移动端 MCP | App Native、内置 Node-Mobile、stdio compatibility adapter、SSE 生命周期和设置页入口已收口 | Pixel 8 / iPhone13 纯本地统一 suite 均通过，逻辑专项各 175 项通过 |
+| 移动端 MCP | App Native、内置 Node-Mobile、标准 JSONL stdio session、SSE 生命周期和设置页入口已收口 | `test/mobile_stdio_transport_test.dart` 已覆盖真实 runtime-server 的 stdin/stdout 链路；Android Pixel 8 / iPhone13 均已通过 `SIMICHAT_MOBILE_STDIO_PROTOCOL_DEVICE_READY` |
 | App Native MCP 真机运行 | 在 App 进程内完成 MCP 初始化、工具发现和 `simichat.runtime_info` / `simichat.now` 调用，不依赖外部环境 | Pixel 8 / iPhone13 各 1 项真实设备 smoke 通过 |
 | Android 内置 Node MCP | APK 内置 `nodejs-mobile v18.20.4`、`arm64-v8a/libnode.so` 和 JNI bridge；MCP server 由 APK 内 Node 执行 | Pixel 8 真机 initialize、tools/list、runtime_info、echo 通过；当前只覆盖 arm64-v8a |
 | PC 内置 Node MCP | App 只启动随包 Node binary，不回退宿主机 `node` / `npx` / Docker / Podman | bundled Node 真实进程 smoke 与 macOS Flutter App integration 通过；macOS/Xcode、Linux/CMake、Windows/CMake 将 binary 放入 App 安装目录；运行时输出 `SIMICHAT_DESKTOP_BUNDLED_NODE_MCP_READY` |
@@ -19,9 +19,13 @@
 | 移动端 Skills | 本地缓存恢复、package / entry SHA-256、原子安装、registry 重载、下载边界和搜索竞态已收口 | Pixel 8 / iPhone13 已直接安装本地 package bytes、启用并在 installer 重建后恢复；不依赖 Marketplace / HTTP |
 | 移动端记忆 | Key Point、真实 SQLite 文件重开、FTS、semantic、SharedPreferences 重载、索引预热 / 修复和搜索竞态已收口 | Pixel 8 / iPhone13 纯本地真机 marker、全局搜索 UI 和各 175 项逻辑专项通过 |
 | 移动端扩展包协议 | MCP / Skill / Agent 共用 manifest、SHA-256、权限 allowlist、原子安装、registry、quarantine；Skill / Agent / App Native MCP 已接入 shared provider | `test/mobile_extension_installer_test.dart` 通过；Android Pixel 8 / iPhone13 真机扩展包 smoke 均输出 `SIMICHAT_MOBILE_EXTENSIONS_APP_NATIVE_READY` |
+| 内置渠道一键接入 | 选中厂商预设后名称 / Base URL / 协议由预设锁定，只保留 API Key 输入框；渠道列表与模型选择器按厂商品牌图标显示；SimiRouter 预设提示收敛为品牌、推荐模型和两个主动作 | 设置页回归测试覆盖预设锁定、隐藏字段、无地址文案与内置 H5 入口；`flutter analyze` 通过 |
+| 识图 / 深度思考门禁 | 图片附件与深度思考都只路由本次请求，不永久改写会话默认模型；图片自动选当前渠道 Vision，无 Vision 时阻止并保留图片 / 输入；深度思考自动选 reasoner，无 reasoner 时阻止并保留输入；Vision 与 Reasoner 可重叠判定，短代号与上下文预算按分隔符匹配；显式 embedding 否决宽泛名称提示，reasoner 纳入聊天模型查询 | Widget / DAO / context budget 回归覆盖支持 / 不支持分支、默认模型不变、reasoner-only 渠道、embedding / 短代号误判保护、显式 Reasoner 元数据与重叠能力；OpenAI Chat `image_url` / Responses `input_image` 的 MIME + 完整 base64 loopback 回归通过 |
+| SimiRouter AI 中转站 | 渠道卡收敛为未接入 / 缺 Key / 已接入紧凑三态；官网 / 获取 Key 使用内置 H5，同 origin 默认持久 WebView profile 复用 Cookie、localStorage、IndexedDB 和磁盘缓存；短生命周期预热共享 JS/CSS；Android Cookie flush、iOS 默认 data store 完成屏障及尾随 flush 竞态收口；语音接入精确识别的 mimo TTS 三模式 + mimo ASR，声音克隆 WAV 复制到 App 私有持久目录，TTS 合成阶段拒绝重复并发请求；历史大写 MIMO 配置正确回显内置预设 | 320px / 120% 字号、44px 点击目标、严格 URI、关闭 / 返回、预热 / flush、STT / TTS / 图片 / 能力路由均有 host 回归；全量基线 757 项、最终能力聚焦 123 项、Analyze、Android / iOS Release 构建通过；本轮按要求未安装或执行真机账号登录闭环 |
+| CI 跨平台构建门禁 | Flutter 源码在包构建前生成、bundled runtime 矩阵可移植、桌面与 Android 包构建可复现，跨平台 package build 门禁已收口 | CI 构建门禁通过 |
 | iOS 纯 JS MCP | NodeMobile bridge、device / simulator XCFramework、App link/embed 和 iPhone13 真机链路已接入 | iPhone13 已出现 `SIMICHAT_NODE_MOBILE_MCP_DEVICE_READY`、`SIMICHAT_STDIO_COMPAT_MCP_DEVICE_READY`、`SIMICHAT_NPX_COMPAT_MCP_DEVICE_READY`；状态为 `runtime_verified` |
 | Android 构建 | Debug / release APK 构建通过 | `build/app/outputs/flutter-apk/app-debug.apk`、`build/app/outputs/flutter-apk/app-release.apk` |
-| 全量测试 | 694 项通过 | `flutter test --no-pub -r compact` |
+| 测试 | 全量基线 757 项；最终能力聚焦 123 项；上下文预算 5 项通过 | 全量基线使用 `flutter test --no-pub --no-test-assets --concurrency=4 -r compact`；最后边界修正后复跑渠道 / H5 / Vision / Reasoner / TTS / STT / 图片套件和上下文预算，日志扫描无 RenderFlex overflow、Flutter exception、未处理异常和点击命中警告 |
 | 本机真实 Ollama | 当前未验证 | 本机没有 `ollama` 命令，`127.0.0.1:11434` 当前不可连接 |
 | 真机 / 长会话 | 当前未在本轮重新验证 | 不能由静态分析、mock 或 APK 构建替代 |
 | Android 16 KB page-size / 非 arm64 ABI | source ELF 与 release APK 已完成；真机 / 非 arm64 仍未完成 | 重建后的 `arm64-v8a/libnode.so` 四个 `LOAD` segment 均为 `0x4000`，release APK 全部 native library 与 ZIP 16 KB audit PASS；16 KB 真机和非 arm64 仍未支持 |
@@ -104,6 +108,46 @@ OLLAMA_MODEL=gemma4 scripts/smoke_local_ollama.sh
 | iOS Simulator | `http://127.0.0.1:11434` |
 | Android Emulator | `http://10.0.2.2:11434` |
 | Android / iOS 真机 | Ollama 主机的局域网 IP |
+
+### 5. 内置渠道一键接入（仅填 Key）与厂商品牌图标
+
+- 内置渠道（厂商预设）一键接入：选中预设后名称、Base URL、协议由预设锁定，表单只保留 API Key 输入框；切换回“自定义渠道”才显示完整可编辑字段。
+- 编辑已匹配内置预设的渠道时同样进入锁定模式，下拉框可切回自定义配置，不影响已有自定义改动。
+- 渠道列表、模型选择器和预设提示卡按厂商显示独立图标（如 DeepSeek 闪电、Groq 快闪、硅基流动内存芯片、火山方舟火山），不再让所有 OpenAI 兼容渠道共用同一个协议图标。
+
+对应代码：
+
+- `lib/core/ai/protocol_icons.dart`
+- `lib/features/settings/settings_page.dart`
+- `lib/shared/widgets/model_selector.dart`
+
+对应测试：
+
+- `test/settings_page_font_scale_test.dart`（预设锁定后只留 API Key）
+- `test/settings_page_ollama_test.dart`（Ollama 预设无 Key、名称 / Base URL 隐藏）
+- `test/settings_page_dwchainless_test.dart`（一键接入锁定 dwchainless 预设）
+
+### 6. SimiRouter AI 中转站品牌升级
+
+- `dwchainless` 预置渠道显示名改为「SimiRouter AI 中转站」；Base URL、官网、注册地址保持 `api.dwchainless.com` 不变，`id` 保持 `dwchainless`，旧配置与批量导入不受影响。
+- 新增品牌 logo `assets/branding/simirouter.png`（`pubspec.yaml` 注册）；渠道列表、模型选择器、预设提示卡与关于页鸣谢均优先显示真实 logo，无 logo 的厂商回退 Material 图标。
+- 推广卡片已进一步收敛：未接入显示一句定位和「获取 Key / 一键接入 / 官网」；缺 Key 显示「补充 Key」；已接入只显示状态和「管理 / 官网」。六项营销标签不再常驻设置页首屏；三个操作在 320px / 120% 字号下保持单排、整卡小于 170px、按钮点击高度至少 44px。
+- 设置页出现时用短生命周期隐藏 WebView 预热官网资源，后续官网 / 注册页复用系统 WebView 资源缓存和登录 profile；H5 主帧仅允许同 host / port HTTPS 且拒绝 userInfo，非主帧验证码 / iframe 不被误拦，拒绝跳转时给用户明确反馈。
+- 登录态由系统 WebView 默认持久 profile 原样维护；Android 关闭 / 后台时显式 `CookieManager.flush()`，iOS 使用 `WKWebsiteDataStore.default()`。重复 flush 会合并，关闭最多等待 2 秒；不再手工序列化认证 Cookie，避免丢失 Secure / HttpOnly / SameSite / expires 等安全属性；当前线上 bundle 的账号资料缓存位于同 origin localStorage。
+
+对应代码：
+
+- `lib/core/ai/model_provider_preset.dart`（`logoAsset` 字段）
+- `lib/core/ai/protocol_icons.dart`（`getChannelLogoAsset`）
+- `lib/features/settings/settings_page.dart`（推广卡片、渠道 tile、提示卡、鸣谢）
+- `lib/shared/widgets/model_selector.dart`
+- `lib/shared/widgets/in_app_h5_page.dart`、Android `MainActivity.kt`、iOS `AppDelegate.swift`（默认持久 profile 与原生 flush）
+
+对应测试：
+
+- `test/settings_page_dwchainless_test.dart`（卡片按钮、一键接入锁定、已接入 / 缺 Key 状态、鸣谢）
+- `test/model_provider_preset_test.dart`（logoAsset 断言）
+- `test/settings_page_channel_import_test.dart`、`test/mobile_main_flow_smoke_test.dart`（卡片变高后的滚动适配）
 
 ## 三、当前验证门禁
 

@@ -100,5 +100,65 @@ void main() {
         expect(jsonEncode(payload), isNot(contains('input_audio')));
       },
     );
+
+    test('sends image attachments as Responses input_image data URLs', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'simichat_response_image_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      });
+      final image = File('${tempDir.path}/photo.webp');
+      const imageBytes = [0x52, 0x49, 0x46, 0x46];
+      await image.writeAsBytes(imageBytes);
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seenPayload = Completer<Map<String, dynamic>>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          seenPayload.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: {"type":"response.output_text.delta","delta":"seen"}\n\n',
+          );
+          request.response.write(
+            'data: {"type":"response.completed","response":{"output":[]}}\n\n',
+          );
+          await request.response.close();
+        }),
+      );
+
+      final chunks = await OpenAiResponseProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}/v1',
+            apiKey: 'test-key',
+            model: 'gpt-vision-test',
+            messages: [
+              AiMessage(
+                role: 'user',
+                content: '描述图片',
+                attachments: [Attachment(type: 'image', path: image.path)],
+              ),
+            ],
+          )
+          .toList();
+
+      expect(chunks.single.content, 'seen');
+      final payload = await seenPayload.future;
+      final input = payload['input'] as List<dynamic>;
+      final content =
+          (input.single as Map<String, dynamic>)['content'] as List<dynamic>;
+      expect(content.first, {'type': 'input_text', 'text': '描述图片'});
+      final imagePart = content.last as Map<String, dynamic>;
+      expect(imagePart, {
+        'type': 'input_image',
+        'image_url': 'data:image/webp;base64,${base64Encode(imageBytes)}',
+      });
+    });
   });
 }

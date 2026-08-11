@@ -553,6 +553,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // 设置页首部 SimiRouter 推广卡片占位较高，先滚动到渠道 tile 再点击。
+    await tester.scrollUntilVisible(
+      find.text('Prune Channel'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Prune Channel'));
     await tester.pumpAndSettle();
     expect(find.text('一键测试并剔除不可用'), findsOneWidget);

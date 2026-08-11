@@ -172,16 +172,20 @@ void main() {
         expect(preset.openAiCompatible, true);
         expect(preset.baseUrl, 'https://api.dwchainless.com/v1');
         expect(preset.docsUrl, 'https://api.dwchainless.com/');
-        expect(preset.signUpUrl, 'https://api.dwchainless.com/sign-up');
+        expect(
+          preset.signUpUrl,
+          'https://api.dwchainless.com/sign-up?aff=Bslh',
+        );
+        expect(preset.logoAsset, 'assets/branding/simirouter.png');
         expect(preset.recommendedModels, isNotEmpty);
       },
     );
 
     test('dwchainless preset matches by display name and short alias', () {
-      expect(findModelProviderPreset('DW Chainless 中转站'), isNotNull);
+      expect(findModelProviderPreset('SimiRouter AI 中转站'), isNotNull);
       expect(findModelProviderPreset('dw-chainless'), isNull);
       // 预设查找忽略大小写与首尾空格。
-      expect(findModelProviderPreset('  DwChainless  '), isNotNull);
+      expect(findModelProviderPreset('  SimiRouter AI 中转站  '), isNotNull);
     });
 
     test('ollama is a no-key local preset with starter models', () {

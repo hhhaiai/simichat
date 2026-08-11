@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'bundled_node_runtime.dart';
 import '../search/web_search_service.dart';
 
 const kMcpTransportAppNative = 'app_native';
@@ -834,6 +835,132 @@ class StdioTransport implements McpTransport {
 
     return searchDirs.toList();
   }
+}
+
+/// 移动端标准 MCP stdio 传输。
+///
+/// 移动系统不能像桌面端一样启动用户的宿主机 shell 命令，但可以把
+/// `command + args` 交给随 App 分发的 Node Runtime。Runtime 为每个配置
+/// 建立独立 session，并只暴露 JSON Lines 的 stdin / stdout 语义：这里写入
+/// 的每一行就是 MCP server stdin 的一行，这里读出的每一行就是 server
+/// stdout 的一行。它不经过 SSE，也不把请求直接改写成 Dart 对象调用。
+class MobileStdioTransport implements McpTransport {
+  MobileStdioTransport({
+    required this.command,
+    this.args = const <String>[],
+    this.serverId,
+    this.baseUrl,
+    this.ensureRuntime = true,
+  });
+
+  final String command;
+  final List<String> args;
+  final String? serverId;
+
+  /// Only used by protocol-level tests. Production uses the app-owned local
+  /// Node Runtime endpoint.
+  final String? baseUrl;
+  final bool ensureRuntime;
+
+  void Function(Map<String, dynamic>)? _onMessage;
+  String? _sessionId;
+  Future<void>? _pollFuture;
+  bool _closed = true;
+
+  @override
+  Future<void> connect(void Function(Map<String, dynamic>) onMessage) async {
+    await disconnect();
+    final session = await BundledNodeRuntime.startStdioSession(
+      command: command,
+      args: args,
+      serverId: serverId,
+      baseUrl: baseUrl,
+      ensureRuntime: ensureRuntime,
+    );
+    final id = session['sessionId'];
+    if (id is! String || id.isEmpty) {
+      throw const McpMobileStdioException('移动 stdio Runtime 未返回 sessionId');
+    }
+    _onMessage = onMessage;
+    _sessionId = id;
+    _closed = false;
+    _pollFuture = _pollStdout(id);
+  }
+
+  @override
+  Future<void> disconnect() async {
+    _closed = true;
+    final id = _sessionId;
+    _sessionId = null;
+    _onMessage = null;
+    if (id != null) {
+      try {
+        await BundledNodeRuntime.closeStdioSession(id, baseUrl: baseUrl);
+      } catch (error) {
+        debugPrint('[MCP Mobile stdio] close failed: $error');
+      }
+    }
+    final poll = _pollFuture;
+    _pollFuture = null;
+    await poll;
+  }
+
+  @override
+  Future<void> send(Map<String, dynamic> message) async {
+    final id = _sessionId;
+    if (_closed || id == null) {
+      throw const McpMobileStdioException('移动 stdio session 未连接');
+    }
+    await BundledNodeRuntime.writeStdioLine(
+      id,
+      jsonEncode(message),
+      baseUrl: baseUrl,
+    );
+  }
+
+  Future<void> _pollStdout(String id) async {
+    while (!_closed && identical(_sessionId, id)) {
+      try {
+        final result = await BundledNodeRuntime.readStdioLines(
+          id,
+          baseUrl: baseUrl,
+        );
+        final lines = result['lines'];
+        if (lines is List) {
+          for (final rawLine in lines) {
+            if (rawLine is! String || rawLine.trim().isEmpty) continue;
+            try {
+              final decoded = jsonDecode(rawLine);
+              if (decoded is Map) {
+                _onMessage?.call(decoded.cast<String, dynamic>());
+              } else {
+                debugPrint(
+                  '[MCP Mobile stdio] stdout line is not a JSON object',
+                );
+              }
+            } on Object catch (error) {
+              debugPrint('[MCP Mobile stdio] stdout parse error: $error');
+            }
+          }
+        }
+        if (result['closed'] == true) break;
+      } on Object catch (error) {
+        if (!_closed) {
+          debugPrint('[MCP Mobile stdio] stdout polling failed: $error');
+        }
+        break;
+      }
+    }
+  }
+}
+
+class McpMobileStdioException implements Exception {
+  const McpMobileStdioException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
 
 /// SSE 传输（远程服务）

@@ -11,9 +11,9 @@
 | 功能 | 落点 | 说明 |
 | --- | --- | --- |
 | DW Chainless 中转站预置 | `lib/core/ai/model_provider_preset.dart` | 新增 `dwchainless` OpenAI 兼容预设（Base URL `https://api.dwchainless.com/v1`），含注册链接与推荐模型 |
-| 无 Key 注册引导 | `lib/features/settings/settings_page.dart` | 设置页渠道区顶部 DW Chainless 推广卡片：无 Key 时提供「去注册获取 Key」跳转 `https://api.dwchainless.com/sign-up`；预设提示卡内也有「去注册」按钮 |
+| 无 Key 注册引导 | `lib/features/settings/settings_page.dart`、`lib/shared/widgets/in_app_h5_page.dart` | 设置页渠道区顶部 SimiRouter 推广卡片和预设提示卡提供「获取 Key」；通过内置 H5 直接打开 `https://api.dwchainless.com/sign-up?aff=Bslh`，不跳转浏览器、不显示地址栏 |
 | 一键接入 | 同上 | 「一键接入」预填渠道名称 / Base URL / 协议 |
-| 关于页鸣谢 | 同上（关于区） | 「鸣谢 · DW Chainless 中转站」带图标，点击打开官网 `https://api.dwchainless.com/` |
+| 关于页鸣谢 | 同上（关于区） | 「鸣谢 · SimiRouter AI 中转站」带图标，点击进入无地址栏的内置官网 H5 页面 |
 | 图片生成 | `lib/core/ai/image_generation_service.dart`、`chat_provider.generateImage()`、`chat_input_bar.dart`、设置页「图片生成配置」 | OpenAI 兼容 `/v1/images/generations`：优先 `b64_json` 本地保存，失败回退安全下载远端 URL；聊天输入框「✨」按钮生成，图片作为 assistant 消息附件展示；图片模型可配置（默认 `dall-e-3`），复用当前渠道 Base URL / Key |
 
 新增测试：`test/settings_page_dwchainless_test.dart`、`test/image_generation_service_test.dart`、`test/chat_input_bar_image_generation_test.dart`、`test/settings_page_image_generation_test.dart`；`test/model_provider_preset_test.dart` 扩展 dwchainless 断言。

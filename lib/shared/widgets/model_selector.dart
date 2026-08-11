@@ -47,6 +47,11 @@ class ModelSelector extends ConsumerWidget {
           selected = models.where((m) => m.channelModel.id == selectedId).firstOrNull;
         }
         selected ??= models.first;
+        final selectedChannel = selected.channel;
+        final selectedLogoAsset = getChannelLogoAsset(
+          selectedChannel.protocol,
+          selectedChannel.baseUrl,
+        );
 
         return PopupMenuButton<String>(
           onSelected: (modelId) {
@@ -66,11 +71,22 @@ class ModelSelector extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                Icon(
-                  getProtocolIcon(selected.channel.protocol),
-                  size: 18,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                selectedLogoAsset != null
+                    ? CircleAvatar(
+                        radius: 9,
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.surface,
+                        backgroundImage: AssetImage(selectedLogoAsset),
+                      )
+                    : Icon(
+                        getChannelIcon(
+                          selectedChannel.protocol,
+                          selectedChannel.baseUrl,
+                        ),
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(

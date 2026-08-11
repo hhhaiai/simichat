@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../core/attachments/attachment_policy.dart';
@@ -24,6 +26,7 @@ class ChatInputBar extends StatefulWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool isStreaming;
+  final bool isSubmitting;
   final ValueNotifier<bool> hasTextNotifier;
   final Future<bool> Function(String text, List<PendingAttachment> attachments)
   onSend;
@@ -31,6 +34,12 @@ class ChatInputBar extends StatefulWidget {
   /// 图片生成回调：入参为输入框文本，返回是否成功（成功后清空输入框）。
   /// 为 null 时不显示“生成图片”按钮。
   final Future<bool> Function(String text)? onGenerateImage;
+
+  /// 编辑图片回调：选图后由外部打开编辑对话框。为 null 时不显示入口。
+  final Future<bool> Function(String imagePath)? onEditImage;
+
+  /// 深度思考开关状态（外部持有 ValueNotifier）。为 null 时不显示开关按钮。
+  final ValueNotifier<bool>? deepThinkNotifier;
 
   /// 替身回复回调：为最近一条用户消息以镜像人格生成回复。为 null 时不显示入口。
   final Future<bool> Function()? onPersonaReply;
@@ -43,9 +52,12 @@ class ChatInputBar extends StatefulWidget {
     required this.controller,
     required this.focusNode,
     required this.isStreaming,
+    this.isSubmitting = false,
     required this.hasTextNotifier,
     required this.onSend,
     this.onGenerateImage,
+    this.onEditImage,
+    this.deepThinkNotifier,
     this.onPersonaReply,
     this.modelSelector,
     this.voiceRecorder,
@@ -62,11 +74,27 @@ class _ChatInputBarState extends State<ChatInputBar> {
   bool _isRecordingVoice = false;
   bool _isVoiceBusy = false;
 
+  /// 部分第三方输入法在应用切回前台或切换输入法后，会保留 Flutter 的输入
+  /// 连接但不重新显示自身窗口。TextField 默认会请求焦点；这里在下一帧显式
+  /// 重发一次 show 请求，确保输入连接完成建立后再通知系统 IME。
+  void _requestComposerFocus() {
+    widget.focusNode.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.focusNode.hasFocus) return;
+      unawaited(
+        SystemChannels.textInput
+            .invokeMethod<void>('TextInput.show')
+            .catchError((Object _) {}),
+      );
+    });
+  }
+
   Future<void> _handleSend() async {
     if (widget.isStreaming) {
       await widget.onSend('', const []);
       return;
     }
+    if (widget.isSubmitting) return;
     if (_isRecordingVoice) {
       _showAttachmentError('请先结束当前录音');
       return;
@@ -81,7 +109,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   Future<void> _handleGenerateImage() async {
     final text = widget.controller.text.trim();
-    if (text.isEmpty || widget.onGenerateImage == null) return;
+    if (text.isEmpty || widget.onGenerateImage == null || widget.isSubmitting) {
+      return;
+    }
     if (_isRecordingVoice) {
       _showAttachmentError('请先结束当前录音');
       return;
@@ -93,57 +123,140 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
   }
 
+  bool _usesCompactActionLayout(BuildContext context) {
+    return MediaQuery.sizeOf(context).width < 380;
+  }
+
   void _showAttachmentMenu() {
     final isDesktop =
         kIsWeb || Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+    final compactActions = _usesCompactActionLayout(context);
 
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (!isDesktop)
+        // 小屏下会额外收纳画图 / 深度思考；允许滚动，避免动作增多后
+        // BottomSheet 在 568px 等短屏上溢出。
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!isDesktop)
+                ListTile(
+                  leading: const Icon(Icons.camera_alt_outlined),
+                  title: const Text('相机拍照'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickImage(ImageSource.camera);
+                  },
+                ),
+              if (!isDesktop)
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('从相册选择'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickImage(ImageSource.gallery);
+                  },
+                ),
               ListTile(
-                leading: const Icon(Icons.camera_alt_outlined),
-                title: const Text('相机拍照'),
+                leading: const Icon(Icons.attach_file),
+                title: const Text('选择文件'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _pickImage(ImageSource.camera);
+                  _pickFile();
                 },
               ),
-            if (!isDesktop)
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('从相册选择'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _pickImage(ImageSource.gallery);
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.attach_file),
-              title: const Text('选择文件'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickFile();
-              },
-            ),
-            if (widget.onPersonaReply != null)
-              ListTile(
-                leading: const Icon(Icons.face_retouching_natural),
-                title: const Text('替身回复'),
-                subtitle: const Text('以我的口吻为最近一条消息回复'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  widget.onPersonaReply!();
-                },
-              ),
-          ],
+              if (widget.onEditImage != null)
+                ListTile(
+                  leading: const Icon(Icons.photo_filter_outlined),
+                  title: const Text('编辑图片'),
+                  subtitle: const Text('选择参考图后用提示词重新生成'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickImageForEdit();
+                  },
+                ),
+              if (compactActions && widget.onGenerateImage != null)
+                ValueListenableBuilder<bool>(
+                  valueListenable: widget.hasTextNotifier,
+                  builder: (_, hasText, _) => ListTile(
+                    leading: const Icon(Icons.auto_awesome),
+                    title: const Text('生成图片'),
+                    subtitle: Text(hasText ? '使用当前输入生成图片' : '先在输入框填写图片描述'),
+                    enabled:
+                        hasText &&
+                        !widget.isStreaming &&
+                        !widget.isSubmitting &&
+                        !_isRecordingVoice,
+                    onTap:
+                        hasText &&
+                            !widget.isStreaming &&
+                            !widget.isSubmitting &&
+                            !_isRecordingVoice
+                        ? () async {
+                            Navigator.pop(ctx);
+                            await _handleGenerateImage();
+                          }
+                        : null,
+                  ),
+                ),
+              if (compactActions && widget.deepThinkNotifier != null)
+                ValueListenableBuilder<bool>(
+                  valueListenable: widget.deepThinkNotifier!,
+                  builder: (_, deepThink, _) => SwitchListTile(
+                    secondary: Icon(
+                      deepThink
+                          ? Icons.psychology_alt
+                          : Icons.psychology_alt_outlined,
+                    ),
+                    title: const Text('深度思考'),
+                    subtitle: Text(deepThink ? '已开启' : '使用当前渠道的 reasoner 模型'),
+                    value: deepThink,
+                    onChanged:
+                        widget.isStreaming ||
+                            widget.isSubmitting ||
+                            _isRecordingVoice
+                        ? null
+                        : (value) {
+                            widget.deepThinkNotifier!.value = value;
+                            Navigator.pop(ctx);
+                          },
+                  ),
+                ),
+              if (widget.onPersonaReply != null)
+                ListTile(
+                  leading: const Icon(Icons.face_retouching_natural),
+                  title: const Text('替身回复'),
+                  subtitle: const Text('以我的口吻为最近一条消息回复'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    widget.onPersonaReply!();
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// 编辑图片：选图后直接交给外部打开编辑对话框（不加入附件预览）。
+  Future<void> _pickImageForEdit() async {
+    try {
+      final xFile = await _imagePicker.pickImage(source: ImageSource.gallery);
+      if (xFile == null || !mounted) return;
+      // 取消编辑同样返回 false；具体失败原因由编辑对话框或业务回调展示，
+      // 这里不再追加通用错误，避免用户主动取消后被误报“编辑失败”。
+      await widget.onEditImage!(xFile.path);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('选择图片失败: $e')));
+      }
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -281,6 +394,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final compactActions = _usesCompactActionLayout(context);
     return SafeArea(
       top: false,
       child: Container(
@@ -319,7 +433,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       IconButton(
-                        onPressed: _showAttachmentMenu,
+                        onPressed: widget.isSubmitting
+                            ? null
+                            : _showAttachmentMenu,
                         icon: const Icon(Icons.add),
                         tooltip: '添加附件',
                         style: IconButton.styleFrom(
@@ -333,6 +449,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           child: TextField(
                             controller: widget.controller,
                             focusNode: widget.focusNode,
+                            onTap: _requestComposerFocus,
                             maxLines: null,
                             decoration: const InputDecoration(
                               hintText: '询问任何问题',
@@ -353,7 +470,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
                       if (_shouldShowVoiceInput && !widget.isStreaming)
                         IconButton(
                           key: const ValueKey('voice-record-button'),
-                          onPressed: _isVoiceBusy
+                          onPressed: _isVoiceBusy || widget.isSubmitting
                               ? null
                               : _toggleVoiceRecording,
                           icon: Icon(
@@ -365,13 +482,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           tooltip: _isRecordingVoice ? '结束录音' : '语音输入',
                           color: _isRecordingVoice ? scheme.error : null,
                         ),
-                      if (widget.onGenerateImage != null)
+                      if (!compactActions && widget.onGenerateImage != null)
                         ValueListenableBuilder<bool>(
                           valueListenable: widget.hasTextNotifier,
                           builder: (_, hasText, child) {
                             final canGenerate =
                                 hasText &&
                                 !widget.isStreaming &&
+                                !widget.isSubmitting &&
                                 !_isRecordingVoice;
                             return IconButton(
                               key: const ValueKey('generate-image-button'),
@@ -379,8 +497,40 @@ class _ChatInputBarState extends State<ChatInputBar> {
                                   ? _handleGenerateImage
                                   : null,
                               icon: const Icon(Icons.auto_awesome, size: 20),
-                              tooltip: '生成图片',
+                              tooltip: widget.isSubmitting ? '正在处理' : '生成图片',
                               color: canGenerate ? scheme.primary : null,
+                            );
+                          },
+                        ),
+                      if (!compactActions && widget.deepThinkNotifier != null)
+                        ValueListenableBuilder<bool>(
+                          valueListenable: widget.deepThinkNotifier!,
+                          builder: (_, deepThink, child) {
+                            return IconButton(
+                              key: const ValueKey('deep-think-button'),
+                              onPressed:
+                                  widget.isStreaming ||
+                                      widget.isSubmitting ||
+                                      _isRecordingVoice
+                                  ? null
+                                  : () {
+                                      widget.deepThinkNotifier!.value =
+                                          !deepThink;
+                                    },
+                              icon: Icon(
+                                deepThink
+                                    ? Icons.psychology_alt
+                                    : Icons.psychology_alt_outlined,
+                                size: 20,
+                              ),
+                              tooltip: deepThink ? '深度思考已开启' : '深度思考',
+                              color: deepThink ? scheme.primary : null,
+                              style: deepThink
+                                  ? IconButton.styleFrom(
+                                      backgroundColor: scheme.primaryContainer
+                                          .withValues(alpha: 0.4),
+                                    )
+                                  : null,
                             );
                           },
                         ),
@@ -390,11 +540,19 @@ class _ChatInputBarState extends State<ChatInputBar> {
                               icon: const Icon(Icons.stop, size: 20),
                               tooltip: '停止',
                             )
+                          : widget.isSubmitting
+                          ? IconButton.filledTonal(
+                              key: const ValueKey('submit-progress-button'),
+                              onPressed: null,
+                              icon: const Icon(Icons.hourglass_top, size: 20),
+                              tooltip: '正在处理',
+                            )
                           : ValueListenableBuilder<bool>(
                               valueListenable: widget.hasTextNotifier,
                               builder: (_, hasText, child) {
                                 final canSend =
                                     !_isRecordingVoice &&
+                                    !widget.isSubmitting &&
                                     (hasText || _pendingAttachments.isNotEmpty);
                                 return IconButton.filled(
                                   onPressed: canSend ? _handleSend : null,

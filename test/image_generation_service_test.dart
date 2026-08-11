@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -135,6 +136,33 @@ void main() {
       );
     });
 
+    test('reports an unsupported generation endpoint on 404', () async {
+      serveImageEndpoint(
+        responder: (_) => {
+          'status': 404,
+          'payload': {
+            'error': {'message': 'not found'},
+          },
+        },
+      );
+      final service = ImageGenerationService(
+        baseUrl: baseUrl,
+        apiKey: 'sk-test',
+        model: 'dall-e-3',
+      );
+
+      await expectLater(
+        service.generate('prompt'),
+        throwsA(
+          isA<ImageGenerationException>().having(
+            (error) => error.message,
+            'message',
+            contains('当前渠道不支持图片生成接口'),
+          ),
+        ),
+      );
+    });
+
     test('downloads remote url when b64_json absent', () async {
       // 第一个请求返回 url，第二个请求返回图片字节。
       server.listen((request) async {
@@ -194,6 +222,111 @@ void main() {
       await expectLater(
         service.generate('prompt'),
         throwsA(isA<ImageGenerationException>()),
+      );
+    });
+
+    test('edit posts multipart /v1/images/edits and returns bytes', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seen = Completer<String>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          expect(request.method, 'POST');
+          expect(request.uri.path, '/v1/images/edits');
+          expect(
+            request.headers.value(HttpHeaders.authorizationHeader),
+            'Bearer image-test-key',
+          );
+          expect(body, contains('name="model"'));
+          expect(body, contains('gpt-image-2'));
+          expect(body, contains('name="prompt"'));
+          expect(body, contains('改成赛博朋克夜景'));
+          expect(body, contains('name="image"'));
+          expect(body, contains('filename="input.png"'));
+          expect(body, contains('name="size"'));
+          expect(body, contains('1024x1024'));
+          seen.complete(body);
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode({
+              'data': [
+                {
+                  'b64_json': base64Encode([0x89, 0x50, 0x4E, 0x47]),
+                },
+              ],
+            }),
+          );
+          await request.response.close();
+        }),
+      );
+
+      final tempDir = await Directory.systemTemp.createTemp('image-edit-');
+      addTearDown(() => tempDir.delete(recursive: true));
+      final image = File('${tempDir.path}/input.png');
+      await image.writeAsBytes([0, 1, 2, 3]);
+
+      final service = ImageGenerationService(
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        apiKey: 'image-test-key',
+        model: 'gpt-image-2',
+      );
+      final result = await service.edit(
+        imagePath: image.path,
+        prompt: '改成赛博朋克夜景',
+      );
+      expect(result.bytes, [0x89, 0x50, 0x4E, 0x47]);
+      expect(await seen.future, isNot(contains('image-test-key')));
+    });
+
+    test('edit rejects missing or empty reference image', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final service = ImageGenerationService(
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        apiKey: 'image-test-key',
+        model: 'gpt-image-2',
+      );
+      await expectLater(
+        service.edit(imagePath: '/nonexistent/input.png', prompt: '编辑一下'),
+        throwsA(isA<ImageGenerationException>()),
+      );
+    });
+
+    test('reports an unsupported edit endpoint on 405', () async {
+      final editServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => editServer.close(force: true));
+      unawaited(
+        editServer.forEach((request) async {
+          await request.drain<void>();
+          request.response
+            ..statusCode = 405
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({'error': 'method not allowed'}));
+          await request.response.close();
+        }),
+      );
+      final tempDir = await Directory.systemTemp.createTemp(
+        'image-edit-unsupported-',
+      );
+      addTearDown(() => tempDir.delete(recursive: true));
+      final image = File('${tempDir.path}/input.png');
+      await image.writeAsBytes([0, 1, 2, 3]);
+      final service = ImageGenerationService(
+        baseUrl: 'http://${editServer.address.host}:${editServer.port}',
+        apiKey: 'image-test-key',
+        model: 'gpt-image-2',
+      );
+
+      await expectLater(
+        service.edit(imagePath: image.path, prompt: '编辑一下'),
+        throwsA(
+          isA<ImageGenerationException>().having(
+            (error) => error.message,
+            'message',
+            contains('当前渠道不支持图片编辑接口'),
+          ),
+        ),
       );
     });
   });

@@ -10,7 +10,11 @@ const kSpeechToTextProviderStorageKey = 'stt_provider_v1';
 const kSpeechToTextBaseUrlStorageKey = 'stt_base_url_v1';
 const kSpeechToTextModelStorageKey = 'stt_model_v1';
 const kSpeechToTextApiKeyStorageKey = 'stt_api_key_encrypted_v1';
+const kSpeechToTextLanguageStorageKey = 'stt_language_v1';
 const kSpeechToTextProviderOpenAiCompatible = 'openai_compatible';
+
+/// STT 识别语言：auto / zh（中文）/ en（英文）。mimo-v2.5-asr 使用。
+const kSpeechToTextLanguages = ['auto', 'zh', 'en'];
 
 class SpeechToTextConfig {
   const SpeechToTextConfig({
@@ -19,6 +23,7 @@ class SpeechToTextConfig {
     this.baseUrl = kDefaultSpeechToTextBaseUrl,
     this.model = kDefaultSpeechToTextModel,
     this.apiKeyEncrypted,
+    this.language = 'auto',
   });
 
   final bool enabled;
@@ -26,6 +31,9 @@ class SpeechToTextConfig {
   final String baseUrl;
   final String model;
   final String? apiKeyEncrypted;
+
+  /// 识别语言：auto（自动）/ zh（中文）/ en（英文）。
+  final String language;
 
   bool get hasApiKey => apiKeyEncrypted != null && apiKeyEncrypted!.isNotEmpty;
 
@@ -50,6 +58,7 @@ class SpeechToTextConfig {
     String? baseUrl,
     String? model,
     String? apiKeyEncrypted,
+    String? language,
     bool clearApiKey = false,
   }) {
     return SpeechToTextConfig(
@@ -60,6 +69,7 @@ class SpeechToTextConfig {
       apiKeyEncrypted: clearApiKey
           ? null
           : (apiKeyEncrypted ?? this.apiKeyEncrypted),
+      language: language ?? this.language,
     );
   }
 }
@@ -91,6 +101,7 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
         prefs.getString(kSpeechToTextModelStorageKey) ??
         kDefaultSpeechToTextModel;
     final apiKeyEncrypted = prefs.getString(kSpeechToTextApiKeyStorageKey);
+    final language = prefs.getString(kSpeechToTextLanguageStorageKey) ?? 'auto';
     state = SpeechToTextConfig(
       enabled: enabled,
       provider: provider,
@@ -99,6 +110,7 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
       apiKeyEncrypted: apiKeyEncrypted?.isEmpty == true
           ? null
           : apiKeyEncrypted,
+      language: language,
     );
   }
 
@@ -107,9 +119,14 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     required String baseUrl,
     required String model,
     String? apiKey,
+    String? language,
   }) async {
     final normalizedBaseUrl = normalizeSpeechToTextBaseUrl(baseUrl);
     final normalizedModel = normalizeSpeechToTextModel(model);
+    final normalizedLanguage = language ?? state.language;
+    if (!kSpeechToTextLanguages.contains(normalizedLanguage)) {
+      throw const AudioTranscriptionException('不支持的识别语言');
+    }
     final trimmedKey = apiKey?.trim() ?? '';
     final encryptedKey = trimmedKey.isNotEmpty
         ? KeyEncryptor.encrypt(trimmedKey)
@@ -124,12 +141,14 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
       baseUrl: normalizedBaseUrl,
       model: normalizedModel,
       apiKeyEncrypted: encryptedKey,
+      language: normalizedLanguage,
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kSpeechToTextEnabledStorageKey, next.enabled);
     await prefs.setString(kSpeechToTextProviderStorageKey, next.provider);
     await prefs.setString(kSpeechToTextBaseUrlStorageKey, next.baseUrl);
     await prefs.setString(kSpeechToTextModelStorageKey, next.model);
+    await prefs.setString(kSpeechToTextLanguageStorageKey, next.language);
     if (next.apiKeyEncrypted == null) {
       await prefs.remove(kSpeechToTextApiKeyStorageKey);
     } else {
@@ -148,6 +167,7 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     await prefs.remove(kSpeechToTextBaseUrlStorageKey);
     await prefs.remove(kSpeechToTextModelStorageKey);
     await prefs.remove(kSpeechToTextApiKeyStorageKey);
+    await prefs.remove(kSpeechToTextLanguageStorageKey);
     state = const SpeechToTextConfig();
   }
 }
@@ -162,6 +182,7 @@ final speechToTextEngineProvider = Provider<SpeechToTextEngine?>((ref) {
       baseUrl: config.baseUrl,
       apiKey: apiKey,
       model: config.model,
+      language: config.language,
     );
   } catch (_) {
     return null;

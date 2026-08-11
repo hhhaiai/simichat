@@ -123,7 +123,12 @@ void main() {
     await tester.pumpAndSettle();
     _expectNoFlutterException(tester, 'local search index dialog');
     expect(find.text('添加 MCP 服务器'), findsWidgets);
-    expect(find.text('Stdio（PC 高级 / Runtime）'), findsNothing);
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Stdio（移动兼容 / 内置 Runtime）'), findsOneWidget);
+    await tester.tap(find.text('Stdio（移动兼容 / 内置 Runtime）'));
+    await tester.pumpAndSettle();
+    expect(find.text('移动端支持已审核适配器和移动扩展；不会启动手机外部命令。'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     _expectNoFlutterException(tester, 'local search index warmed');

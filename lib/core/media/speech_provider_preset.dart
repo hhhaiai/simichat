@@ -43,6 +43,16 @@ const kSpeechProviderPresets = [
     docsUrl: 'https://console.groq.com/docs/speech-to-text',
   ),
   SpeechProviderPreset(
+    id: 'dwchainless',
+    name: 'SimiRouter AI',
+    baseUrl: 'https://api.dwchainless.com',
+    sttModel: 'mimo-v2.5-asr',
+    ttsModel: 'mimo-v2.5-tts',
+    ttsVoice: 'alloy',
+    description: 'SimiRouter 语音：mimo TTS 三种模式（合成 / 声音设计 / 声音克隆）+ mimo ASR 识别。',
+    docsUrl: 'https://api.dwchainless.com/',
+  ),
+  SpeechProviderPreset(
     id: 'custom_openai_compatible',
     name: '自定义 OpenAI 兼容',
     baseUrl: 'https://api.openai.com',
@@ -53,6 +63,59 @@ const kSpeechProviderPresets = [
     docsUrl: '',
   ),
 ];
+
+/// SimiRouter mimo TTS 的三种模型模式。
+enum SimiRouterTtsMode {
+  /// 普通语音合成：voice 音色。
+  standard,
+
+  /// 声音设计：style 文字描述生成音色。
+  voiceDesign,
+
+  /// 声音克隆：voice 传参考音频（base64 data URI）。
+  voiceClone,
+}
+
+/// 根据模型名判断 SimiRouter mimo TTS 模式；非 SimiRouter 模型返回 null。
+SimiRouterTtsMode? simiRouterTtsModeOf(String model) {
+  final normalized = model.trim().toLowerCase();
+  return switch (normalized) {
+    'mimo-v2.5-tts' => SimiRouterTtsMode.standard,
+    'mimo-v2.5-tts-voicedesign' => SimiRouterTtsMode.voiceDesign,
+    'mimo-v2.5-tts-voiceclone' => SimiRouterTtsMode.voiceClone,
+    _ => null,
+  };
+}
+
+/// SimiRouter mimo ASR 的精确、大小写不敏感识别。
+///
+/// 不使用 `contains`，避免把未知后缀模型误当成已经适配的 ASR 协议。
+bool isSimiRouterAsrModel(String model) =>
+    model.trim().toLowerCase() == 'mimo-v2.5-asr';
+
+/// SimiRouter mimo TTS 预设音色（中文名 + API voice 值）。
+class SimiRouterTtsVoice {
+  const SimiRouterTtsVoice(this.label, this.value);
+
+  final String label;
+  final String value;
+}
+
+const kSimiRouterTtsVoices = [
+  SimiRouterTtsVoice('冰糖 · 活泼少女', 'alloy'),
+  SimiRouterTtsVoice('茉莉 · 知性女生', 'echo'),
+  SimiRouterTtsVoice('mia · 活泼英文女生', 'nova'),
+  SimiRouterTtsVoice('Chioe · 甜美梦幻', 'shimmer'),
+  SimiRouterTtsVoice('苏打 · 阳光少年', 'onyx'),
+  SimiRouterTtsVoice('白桦 · 成熟男生', 'fable'),
+  SimiRouterTtsVoice('milo · 阳光英文男生', 'milo'),
+  SimiRouterTtsVoice('Dean · 沉稳温柔', 'dean'),
+];
+
+/// mimo TTS 支持的速度范围与输出格式。
+const kSimiRouterTtsMinSpeed = 0.25;
+const kSimiRouterTtsMaxSpeed = 4.0;
+const kSimiRouterTtsResponseFormats = ['mp3', 'wav', 'opus', 'aac', 'flac'];
 
 List<SpeechProviderPreset> speechToTextPresets() => kSpeechProviderPresets
     .where((preset) => preset.supportsStt)
@@ -74,10 +137,10 @@ SpeechProviderPreset? inferSpeechToTextPreset({
   required String model,
 }) {
   final normalizedBaseUrl = _normalizeComparableUrl(baseUrl);
-  final normalizedModel = model.trim();
+  final normalizedModel = model.trim().toLowerCase();
   for (final preset in speechToTextPresets()) {
     if (_normalizeComparableUrl(preset.baseUrl) == normalizedBaseUrl &&
-        preset.sttModel == normalizedModel) {
+        preset.sttModel?.toLowerCase() == normalizedModel) {
       return preset;
     }
   }
@@ -90,12 +153,12 @@ SpeechProviderPreset? inferTextToSpeechPreset({
   required String voice,
 }) {
   final normalizedBaseUrl = _normalizeComparableUrl(baseUrl);
-  final normalizedModel = model.trim();
-  final normalizedVoice = voice.trim();
+  final normalizedModel = model.trim().toLowerCase();
+  final normalizedVoice = voice.trim().toLowerCase();
   for (final preset in textToSpeechPresets()) {
     if (_normalizeComparableUrl(preset.baseUrl) == normalizedBaseUrl &&
-        preset.ttsModel == normalizedModel &&
-        preset.ttsVoice == normalizedVoice) {
+        preset.ttsModel?.toLowerCase() == normalizedModel &&
+        preset.ttsVoice?.toLowerCase() == normalizedVoice) {
       return preset;
     }
   }

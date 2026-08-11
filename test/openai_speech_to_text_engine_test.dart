@@ -37,6 +37,11 @@ void main() {
           expect(body, contains('name="model"'));
           expect(body, contains('whisper-1'));
           expect(body, contains('filename="voice.m4a"'));
+          expect(
+            body,
+            isNot(contains('name="language"')),
+            reason: 'auto 表示服务端自动检测，不应作为字面语言代码发送',
+          );
           seen.complete(body);
           request.response.headers.contentType = ContentType.json;
           request.response.write(jsonEncode({'text': '  你好，SimiChat  '}));
@@ -132,6 +137,46 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('posts language field for mimo asr model', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seen = Completer<String>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          expect(body, contains('name="model"'));
+          expect(body, contains('mimo-v2.5-asr'));
+          expect(body, contains('name="language"'));
+          expect(body, contains('zh'));
+          seen.complete(body);
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'text': '你好'}));
+          await request.response.close();
+        }),
+      );
+
+      final tempDir = await Directory.systemTemp.createTemp('stt-language-');
+      addTearDown(() => tempDir.delete(recursive: true));
+      final audio = File('${tempDir.path}/voice.m4a');
+      await audio.writeAsBytes([0, 1, 2, 3, 4]);
+
+      final engine = OpenAiCompatibleSpeechToTextEngine(
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        apiKey: 'stt-test-key',
+        model: 'mimo-v2.5-asr',
+        language: 'zh',
+      );
+      final transcript = await engine.transcribe(
+        AudioTranscriptionInput(
+          audioPath: audio.path,
+          fileName: 'voice.m4a',
+          fileSize: 5,
+        ),
+      );
+      expect(transcript, '你好');
+      expect(await seen.future, isNot(contains('stt-test-key')));
     });
   });
 }

@@ -24,22 +24,19 @@ class SimiChatNodeRuntime(private val context: Context) {
         private const val STATE_RUNNING = 2
         private const val STATE_CRASHED = 3
 
-        init {
-            // libnode is a dependency of the bridge. Loading it first also
-            // gives clearer diagnostics on devices with an unsupported ABI.
-            System.loadLibrary("node")
-            System.loadLibrary("simichat_node_bridge")
-        }
     }
 
     private val prepared = AtomicBoolean(false)
     private val restartCount = AtomicInteger(0)
+    @Volatile private var nativeLoaded = false
+    @Volatile private var nativeLoadError: String? = null
     private val runtimeDirectory: File
         get() = File(context.filesDir, "simichat_node_runtime")
     private val scriptFile: File
         get() = File(runtimeDirectory, "runtime-server.mjs")
 
     fun start(): Map<String, Any> {
+        if (!ensureNativeLoaded()) return info(false)
         prepareAssets()
         if (nativeState() == STATE_CRASHED) {
             restartCount.incrementAndGet()
@@ -55,7 +52,10 @@ class SimiChatNodeRuntime(private val context: Context) {
         return info(started || nativeIsRunning())
     }
 
-    fun status(): Map<String, Any> = info(nativeIsRunning())
+    fun status(): Map<String, Any> {
+        if (!ensureNativeLoaded()) return info(false)
+        return info(nativeIsRunning())
+    }
 
     fun stop(): Map<String, Any> {
         // The embedded Node entry point is intentionally process-lifetime
@@ -65,16 +65,17 @@ class SimiChatNodeRuntime(private val context: Context) {
     }
 
     private fun info(running: Boolean): Map<String, Any> {
-        val nativeState = nativeState()
-        val exitCode = nativeExitCode()
+        val loaded = nativeLoaded
+        val currentNativeState = if (loaded) nativeState() else STATE_CRASHED
+        val exitCode = if (loaded) nativeExitCode() else -1
         return mapOf(
             "running" to running,
-            "state" to stateName(nativeState),
-            "nativeState" to nativeState,
+            "state" to stateName(currentNativeState),
+            "nativeState" to currentNativeState,
             "nativeExitCode" to exitCode,
             "restartCount" to restartCount.get(),
-            "lastError" to if (nativeState == STATE_CRASHED) {
-                "embedded Node exited with code $exitCode"
+            "lastError" to if (currentNativeState == STATE_CRASHED) {
+                nativeLoadError ?: "embedded Node exited with code $exitCode"
             } else {
                 ""
             },
@@ -91,6 +92,25 @@ class SimiChatNodeRuntime(private val context: Context) {
             "sseUrl" to "http://127.0.0.1:$PORT/mcp/sse/simichat-node",
             "scriptPath" to scriptFile.absolutePath,
         )
+    }
+
+    private fun ensureNativeLoaded(): Boolean {
+        if (nativeLoaded) return true
+        synchronized(this) {
+            if (nativeLoaded) return true
+            return try {
+                // Load lazily so an unsupported ABI or a missing native
+                // dependency cannot crash the chat UI before the first frame.
+                System.loadLibrary("node")
+                System.loadLibrary("simichat_node_bridge")
+                nativeLoaded = true
+                nativeLoadError = null
+                true
+            } catch (error: Throwable) {
+                nativeLoadError = "embedded Node native library unavailable: ${error.message ?: error::class.java.simpleName}"
+                false
+            }
+        }
     }
 
     private fun stateName(value: Int): String = when (value) {

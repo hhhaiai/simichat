@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/mcp/mcp_client.dart';
-import '../../core/mcp/bundled_node_runtime.dart';
 import '../../core/extensions/mobile_extension_agent.dart';
 import '../../core/extensions/mobile_extension_installer.dart';
 import '../../core/extensions/mobile_extension_service.dart';
@@ -9,7 +8,7 @@ import 'database_provider.dart';
 import 'mcp_provider.dart';
 import 'skill_provider.dart';
 
-/// App-owned installer used by Android and iOS extension pages.
+/// App-owned installer used by Android, iOS and desktop extension pages.
 final mobileExtensionInstallerProvider = Provider<MobileExtensionInstaller>((
   ref,
 ) {
@@ -34,7 +33,7 @@ final installedMobileExtensionsProvider = FutureProvider(
 /// Flutter boundary. Skills are written to the existing Skills table;
 /// app-native MCP packages are connected immediately on both Android and iOS;
 /// pure-JS Node Mobile packages are registered in the App-owned runtime and
-/// connected through its loopback SSE endpoint.  No package installation path
+/// connected through its private JSON-Lines stdio bridge.  No package installation path
 /// invokes npm, npx, a shell, or a host process.
 Future<InstalledMobileExtension> installMobileExtension(
   WidgetRef ref,
@@ -82,7 +81,14 @@ Future<InstalledMobileExtension> installMobileExtension(
       marketplaceId: mcp.serverId,
     );
     await manager.addServer(config);
-    await manager.connectServer(config);
+    try {
+      await manager.connectServer(config);
+    } catch (_) {
+      // Keep the package installed for an explicit retry, but do not leave a
+      // broken enabled row that retries on every application launch.
+      await manager.updateServer(config.copyWith(isEnabled: false));
+      rethrow;
+    }
   }
   if (mcp != null && mcp.isNodeMobile) {
     final manager = ref.read(mcpManagerProvider.notifier);
@@ -94,8 +100,10 @@ Future<InstalledMobileExtension> installMobileExtension(
     final config = McpServerConfig(
       id: serverId,
       name: mcp.name,
-      transport: kMcpTransportSse,
-      url: BundledNodeRuntime.extensionSseUrl(mcp.id),
+      // Preserve the user's stdio-compatible MCP semantics in the persisted
+      // row. McpManager binds this to the app-owned Node Mobile runtime and
+      // uses its private JSON-Lines bridge; no host command is started.
+      transport: kMcpTransportStdio,
       isEnabled: true,
       source: 'mobile_extension',
       marketplaceId: '$kMobileExtensionMarketplacePrefix${mcp.id}',
@@ -108,7 +116,12 @@ Future<InstalledMobileExtension> installMobileExtension(
       },
     );
     await manager.addServer(config);
-    await manager.connectServer(config);
+    try {
+      await manager.connectServer(config);
+    } catch (_) {
+      await manager.updateServer(config.copyWith(isEnabled: false));
+      rethrow;
+    }
   }
   ref.invalidate(installedMobileExtensionsProvider);
   return installed;

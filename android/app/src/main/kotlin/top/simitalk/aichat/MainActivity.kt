@@ -11,6 +11,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
+import android.webkit.CookieManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -74,6 +75,21 @@ class MainActivity : FlutterActivity() {
                 return@setMethodCallHandler
             }
             shareExportFile(call.arguments as? Map<*, *>, result)
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            IN_APP_H5_PROFILE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "flush") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            try {
+                CookieManager.getInstance().flush()
+                result.success(true)
+            } catch (error: Throwable) {
+                result.error("WEBVIEW_PROFILE_FLUSH_FAILED", error.message, null)
+            }
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -558,6 +574,7 @@ class MainActivity : FlutterActivity() {
         private const val VOICE_RECORDER_CHANNEL = "simichat/voice_recorder"
         private const val AUDIO_PLAYER_CHANNEL = "simichat/audio_player"
         private const val DEEP_LINK_CHANNEL = "simichat/deep_link"
+        private const val IN_APP_H5_PROFILE_CHANNEL = "simichat/in_app_h5_profile"
         private const val RECORD_AUDIO_PERMISSION_REQUEST = 4107
     }
 }

@@ -12,6 +12,10 @@ class ModelProviderPreset {
   /// 为空表示该预设无需注册（如本地 Ollama 或已有官方账号即可开通）。
   final String? signUpUrl;
 
+  /// 品牌 logo 资源路径（`assets/branding/...`）。
+  /// 为空时使用 [getProviderIcon] 的 Material 图标。
+  final String? logoAsset;
+
   const ModelProviderPreset({
     required this.id,
     required this.name,
@@ -22,8 +26,13 @@ class ModelProviderPreset {
     required this.openAiCompatible,
     this.recommendedModels = const [],
     this.signUpUrl,
+    this.logoAsset,
   });
 }
+
+/// SimiRouter 的官方入口。注册页保留推广参数，方便用户直接完成注册。
+const kSimiRouterHomeUrl = 'https://api.dwchainless.com/';
+const kSimiRouterSignUpUrl = 'https://api.dwchainless.com/sign-up?aff=Bslh';
 
 /// 返回协议是否必须配置 API Key。
 ///
@@ -44,14 +53,15 @@ const kModelProviderPresets = [
   ),
   ModelProviderPreset(
     id: 'dwchainless',
-    name: 'DW Chainless 中转站',
+    name: 'SimiRouter AI 中转站',
     protocol: 'openai_chat',
     baseUrl: 'https://api.dwchainless.com/v1',
     description:
-        'DW Chainless OpenAI 兼容中转站，一个 API Key 即可接入聚合的主流模型，无需分别申请各厂商密钥。',
-    docsUrl: 'https://api.dwchainless.com/',
-    signUpUrl: 'https://api.dwchainless.com/sign-up',
+        '高并发、低延迟的企业级 AI API 服务。一个 API 统一接入主流 AI 模型，支持智能路由、负载均衡与自动故障切换；对话内容默认不持久化存储，计费公开透明。',
+    docsUrl: kSimiRouterHomeUrl,
+    signUpUrl: kSimiRouterSignUpUrl,
     openAiCompatible: true,
+    logoAsset: 'assets/branding/simirouter.png',
     recommendedModels: ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus'],
   ),
   ModelProviderPreset(

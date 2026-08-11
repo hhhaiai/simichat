@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/core/mcp/bundled_node_runtime.dart';
@@ -15,7 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Android bundled Node MCP runs without host runtime', (
+  testWidgets('embedded mobile Node MCP runs without host runtime', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -23,7 +24,7 @@ void main() {
     addTearDown(db.close);
 
     await db.mcpDao.insertServer(
-      id: 'real-android-bundled-node-mcp',
+      id: 'real-mobile-bundled-node-mcp',
       name: 'SimiChat 内置 Node Runtime',
       transport: kMcpTransportSse,
       url: kBundledNodeRuntimeSseUrl,
@@ -54,8 +55,8 @@ void main() {
     expect(runtimeStatus['nativeState'], 2);
     expect(runtimeStatus['healthUrl'], kBundledNodeRuntimeHealthUrl);
 
-    expect(manager.isConnected('real-android-bundled-node-mcp'), isTrue);
-    expect(manager.connectionErrorFor('real-android-bundled-node-mcp'), isNull);
+    expect(manager.isConnected('real-mobile-bundled-node-mcp'), isTrue);
+    expect(manager.connectionErrorFor('real-mobile-bundled-node-mcp'), isNull);
     expect(
       manager.getAllTools().map((entry) => entry.tool.name),
       containsAll([
@@ -66,7 +67,7 @@ void main() {
     );
 
     final infoResult = await manager.callTool(
-      'real-android-bundled-node-mcp',
+      'real-mobile-bundled-node-mcp',
       'simichat.node_runtime_info',
       const <String, dynamic>{},
     );
@@ -80,10 +81,10 @@ void main() {
     expect(info['requiresHostNode'], isFalse);
     expect(info['requiresHostNpx'], isFalse);
     expect(info['requiresDocker'], isFalse);
-    expect(info['platform'], 'android');
+    expect(info['platform'], Platform.isAndroid ? 'android' : 'ios');
 
     final echoResult = await manager.callTool(
-      'real-android-bundled-node-mcp',
+      'real-mobile-bundled-node-mcp',
       'simichat.echo',
       const {'text': 'android bundled node'},
     );
@@ -91,7 +92,9 @@ void main() {
     expect(echoResult.content.single.text, contains('android bundled node'));
 
     // ignore: avoid_print
-    print('SIMICHAT_ANDROID_BUNDLED_NODE_MCP_READY');
+    print(
+      'SIMICHAT_${Platform.operatingSystem.toUpperCase()}_BUNDLED_NODE_MCP_READY',
+    );
     expect(tester.takeException(), isNull);
   });
 }

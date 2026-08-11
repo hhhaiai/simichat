@@ -10,6 +10,7 @@ const kBundledNodeRuntimeChannel = MethodChannel(
   'top.simitalk.aichat/node_runtime',
 );
 const kBundledNodeRuntimeHealthUrl = 'http://127.0.0.1:37651/health';
+const kBundledNodeRuntimeBaseUrl = 'http://127.0.0.1:37651';
 const kBundledNodeRuntimeSseUrl =
     'http://127.0.0.1:37651/mcp/sse/simichat-node';
 const kBundledNodeRuntimeServerAsset =
@@ -312,6 +313,68 @@ class BundledNodeRuntime {
   static String extensionSseUrl(String id) =>
       'http://127.0.0.1:37651/mcp/sse/$id';
 
+  /// Starts a real JSON-Lines stdio session in the app-owned Runtime.
+  ///
+  /// `command` and `args` are sent unchanged to the Runtime's audited
+  /// resolver. The resolver may select a bundled mobile package, or an
+  /// already-registered extension, but never starts a host shell command.
+  static Future<Map<String, dynamic>> startStdioSession({
+    required String command,
+    List<String> args = const <String>[],
+    String? serverId,
+    String? baseUrl,
+    bool ensureRuntime = true,
+  }) async {
+    final endpoint = baseUrl ?? kBundledNodeRuntimeBaseUrl;
+    if (ensureRuntime) {
+      final runtime = await start();
+      if (runtime['running'] != true) {
+        throw StateError('Bundled Node Runtime 未运行: $runtime');
+      }
+    }
+    return _postRuntimeJsonPath('/runtime/stdio/start', <String, dynamic>{
+      'command': command,
+      'args': args,
+      if (serverId != null && serverId.isNotEmpty) 'serverId': serverId,
+    }, baseUrl: endpoint);
+  }
+
+  /// Writes exactly one newline-delimited JSON line to a mobile stdio session.
+  static Future<Map<String, dynamic>> writeStdioLine(
+    String sessionId,
+    String line, {
+    String? baseUrl,
+  }) {
+    return _postRuntimeJsonPath(
+      '/runtime/stdio/$sessionId/stdin',
+      <String, dynamic>{'line': line},
+      baseUrl: baseUrl ?? kBundledNodeRuntimeBaseUrl,
+    );
+  }
+
+  /// Reads stdout lines from a mobile stdio session. The Runtime uses a short
+  /// long-poll so disconnect remains responsive without an SSE connection.
+  static Future<Map<String, dynamic>> readStdioLines(
+    String sessionId, {
+    String? baseUrl,
+  }) {
+    return _getRuntimeJsonPath(
+      '/runtime/stdio/$sessionId/stdout?waitMs=1000',
+      baseUrl: baseUrl ?? kBundledNodeRuntimeBaseUrl,
+    );
+  }
+
+  static Future<Map<String, dynamic>> closeStdioSession(
+    String sessionId, {
+    String? baseUrl,
+  }) {
+    return _postRuntimeJsonPath(
+      '/runtime/stdio/$sessionId/close',
+      const <String, dynamic>{},
+      baseUrl: baseUrl ?? kBundledNodeRuntimeBaseUrl,
+    );
+  }
+
   static Future<Map<String, dynamic>> unregisterExtension(String id) {
     return _postRuntimeJson('/runtime/extensions/unregister', <String, dynamic>{
       'id': id,
@@ -348,12 +411,16 @@ class BundledNodeRuntime {
   static Future<Map<String, dynamic>> _postRuntimeJson(
     String path,
     Map<String, dynamic> payload,
-  ) async {
+  ) => _postRuntimeJsonPath(path, payload, baseUrl: kBundledNodeRuntimeBaseUrl);
+
+  static Future<Map<String, dynamic>> _postRuntimeJsonPath(
+    String path,
+    Map<String, dynamic> payload, {
+    required String baseUrl,
+  }) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
     try {
-      final request = await client.postUrl(
-        Uri.parse('http://127.0.0.1:37651$path'),
-      );
+      final request = await client.postUrl(Uri.parse('$baseUrl$path'));
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(payload));
       final response = await request.close().timeout(
@@ -366,6 +433,32 @@ class BundledNodeRuntime {
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map ? decoded['error'] : decoded;
         throw StateError('Node runtime extension request failed: $message');
+      }
+      return decoded is Map
+          ? decoded.cast<String, dynamic>()
+          : <String, dynamic>{'value': decoded};
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<Map<String, dynamic>> _getRuntimeJsonPath(
+    String path, {
+    required String baseUrl,
+  }) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client.getUrl(Uri.parse('$baseUrl$path'));
+      final response = await request.close().timeout(
+        const Duration(seconds: 5),
+      );
+      final body = await utf8.decoder.bind(response).join();
+      final decoded = body.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final message = decoded is Map ? decoded['error'] : decoded;
+        throw StateError('Node runtime stdio request failed: $message');
       }
       return decoded is Map
           ? decoded.cast<String, dynamic>()

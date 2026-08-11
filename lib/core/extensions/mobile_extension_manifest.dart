@@ -53,11 +53,20 @@ const kMobileExtensionPermissions = <String>{
   'mcp.call',
 };
 
+/// App-native MCP handlers are compiled into SimiChat.  A package may bind
+/// only to a handler that this build explicitly exposes; arbitrary IDs must
+/// not turn into a request for a new in-process capability.
+const kMobileAppNativeServerIds = <String>{'simichat-local'};
+
 /// Protocol contracts implemented by a JavaScript MCP package.  These are
 /// deliberately explicit: a package that only has an npm CLI entry point is
 /// not automatically runnable on a phone.  It must be adapted to one of the
 /// in-process contracts and ship all of its JavaScript dependencies.
-const kMobileMcpProtocols = <String>{'mobile-mcp-v1', 'stdio-compat-v1'};
+const kMobileMcpProtocols = <String>{
+  'mobile-mcp-v1',
+  'stdio-v1',
+  'stdio-compat-v1',
+};
 
 const kMobileExtensionIdPattern = r'^[a-z0-9][a-z0-9._-]{1,127}$';
 final _mobileExtensionIdPattern = RegExp(kMobileExtensionIdPattern);
@@ -109,8 +118,9 @@ class MobileExtensionManifest {
   final bool nativeAddon;
   final List<String> permissions;
 
-  /// The in-process JavaScript contract used by a node-mobile MCP package.
-  /// `stdio-compat-v1` is an adapter contract, not a child-process transport.
+  /// The JavaScript contract used by a node-mobile MCP package. `stdio-v1`
+  /// is served through the app-owned JSON-Lines stdin/stdout session;
+  /// `stdio-compat-v1` remains accepted only for legacy installed packages.
   final String? protocol;
 
   /// For an MCP package this is either `app_native` or `sse`.
@@ -171,6 +181,35 @@ class MobileExtensionManifest {
     final protocol = _optionalString(json['protocol']);
     final mcpTransport = _optionalString(json['mcpTransport']);
     final mcpServerId = _optionalString(json['mcpServerId']);
+    if (type != MobileExtensionType.mcp &&
+        (protocol != null || mcpTransport != null || mcpServerId != null)) {
+      throw const MobileExtensionManifestException(
+        'protocol、mcpTransport、mcpServerId 只能用于 MCP package',
+      );
+    }
+    if (type == MobileExtensionType.mcp &&
+        runtime == MobileExtensionRuntime.nodeMobile &&
+        (mcpTransport != null || mcpServerId != null)) {
+      throw const MobileExtensionManifestException(
+        'node-mobile MCP 不得声明 mcpTransport 或 mcpServerId；它使用内置 Node Runtime',
+      );
+    }
+    if (type == MobileExtensionType.mcp &&
+        runtime == MobileExtensionRuntime.dart &&
+        (mcpTransport != 'app_native' ||
+            mcpServerId == null ||
+            !kMobileAppNativeServerIds.contains(mcpServerId))) {
+      throw const MobileExtensionManifestException(
+        'dart MCP 必须绑定已内建的 app_native handler',
+      );
+    }
+    if (type == MobileExtensionType.mcp &&
+        runtime == MobileExtensionRuntime.dart &&
+        protocol != null) {
+      throw const MobileExtensionManifestException(
+        'dart MCP 不需要 protocol 字段',
+      );
+    }
     if (type == MobileExtensionType.mcp && mcpTransport != null) {
       if (mcpTransport != 'app_native' && mcpTransport != 'sse') {
         throw const MobileExtensionManifestException(
@@ -181,6 +220,12 @@ class MobileExtensionManifest {
           (mcpServerId == null || mcpServerId.isEmpty)) {
         throw const MobileExtensionManifestException(
           'app_native MCP 必须声明 mcpServerId',
+        );
+      }
+      if (mcpTransport == 'app_native' &&
+          !kMobileAppNativeServerIds.contains(mcpServerId)) {
+        throw MobileExtensionManifestException(
+          'app_native MCP 只能绑定已内置 handler: ${kMobileAppNativeServerIds.join(', ')}',
         );
       }
     }
