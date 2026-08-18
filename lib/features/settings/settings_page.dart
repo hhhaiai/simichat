@@ -64,6 +64,7 @@ import '../../core/archive/notion_sync_service.dart';
 import '../../core/archive/yuque_sync_service.dart';
 import '../../core/archive/siyuan_sync_service.dart';
 import '../../shared/providers/channel_provider.dart';
+import '../../shared/providers/simirouter_billing_provider.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/conversation_archive_provider.dart';
 import '../../shared/providers/dreaming_provider.dart';
@@ -735,6 +736,14 @@ class SettingsPage extends ConsumerWidget {
               ),
             ],
           ),
+          if (hasKey) ...[
+            const SizedBox(height: 4),
+            _SimiRouterUsageRow(
+              channelId: channel.id,
+              baseUrl: channel.baseUrl,
+              apiKeyEncrypted: channel.apiKeyEncrypted,
+            ),
+          ],
           const SizedBox(height: 6),
           Row(
             children: [
@@ -9988,6 +9997,91 @@ class _ProviderPresetHint extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// SimiRouter 已接入状态下的用量行：紧凑单行 + 手动刷新。
+class _SimiRouterUsageRow extends ConsumerStatefulWidget {
+  const _SimiRouterUsageRow({
+    required this.channelId,
+    required this.baseUrl,
+    required this.apiKeyEncrypted,
+  });
+
+  final String channelId;
+  final String baseUrl;
+  final String apiKeyEncrypted;
+
+  @override
+  ConsumerState<_SimiRouterUsageRow> createState() =>
+      _SimiRouterUsageRowState();
+}
+
+class _SimiRouterUsageRowState extends ConsumerState<_SimiRouterUsageRow> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _load();
+    });
+  }
+
+  Future<void> _load() async {
+    try {
+      final apiKey = KeyEncryptor.decryptOrEmpty(widget.apiKeyEncrypted);
+      await ref
+          .read(simiRouterBillingProvider.notifier)
+          .refresh(baseUrl: widget.baseUrl, apiKey: apiKey);
+    } catch (_) {
+      // 解密失败静默：不打扰设置页。
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final state = ref.watch(simiRouterBillingProvider);
+    final snapshot = state.snapshot;
+    return Row(
+      children: [
+        if (snapshot != null)
+          Text(
+            '已用 ${snapshot.usedLabel} · ${snapshot.limitLabel}',
+            style: TextStyle(
+              fontSize: 11,
+              color: scheme.onSurfaceVariant,
+            ),
+          )
+        else if (state.error != null)
+          Text(
+            '用量加载失败，点击刷新重试',
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+          )
+        else
+          Text(
+            '点击刷新查看用量',
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+          ),
+        const Spacer(),
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: IconButton(
+            key: const ValueKey('simirouter-billing-refresh'),
+            padding: EdgeInsets.zero,
+            icon: state.loading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh, size: 16),
+            tooltip: '刷新用量',
+            onPressed: state.loading ? null : _load,
+          ),
+        ),
+      ],
     );
   }
 }
