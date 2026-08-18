@@ -575,6 +575,8 @@ class _RealtimeVoicePanelState extends ConsumerState<RealtimeVoicePanel> {
         RealtimeVoiceProvider.xAi => kDefaultRealtimeVoiceXaiEndpoint,
         RealtimeVoiceProvider.geminiLive => kDefaultRealtimeVoiceGeminiEndpoint,
         RealtimeVoiceProvider.custom => kDefaultRealtimeVoiceOpenAiEndpoint,
+        RealtimeVoiceProvider.simiRouter =>
+          kDefaultRealtimeVoiceSimiRouterEndpoint,
       };
 
   String _defaultModelFor(RealtimeVoiceProvider provider) => switch (provider) {
@@ -582,6 +584,7 @@ class _RealtimeVoicePanelState extends ConsumerState<RealtimeVoicePanel> {
     RealtimeVoiceProvider.xAi => kDefaultRealtimeVoiceXaiModel,
     RealtimeVoiceProvider.geminiLive => kDefaultRealtimeVoiceGeminiModel,
     RealtimeVoiceProvider.custom => kDefaultRealtimeVoiceOpenAiModel,
+    RealtimeVoiceProvider.simiRouter => '',
   };
 
   String _defaultVoiceFor(RealtimeVoiceProvider provider) => switch (provider) {
@@ -639,6 +642,10 @@ class _RealtimeVoicePanelState extends ConsumerState<RealtimeVoicePanel> {
             DropdownMenuItem(
               value: RealtimeVoiceProvider.custom,
               child: Text('自定义 OpenAI-compatible'),
+            ),
+            DropdownMenuItem(
+              value: RealtimeVoiceProvider.simiRouter,
+              child: Text('SimiRouter 中转站'),
             ),
           ],
           onChanged: (value) {

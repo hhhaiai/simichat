@@ -4,7 +4,12 @@ import 'dart:typed_data';
 /// Supported realtime providers.  The wire event names intentionally remain
 /// OpenAI-compatible because xAI's realtime API uses the same event family
 /// with a small number of documented naming differences.
-enum RealtimeVoiceProvider { openAi, xAi, geminiLive, custom }
+enum RealtimeVoiceProvider { openAi, xAi, geminiLive, custom, simiRouter }
+
+/// SimiRouter（api.dwchainless.com）Realtime 默认入口：OpenAI 兼容
+/// WebSocket，Bearer 鉴权，模型名由用户填写。
+const kDefaultRealtimeVoiceSimiRouterEndpoint =
+    'wss://api.dwchainless.com/v1/realtime';
 
 /// How a realtime credential is presented during the WebSocket handshake.
 enum RealtimeVoiceAuthMode { bearer, ephemeral, apiKeyHeader }
@@ -306,6 +311,58 @@ class RealtimeVoiceSessionConfig {
       endpoint: endpoint ?? Uri.parse('wss://api.openai.com/v1/realtime'),
       auth: auth,
       provider: RealtimeVoiceProvider.openAi,
+      model: model,
+      instructions: instructions,
+      voice: voice,
+      inputAudio: inputAudio,
+      outputAudio: outputAudio,
+      inputAudioTransport: inputAudioTransport,
+      outputAudioTransport: outputAudioTransport,
+      transcriptionModel: transcriptionModel,
+      turnDetection: turnDetection,
+      outputModalities: outputModalities,
+      sessionWireFormat: sessionWireFormat,
+      additionalSessionFields: additionalSessionFields,
+      headers: headers,
+      protocols: protocols,
+      connectTimeout: connectTimeout,
+      pingInterval: pingInterval,
+      sendSessionUpdate: sendSessionUpdate,
+    );
+  }
+
+  /// SimiRouter（OpenAI 兼容中转站）Realtime 配置：Bearer 鉴权，
+  /// 模型名留空由面板要求用户填写。
+  factory RealtimeVoiceSessionConfig.simiRouter({
+    required RealtimeVoiceAuth auth,
+    Uri? endpoint,
+    String model = '',
+    String? instructions,
+    String? voice,
+    RealtimeVoiceAudioFormat? inputAudio,
+    RealtimeVoiceAudioFormat? outputAudio,
+    RealtimeVoiceAudioTransport inputAudioTransport =
+        RealtimeVoiceAudioTransport.json,
+    RealtimeVoiceAudioTransport outputAudioTransport =
+        RealtimeVoiceAudioTransport.json,
+    String? transcriptionModel,
+    RealtimeVoiceTurnDetection? turnDetection,
+    List<String>? outputModalities,
+    RealtimeVoiceSessionWireFormat sessionWireFormat =
+        RealtimeVoiceSessionWireFormat.providerDefault,
+    Map<String, dynamic> additionalSessionFields = const <String, dynamic>{},
+    Map<String, String> headers = const <String, String>{},
+    List<String> protocols = const <String>[],
+    Duration connectTimeout = const Duration(seconds: 20),
+    Duration? pingInterval,
+    bool sendSessionUpdate = true,
+  }) {
+    return RealtimeVoiceSessionConfig(
+      endpoint:
+          endpoint ??
+          Uri.parse(kDefaultRealtimeVoiceSimiRouterEndpoint),
+      auth: auth,
+      provider: RealtimeVoiceProvider.simiRouter,
       model: model,
       instructions: instructions,
       voice: voice,

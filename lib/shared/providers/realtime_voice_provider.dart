@@ -68,6 +68,7 @@ class RealtimeVoiceConfig {
     RealtimeVoiceProvider.xAi => 'xAI Realtime',
     RealtimeVoiceProvider.geminiLive => 'Gemini Live',
     RealtimeVoiceProvider.custom => '自定义 Realtime',
+    RealtimeVoiceProvider.simiRouter => 'SimiRouter Realtime',
   };
 
   String get safeSummary {
@@ -151,6 +152,16 @@ class RealtimeVoiceConfig {
         endpoint: uri,
         auth: auth,
         provider: RealtimeVoiceProvider.custom,
+        model: model.trim(),
+        voice: voice.trim().isEmpty ? null : voice.trim(),
+        inputAudio: input,
+        outputAudio: output,
+        turnDetection: turnDetection,
+        outputModalities: const ['text', 'audio'],
+      ),
+      RealtimeVoiceProvider.simiRouter => RealtimeVoiceSessionConfig.simiRouter(
+        auth: auth,
+        endpoint: uri,
         model: model.trim(),
         voice: voice.trim().isEmpty ? null : voice.trim(),
         inputAudio: input,

@@ -392,6 +392,7 @@ class RealtimeVoiceSession {
             RealtimeVoiceProvider.xAi => 'xai-client-secret',
             RealtimeVoiceProvider.geminiLive => null,
             RealtimeVoiceProvider.custom => null,
+            RealtimeVoiceProvider.simiRouter => null,
           };
       if (prefix != null && prefix.trim().isNotEmpty) {
         if (config.provider == RealtimeVoiceProvider.openAi &&
