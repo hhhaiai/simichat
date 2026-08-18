@@ -653,8 +653,8 @@ class SettingsPage extends ConsumerWidget {
 
     return Container(
       key: const Key('simirouter_channel_card'),
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -664,7 +664,7 @@ class SettingsPage extends ConsumerWidget {
             scheme.surfaceContainerHighest.withValues(alpha: 0.35),
           ],
         ),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
@@ -673,20 +673,20 @@ class SettingsPage extends ConsumerWidget {
           Row(
             children: [
               CircleAvatar(
-                radius: 18,
+                radius: 12,
                 backgroundColor: scheme.surface,
                 backgroundImage: const AssetImage(
                   'assets/branding/simirouter.png',
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       'SimiRouter AI 中转站',
-                      style: textTheme.titleSmall?.copyWith(
+                      style: textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -697,6 +697,7 @@ class SettingsPage extends ConsumerWidget {
                           ? '已添加 · 尚未填写 API Key'
                           : '主流模型统一接入 · 智能路由',
                       style: textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
                         color: hasKey
                             ? scheme.primary
                             : scheme.onSurfaceVariant,
@@ -713,6 +714,7 @@ class SettingsPage extends ConsumerWidget {
                     : hasKey
                     ? Icons.check_circle
                     : Icons.error_outline,
+                size: 18,
                 color: channel == null
                     ? scheme.primary
                     : hasKey
@@ -721,7 +723,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Row(
             children: [
               if (!hasKey) ...[
@@ -9467,7 +9469,7 @@ class _ProviderPresetHint extends StatelessWidget {
   Widget _buildSimiRouterHint(BuildContext context, ColorScheme scheme) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: scheme.primaryContainer.withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(12),
@@ -9480,17 +9482,17 @@ class _ProviderPresetHint extends StatelessWidget {
             children: [
               if (preset.logoAsset != null)
                 CircleAvatar(
-                  radius: 9,
+                  radius: 8,
                   backgroundColor: scheme.surface,
                   backgroundImage: AssetImage(preset.logoAsset!),
                 )
               else
                 Icon(
                   getProviderIcon(preset.id),
-                  size: 18,
+                  size: 16,
                   color: scheme.primary,
                 ),
-              const SizedBox(width: 7),
+              const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   preset.name,
@@ -9511,7 +9513,7 @@ class _ProviderPresetHint extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           const Text(
             '填写 API Key 即可完成接入。还没有 Key？先注册，注册页会在应用内打开。',
             style: TextStyle(fontSize: 12),
