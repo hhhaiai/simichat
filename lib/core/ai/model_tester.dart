@@ -1,6 +1,11 @@
 import 'dart:async';
+
+import 'package:dio/dio.dart';
+
 import 'ai_protocol.dart';
+import 'api_endpoint_resolver.dart';
 import 'model_capability.dart';
+import 'http_helper.dart';
 import 'openai_chat_protocol.dart';
 import 'openai_response_protocol.dart';
 import 'openai_embedding_client.dart';
@@ -17,6 +22,9 @@ class ModelTestResult {
   final int? statusCode;
   final int attempts;
 
+  /// 媒体模型跳过测试：不判失败，也不参与一键剔除。
+  final bool skipped;
+
   const ModelTestResult({
     required this.success,
     required this.summary,
@@ -24,6 +32,7 @@ class ModelTestResult {
     this.suggestion = '',
     this.statusCode,
     this.attempts = 1,
+    this.skipped = false,
   });
 
   factory ModelTestResult.success({int attempts = 1}) {
@@ -32,6 +41,16 @@ class ModelTestResult {
       summary: '连接成功',
       suggestion: '模型已返回有效响应，可以用于对话。',
       attempts: attempts,
+    );
+  }
+
+  factory ModelTestResult.skipped({required String reason}) {
+    return ModelTestResult(
+      success: false,
+      skipped: true,
+      summary: '未测试',
+      detail: reason,
+      suggestion: reason,
     );
   }
 
@@ -132,6 +151,7 @@ class ModelTestResult {
   int get retryCount => attempts > 1 ? attempts - 1 : 0;
 
   String get compactMessage {
+    if (skipped) return '$summary · $detail';
     final parts = [
       summary,
       if (!success && statusCode != null) 'HTTP $statusCode',
@@ -231,6 +251,9 @@ class ModelTester {
     ModelTestRetryPolicy retryPolicy = const ModelTestRetryPolicy(),
     RawModelTestRunner? testRunner,
   }) async {
+    final skipped = skippedForCapability(capability, modelId: model);
+    if (skipped != null) return skipped;
+
     final runner =
         testRunner ??
         () => testModel(
@@ -271,6 +294,51 @@ class ModelTester {
     return lastResult ?? ModelTestResult.failure('模型测试未执行');
   }
 
+  /// 语音识别模型名提示（whisper / transcri / asr 等），这些模型无法用
+  /// 廉价的 TTS 请求探测，测试时直接跳过。
+  static const _asrModelHints = [
+    'whisper',
+    'transcri',
+    'speech-to-text',
+    'speech_to_text',
+    'asr-',
+    '-asr',
+  ];
+
+  static bool _isAsrModelName(String modelId) {
+    final id = modelId.trim().toLowerCase();
+    return _asrModelHints.any(id.contains);
+  }
+
+  /// 返回不需要真实请求的跳过结果。视频 / 音乐生成任务昂贵且异步，
+  /// 语音识别需要音频文件，都不适合批量连通性探测——跳过意味着
+  /// 保留模型，绝不因为"无法测试"而删除。
+  static ModelTestResult? skippedForCapability(
+    String capability, {
+    required String modelId,
+  }) {
+    final normalized = ModelCapability.normalize(capability);
+    switch (normalized) {
+      case ModelCapability.video:
+        return ModelTestResult.skipped(
+          reason: '视频生成模型不参与连通性测试，保留不剔除',
+        );
+      case ModelCapability.music:
+        return ModelTestResult.skipped(
+          reason: '音乐生成模型不参与连通性测试，保留不剔除',
+        );
+      case ModelCapability.audio:
+        if (_isAsrModelName(modelId)) {
+          return ModelTestResult.skipped(
+            reason: '语音识别模型暂不支持连通性测试，保留不剔除',
+          );
+        }
+        return null;
+      default:
+        return null;
+    }
+  }
+
   /// 测试指定模型是否可用（30 秒超时）。
   static Future<String?> testModel({
     required String protocol,
@@ -295,12 +363,114 @@ class ModelTester {
         model: model,
       );
     }
+    if (ModelCapability.isImage(capability)) {
+      return _testImageModel(
+        protocol: protocol,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      );
+    }
+    if (ModelCapability.isAudio(capability) && !_isAsrModelName(model)) {
+      return _testSpeechModel(
+        protocol: protocol,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      );
+    }
+    if (skippedForCapability(capability, modelId: model) != null) {
+      // 媒体模型（视频 / 音乐 / ASR）不进对话测试路径；testModelDetailed
+      // 会在更早的位置拦截，这里是直接调用 testModel 时的兜底。
+      return 'SKIP:${skippedForCapability(capability, modelId: model)!.detail}';
+    }
     return _testChatModel(
       protocol: protocol,
       baseUrl: baseUrl,
       apiKey: apiKey,
       model: model,
     );
+  }
+
+  /// 生图模型连通性：真实调用 /v1/images/generations 生成一张最小图。
+  /// 这是显式的用户动作，产生一次真实生成成本。
+  static Future<String?> _testImageModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
+    if (protocol != 'openai_chat' && protocol != 'openai_response') {
+      return '当前协议暂不支持图片生成测试';
+    }
+    try {
+      final dio = createDio();
+      final response = await dio.post<Map<String, dynamic>>(
+        resolveOpenAiEndpoint(baseUrl, 'images/generations').toString(),
+        data: <String, dynamic>{
+          'model': model,
+          'prompt': 'ping',
+          'n': 1,
+          'size': '1024x1024',
+        },
+        options: Options(
+          headers: {'Authorization': 'Bearer $apiKey'},
+          responseType: ResponseType.json,
+        ),
+      );
+      final data = response.data;
+      final items = data?['data'];
+      if (items is List && items.isNotEmpty) {
+        final first = items.first;
+        if (first is Map &&
+            (first['b64_json'] != null ||
+                first['url'] != null ||
+                first['image_url'] != null)) {
+          return null;
+        }
+      }
+      return '生图模型未返回图片数据';
+    } on TimeoutException {
+      return '测试超时（30秒），请检查网络或模型状态';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// TTS 类音频模型连通性：短文本合成请求，成本可忽略。
+  static Future<String?> _testSpeechModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
+    if (protocol != 'openai_chat' && protocol != 'openai_response') {
+      return '当前协议暂不支持语音合成测试';
+    }
+    try {
+      final dio = createDio();
+      final response = await dio.post<List<int>>(
+        resolveOpenAiEndpoint(baseUrl, 'audio/speech').toString(),
+        data: <String, dynamic>{
+          'model': model,
+          'input': '连接测试',
+          'voice': 'alloy',
+        },
+        options: Options(
+          headers: {'Authorization': 'Bearer $apiKey'},
+          responseType: ResponseType.bytes,
+        ),
+      );
+      final bytes = response.data;
+      if (bytes == null || bytes.isEmpty) {
+        return '语音合成模型未返回音频数据';
+      }
+      return null;
+    } on TimeoutException {
+      return '测试超时（30秒），请检查网络或模型状态';
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   static Future<String?> _testEmbeddingModel({

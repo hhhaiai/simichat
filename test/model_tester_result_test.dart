@@ -151,4 +151,87 @@ void main() {
       expect(result.compactMessage, contains('已重试 2 次'));
     });
   });
+
+  group('media capability dispatch', () {
+  test('video models are skipped without running a request', () async {
+    var calls = 0;
+    final result = await ModelTester.testModelDetailed(
+      protocol: 'openai_chat',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test-key',
+      model: 'grok-imagine-video',
+      capability: 'video',
+      testRunner: () async {
+        calls += 1;
+        return null;
+      },
+    );
+
+    expect(calls, 0);
+    expect(result.skipped, true);
+    expect(result.success, false);
+    expect(result.compactMessage, contains('不参与连通性测试'));
+  });
+
+  test('music models are skipped without running a request', () async {
+    final result = await ModelTester.testModelDetailed(
+      protocol: 'openai_chat',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test-key',
+      model: 'musicgen',
+      capability: 'music',
+      testRunner: () async => null,
+    );
+
+    expect(result.skipped, true);
+  });
+
+  test('asr-named audio models are skipped without running a request', () async {
+    final result = await ModelTester.testModelDetailed(
+      protocol: 'openai_chat',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test-key',
+      model: 'mimo-v2.5-asr',
+      capability: 'audio',
+      testRunner: () async => null,
+    );
+
+    expect(result.skipped, true);
+    expect(result.compactMessage, contains('语音识别'));
+  });
+
+  test('chat models still route through the injected runner', () async {
+    var calls = 0;
+    final result = await ModelTester.testModelDetailed(
+      protocol: 'openai_chat',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test-key',
+      model: 'test-model',
+      capability: 'chat',
+      testRunner: () async {
+        calls += 1;
+        return null;
+      },
+    );
+
+    expect(calls, 1);
+    expect(result.skipped, false);
+    expect(result.success, true);
+  });
+
+  test('skipped results never retry', () async {
+    final result = await ModelTester.testModelDetailed(
+      protocol: 'openai_chat',
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test-key',
+      model: 'sora-2',
+      capability: 'video',
+      retryPolicy: const ModelTestRetryPolicy(maxAttempts: 3),
+      testRunner: () async => '[500] provider down',
+    );
+
+    expect(result.skipped, true);
+    expect(result.attempts, 1);
+  });
+});
 }
