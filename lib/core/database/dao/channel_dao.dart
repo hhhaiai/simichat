@@ -171,6 +171,22 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
     });
   }
 
+  /// 批量删除模型：一次事务内清空引用并删除，避免逐个删除时
+  /// 中途失败留下部分已删、部分未删的不可预期状态。
+  Future<void> deleteModels(List<String> ids) {
+    if (ids.isEmpty) return Future.value();
+    return transaction(() async {
+      for (final id in ids) {
+        await (update(sessions)
+              ..where((t) => t.defaultChannelModelId.equals(id)))
+            .write(const SessionsCompanion(defaultChannelModelId: Value(null)));
+        await (update(messages)..where((t) => t.channelModelId.equals(id)))
+            .write(const MessagesCompanion(channelModelId: Value(null)));
+      }
+      await (delete(channelModels)..where((t) => t.id.isIn(ids))).go();
+    });
+  }
+
   Future<void> setDefaultModel(String channelId, String modelId) async {
     await (update(channelModels)..where((t) => t.channelId.equals(channelId)))
         .write(const ChannelModelsCompanion(isDefault: Value(false)));

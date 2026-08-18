@@ -567,9 +567,100 @@ void main() {
     await tester.tap(find.text('一键测试并剔除不可用'));
     await tester.pumpAndSettle();
 
+    // 删除前必须经过确认对话框：列出待删模型与原因。
+    expect(find.text('确认剔除不可用模型'), findsOneWidget);
+    expect(find.textContaining('• bad-model'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-prune-models')));
+    await tester.pumpAndSettle();
+
     final models = await db.channelDao.getModelsByChannel('prune-channel');
     expect(models.map((m) => m.modelName), contains('good-model'));
     expect(models.map((m) => m.modelName), isNot(contains('bad-model')));
     expect(find.textContaining('已剔除 1 个不可用模型'), findsOneWidget);
+  });
+
+  testWidgets('prune keeps transient failures and skipped media models', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.channelDao.createChannel(
+      id: 'prune-keep-channel',
+      name: 'Prune Keep Channel',
+      baseUrl: 'https://api.example.com/v1',
+      apiKeyEncrypted: KeyEncryptor.encrypt('test-key'),
+      protocol: 'openai_chat',
+    );
+    await db.channelDao.addModel(
+      id: 'ok-model-id',
+      channelId: 'prune-keep-channel',
+      modelName: 'ok-model',
+    );
+    await db.channelDao.addModel(
+      id: 'flaky-model-id',
+      channelId: 'prune-keep-channel',
+      modelName: 'flaky-model',
+    );
+    await db.channelDao.addModel(
+      id: 'video-model-id',
+      channelId: 'prune-keep-channel',
+      modelName: 'grok-imagine-video',
+      capability: 'video',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: SettingsPage(
+            modelTestRunner:
+                ({
+                  required protocol,
+                  required baseUrl,
+                  required apiKey,
+                  required model,
+                  required capability,
+                }) async {
+                  if (model == 'ok-model') {
+                    return ModelTestResult.success();
+                  }
+                  if (model == 'flaky-model') {
+                    return ModelTestResult.failure('[429] too many requests');
+                  }
+                  // grok-imagine-video 是 video 能力：即使 runner 被调用，
+                  // 也会因能力拦截返回 skipped。
+                  return ModelTestResult.success();
+                },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('Prune Keep Channel'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Prune Keep Channel'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('一键测试并剔除不可用'));
+    await tester.pumpAndSettle();
+
+    // 临时失败与媒体模型都不进确认删除对话框：无永久失败直接提示保留。
+    expect(find.text('确认剔除不可用模型'), findsNothing);
+    expect(find.textContaining('无需剔除'), findsOneWidget);
+
+    final models = await db.channelDao.getModelsByChannel(
+      'prune-keep-channel',
+    );
+    expect(models.map((m) => m.modelName).toSet(), {
+      'ok-model',
+      'flaky-model',
+      'grok-imagine-video',
+    });
   });
 }

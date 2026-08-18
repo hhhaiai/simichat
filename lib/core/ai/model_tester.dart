@@ -148,6 +148,18 @@ class ModelTestResult {
 
   bool get retried => attempts > 1;
 
+  /// 永久性配置类失败（Key / 权限 / 模型不存在 / 协议不支持）。
+  /// 一键剔除只对这类失败自动删除；临时失败（429 / 5xx / 超时 /
+  /// 连接失败）可能是网络抖动，绝不应自动删除模型。
+  bool get isPermanentFailure {
+    if (success || skipped) return false;
+    return statusCode == 401 ||
+        statusCode == 403 ||
+        statusCode == 404 ||
+        summary == '协议不支持' ||
+        summary == '接口或模型不存在';
+  }
+
   int get retryCount => attempts > 1 ? attempts - 1 : 0;
 
   String get compactMessage {

@@ -4184,11 +4184,14 @@ class SettingsPage extends ConsumerWidget {
     final progressNotifier = ValueNotifier<int>(0);
     final globalErrorNotifier = ValueNotifier<String?>(null);
     var cancelled = false;
+    BuildContext? progressDialogContext;
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => ValueListenableBuilder<int>(
+      builder: (ctx) {
+        progressDialogContext = ctx;
+        return ValueListenableBuilder<int>(
         valueListenable: progressNotifier,
         builder: (context, progress, child) => ValueListenableBuilder<String?>(
           valueListenable: globalErrorNotifier,
@@ -4202,7 +4205,7 @@ class SettingsPage extends ConsumerWidget {
                   const Padding(
                     padding: EdgeInsets.only(bottom: 8),
                     child: Text(
-                      '会逐个测试当前渠道模型；测试失败的模型会在完成后从本地列表删除，成功模型保留。',
+                      '逐个测试当前渠道模型；只有认证失败、模型不存在等永久性错误会弹出确认后删除，网络类临时失败与媒体模型一律保留。',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
@@ -4229,10 +4232,17 @@ class SettingsPage extends ConsumerWidget {
                         final testing = i == progress && globalError == null;
                         final result = results[m.id];
                         final success = result?.success == true;
+                        final skipped = result?.skipped == true;
                         return ListTile(
                           dense: true,
                           leading: done
-                              ? (success
+                              ? (skipped
+                                    ? const Icon(
+                                        Icons.remove_circle_outline,
+                                        color: Colors.grey,
+                                        size: 20,
+                                      )
+                                    : success
                                     ? const Icon(
                                         Icons.check_circle,
                                         color: Colors.green,
@@ -4263,9 +4273,13 @@ class SettingsPage extends ConsumerWidget {
                           subtitle: done && result != null && !result.success
                               ? Text(
                                   result.compactMessage,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 11,
-                                    color: Colors.red,
+                                    color: skipped
+                                        ? Colors.grey
+                                        : result.isPermanentFailure
+                                        ? Colors.red
+                                        : Colors.orange[800],
                                   ),
                                 )
                               : null,
@@ -4289,8 +4303,13 @@ class SettingsPage extends ConsumerWidget {
             ],
           ),
         ),
-      ),
+      );
+      },
     );
+
+    // 等待进度对话框完成首帧构建（widget 测试里异步循环可能在首帧前
+    // 全部跑完，此时无法拿到对话框 context 来关闭它）。
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
     try {
       final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
@@ -4308,15 +4327,18 @@ class SettingsPage extends ConsumerWidget {
             capability: m.capability,
           );
           results[m.id] = result;
-          await ref
-              .read(modelTestHistoryProvider.notifier)
-              .recordResult(
-                modelId: m.id,
-                modelName: m.modelName,
-                channelId: channel.id,
-                channelName: channel.name,
-                result: result,
-              );
+          // 媒体模型跳过结果不写入"最近测试"历史，避免误导为失败。
+          if (!result.skipped) {
+            await ref
+                .read(modelTestHistoryProvider.notifier)
+                .recordResult(
+                  modelId: m.id,
+                  modelName: m.modelName,
+                  channelId: channel.id,
+                  channelName: channel.name,
+                  result: result,
+                );
+          }
         } catch (e) {
           final result = ModelTestResult.failure(e.toString());
           results[m.id] = result;
@@ -4333,28 +4355,118 @@ class SettingsPage extends ConsumerWidget {
         progressNotifier.value = i + 1;
       }
       if (!cancelled) {
-        final failedModels = models
-            .where((model) => results[model.id]?.success == false)
-            .toList(growable: false);
-        for (final model in failedModels) {
-          await ref.read(channelDaoProvider).deleteModel(model.id);
-          await ref
-              .read(modelTestHistoryProvider.notifier)
-              .clearModel(model.id);
+        final dialogContext = progressDialogContext;
+        if (dialogContext != null && dialogContext.mounted) {
+          Navigator.of(dialogContext).pop();
         }
-        refreshChannelModels(ref, channel.id);
-        refreshModels(ref);
-        if (context.mounted) {
-          final kept = models.length - failedModels.length;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '测试完成：保留 $kept 个可用模型，已剔除 ${failedModels.length} 个不可用模型',
-              ),
-              duration: const Duration(seconds: 4),
+      }
+      if (cancelled || !context.mounted) return;
+
+      final permanentFailed = models
+          .where(
+            (model) => results[model.id]?.isPermanentFailure == true,
+          )
+          .toList(growable: false);
+      final transientFailed = models
+          .where((model) {
+            final result = results[model.id];
+            return result != null &&
+                !result.success &&
+                !result.skipped &&
+                !result.isPermanentFailure;
+          })
+          .toList(growable: false);
+
+      if (permanentFailed.isEmpty) {
+        final skippedCount = models
+            .where((model) => results[model.id]?.skipped == true)
+            .length;
+        final message = transientFailed.isEmpty && skippedCount == 0
+            ? '测试完成：全部模型可用，无需剔除'
+            : '测试完成：无需剔除（'
+                  '${transientFailed.length} 个临时失败请稍后重试'
+                  '${skippedCount > 0 ? '，$skippedCount 个媒体模型跳过测试' : ''}）';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+        );
+        return;
+      }
+
+      // 删除是不可逆动作：先展示待删模型与失败原因，用户确认后才执行。
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('确认剔除不可用模型'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '以下模型认证或配置失败，将从本地渠道中删除（会话默认模型引用会一并清空）：',
+                  style: TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                for (final model in permanentFailed)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• ${model.modelName}：${results[model.id]!.compactMessage}',
+                      style: const TextStyle(fontSize: 12, color: Colors.red),
+                    ),
+                  ),
+                if (transientFailed.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '另有 ${transientFailed.length} 个模型是网络类临时失败，本次保留。',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.orange,
+                    ),
+                  ),
+                ],
+              ],
             ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('保留全部'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-prune-models'),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text('删除 ${permanentFailed.length} 个'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已保留全部模型'), duration: Duration(seconds: 2)),
           );
         }
+        return;
+      }
+
+      await ref
+          .read(channelDaoProvider)
+          .deleteModels(permanentFailed.map((model) => model.id).toList());
+      for (final model in permanentFailed) {
+        await ref.read(modelTestHistoryProvider.notifier).clearModel(model.id);
+      }
+      refreshChannelModels(ref, channel.id);
+      refreshModels(ref);
+      if (context.mounted) {
+        final kept = models.length - permanentFailed.length;
+        final message =
+            '已剔除 ${permanentFailed.length} 个不可用模型，保留 $kept 个'
+            '${transientFailed.isNotEmpty ? '（${transientFailed.length} 个临时失败建议稍后重试）' : ''}';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+        );
       }
     } catch (e) {
       final result = ModelTestResult.failure(e.toString());
@@ -4379,6 +4491,11 @@ class SettingsPage extends ConsumerWidget {
     required String model,
     required String capability,
   }) {
+    // 媒体模型（视频 / 音乐 / ASR）无论注入 runner 与否都直接跳过，
+    // 保证一键剔除的行为与测试路径一致。
+    final skipped = ModelTester.skippedForCapability(capability, modelId: model);
+    if (skipped != null) return Future.value(skipped);
+
     final runner = modelTestRunner;
     if (runner != null) {
       return runner(
