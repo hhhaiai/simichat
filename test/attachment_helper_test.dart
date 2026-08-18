@@ -43,4 +43,44 @@ void main() {
     expect(loaded.single.audioFormat, 'm4a');
     expect(loaded.single.base64, base64Encode([0x01, 0x02, 0x03, 0x04]));
   });
+
+  test('loads audio data URLs and keeps the format metadata', () async {
+    final loaded = await loadAttachments(const [
+      Attachment(type: 'audio', path: 'data:audio/wav;base64,AQIDBA'),
+    ]);
+
+    expect(loaded.single.mimeType, 'audio/wav');
+    expect(loaded.single.audioFormat, 'wav');
+    expect(loaded.single.base64, 'AQIDBA==');
+  });
+
+  test('builds native OpenAI Chat audio parts instead of text fallbacks', () {
+    final part = buildOpenAiChatAudioPart(
+      const AttachmentData(
+        type: 'audio',
+        base64: 'AQID',
+        mimeType: 'audio/wav',
+        audioFormat: 'wav',
+      ),
+    );
+
+    expect(part, {
+      'type': 'input_audio',
+      'input_audio': {'data': 'AQID', 'format': 'wav'},
+    });
+    expect(jsonEncode(part), isNot(contains('mime_type')));
+  });
+
+  test('rejects an empty native audio payload with a typed exception', () {
+    expect(
+      () => buildOpenAiChatAudioPart(
+        const AttachmentData(type: 'audio', base64: '', mimeType: 'audio/wav'),
+      ),
+      throwsA(
+        isA<UnsupportedAttachmentException>()
+            .having((error) => error.attachmentType, 'type', 'audio')
+            .having((error) => error.protocol, 'protocol', 'openai_chat'),
+      ),
+    );
+  });
 }

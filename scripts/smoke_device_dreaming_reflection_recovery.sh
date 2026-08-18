@@ -7,10 +7,17 @@ DEVICE_ID="${1:-${DEVICE_ID:-37101FDJH0077P}}"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 PACKAGE_ID="${PACKAGE_ID:-top.simitalk.aichat}"
 SMOKE_PACKAGE="${SMOKE_PACKAGE:-top.simitalk.aichat.dreamingsmoke}"
-APK_PATH="${APK_PATH:-build/app/outputs/flutter-apk/app-debug.apk}"
+SMOKE_FLAVOR="production"
+EXPECTED_APK_NAME="app-${SMOKE_FLAVOR}-debug.apk"
+APK_PATH="${APK_PATH:-build/app/outputs/flutter-apk/${EXPECTED_APK_NAME}}"
 LOG_PATH="${LOG_PATH:-/tmp/simichat-dreaming-reflection-device-$(date +%Y%m%d%H%M%S).log}"
 PREFS_PATH="${PREFS_PATH:-/tmp/simichat-dreaming-reflection-prefs-$(date +%Y%m%d%H%M%S).xml}"
 SMOKE_SQLITE_RECOVERY="${SMOKE_SQLITE_RECOVERY:-0}"
+
+if [[ "$(basename "$APK_PATH")" != "$EXPECTED_APK_NAME" ]]; then
+  echo "APK_PATH must point to $EXPECTED_APK_NAME: $APK_PATH" >&2
+  exit 2
+fi
 
 if [[ "$SMOKE_PACKAGE" == "$PACKAGE_ID" ]]; then
   echo "Refusing to use the production package as the isolated smoke package" >&2
@@ -147,6 +154,7 @@ fi
 ORG_GRADLE_PROJECT_simichatApplicationId="$SMOKE_PACKAGE" \
   "$FLUTTER_BIN" --no-version-check build apk \
     --debug \
+    --flavor "$SMOKE_FLAVOR" \
     --target-platform android-arm64 \
     "${DART_DEFINE_ARGS[@]}" \
     --no-pub

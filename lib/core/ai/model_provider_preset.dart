@@ -38,7 +38,8 @@ const kSimiRouterSignUpUrl = 'https://api.dwchainless.com/sign-up?aff=Bslh';
 ///
 /// 本地 Ollama 默认不需要密钥；保留独立判断函数，避免设置页、批量导入
 /// 和其他接入入口各自维护一份不一致的协议判断。
-bool modelProtocolRequiresApiKey(String protocol) => protocol != 'ollama';
+bool modelProtocolRequiresApiKey(String protocol) =>
+    protocol.trim().toLowerCase() != 'ollama';
 
 const kModelProviderPresets = [
   ModelProviderPreset(
@@ -62,7 +63,12 @@ const kModelProviderPresets = [
     signUpUrl: kSimiRouterSignUpUrl,
     openAiCompatible: true,
     logoAsset: 'assets/branding/simirouter.png',
-    recommendedModels: ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus'],
+    recommendedModels: [
+      'gpt-4o-mini',
+      'deepseek-chat',
+      'qwen-plus',
+      'mimo-v2.5-chat',
+    ],
   ),
   ModelProviderPreset(
     id: 'anthropic',
@@ -197,9 +203,10 @@ const kModelProviderPresets = [
     protocol: 'openai_chat',
     baseUrl: 'https://api.x.ai/v1',
     description: 'xAI OpenAI 兼容接口，适合 Grok 系列模型。',
-    docsUrl: 'https://docs.x.ai/docs/overview',
+    docsUrl: 'https://docs.x.ai/overview',
     openAiCompatible: true,
-    recommendedModels: ['grok-4.3'],
+    // 当前文档模型放在首位，同时保留旧账号仍可使用的稳定兼容别名。
+    recommendedModels: ['grok-4.6', 'grok-4.3'],
   ),
   ModelProviderPreset(
     id: 'perplexity',
@@ -256,6 +263,29 @@ const kModelProviderPresets = [
       'openai/gpt-4o-mini',
       'deepseek/deepseek-chat-v3-0324:free',
     ],
+  ),
+  ModelProviderPreset(
+    id: 'jina',
+    name: 'Jina AI',
+    protocol: 'openai_chat',
+    baseUrl: 'https://api.jina.ai/v1',
+    description: 'Jina Reranker / Embeddings，OpenAI 兼容 /v1/rerank 与 /v1/embeddings。注意：Jina 无 /v1/models，请用推荐模型手动添加。',
+    docsUrl: 'https://jina.ai/reranker/',
+    openAiCompatible: true,
+    recommendedModels: [
+      'jina-reranker-v2-base-multilingual',
+      'jina-embeddings-v3',
+    ],
+  ),
+  ModelProviderPreset(
+    id: 'cohere',
+    name: 'Cohere',
+    protocol: 'openai_chat',
+    baseUrl: 'https://api.cohere.com/v1',
+    description: 'Cohere Rerank 模型，/v1/rerank 接口。',
+    docsUrl: 'https://docs.cohere.com/reference/rerank',
+    openAiCompatible: true,
+    recommendedModels: ['rerank-v3.5', 'rerank-multilingual-v3.0'],
   ),
   ModelProviderPreset(
     id: 'ollama',

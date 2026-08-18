@@ -135,10 +135,19 @@ Future<void> runDeferredAppStartupTasks(
 /// 将慢速启动任务移到首帧之后，保证即使原生插件或历史数据库异常，应用仍可
 /// 立即呈现并保持可恢复的聊天入口。
 class AppBootstrap extends ConsumerStatefulWidget {
-  const AppBootstrap({super.key, this.startupTasksRunner});
+  const AppBootstrap({
+    super.key,
+    this.startupTasksRunner,
+    this.mediaRecoveryRunner,
+  });
 
   @visibleForTesting
   final Future<void> Function(AppDatabase database)? startupTasksRunner;
+
+  /// 测试可替换的媒体恢复入口；生产实现使用 ProviderScope 内同一个
+  /// database/notifier，并在首帧后异步启动，不阻塞聊天页面。
+  @visibleForTesting
+  final Future<void> Function()? mediaRecoveryRunner;
 
   @override
   ConsumerState<AppBootstrap> createState() => _AppBootstrapState();
@@ -155,7 +164,17 @@ class _AppBootstrapState extends ConsumerState<AppBootstrap> {
       // databaseProvider 的生命周期归 ProviderScope 管理。不要创建并关闭第二个
       // AppDatabase，否则首次会话创建可能与 Skills 植入竞争同一个 SQLite 文件。
       unawaited(runStartupTasks(ref.read(databaseProvider)));
+      unawaited(_runMediaRecovery());
     });
+  }
+
+  Future<void> _runMediaRecovery() async {
+    try {
+      await (widget.mediaRecoveryRunner ??
+          () => startUniversalMediaRecovery(ref))();
+    } catch (error) {
+      debugPrint('Universal media recovery failed: $error');
+    }
   }
 
   @override
@@ -293,6 +312,327 @@ class _SearchIntent extends Intent {
 
 class _CancelStreamingIntent extends Intent {
   const _CancelStreamingIntent();
+}
+
+/// 顶部模型选择器：移动端和桌面端共用同一套可访问的模型切换入口。
+///
+/// 这里的列表只来自本地已配置渠道，不把测试模型或模型名称当成云端能力。
+/// 持久化和会话记录仍由 [switchConversationModel] 负责；本组件只负责把
+/// 选择状态、加载状态和失败反馈稳定地呈现在聊天顶部。
+class ChatModelSelector extends ConsumerWidget {
+  const ChatModelSelector({super.key});
+
+  static const selectorKey = ValueKey<String>('chat-model-selector');
+  static const _maxControlWidth = 268.0;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final modelsAsync = ref.watch(allModelsProvider);
+    final selectedId = ref.watch(selectedModelIdProvider);
+    final activeSession = ref.watch(activeSessionProvider);
+    final preferredModelId = _preferredModelId(activeSession, selectedId);
+
+    return modelsAsync.when(
+      loading: () => _buildStateControl(
+        context,
+        icon: Icons.hourglass_top_rounded,
+        label: '加载模型…',
+        semanticsLabel: '模型选择器，正在加载模型列表',
+        enabled: false,
+      ),
+      error: (_, _) => _buildStateControl(
+        context,
+        icon: Icons.error_outline_rounded,
+        label: '模型加载失败 · 重试',
+        semanticsLabel: '模型选择器，模型列表加载失败，点击重试',
+        onPressed: () {
+          ref.invalidate(allModelsProvider);
+          _showMessage(context, '正在重新加载模型列表…');
+        },
+      ),
+      data: (models) {
+        if (models.isEmpty) {
+          return _buildStateControl(
+            context,
+            icon: Icons.add_circle_outline_rounded,
+            label: '未选择模型',
+            semanticsLabel: '模型选择器，当前未选择模型，点击前往设置添加模型渠道',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          );
+        }
+
+        final current = _findModel(models, preferredModelId);
+        final currentLabel = current?.displayLabel ?? '未选择模型';
+        return Semantics(
+          button: true,
+          container: true,
+          label: '模型选择器，当前模型：$currentLabel',
+          hint: '点击打开模型列表',
+          child: PopupMenuButton<String>(
+            key: selectorKey,
+            tooltip: '切换模型',
+            padding: EdgeInsets.zero,
+            position: PopupMenuPosition.under,
+            constraints: const BoxConstraints(
+              minWidth: 220,
+              maxWidth: 340,
+              maxHeight: 480,
+            ),
+            onSelected: (modelId) {
+              final target = _findModel(models, modelId);
+              if (target == null) return;
+              unawaited(
+                _switchModel(context, ref, target: target, previous: current),
+              );
+            },
+            itemBuilder: (_) => _buildMenuItems(
+              context,
+              models,
+              selectedId: current?.channelModel.id,
+            ),
+            child: _buildModelControl(context, currentLabel),
+          ),
+        );
+      },
+    );
+  }
+
+  String? _preferredModelId(
+    AsyncValue<Session?> activeSession,
+    String? selectedId,
+  ) {
+    final sessionModelId = activeSession.whenOrNull(
+      data: (session) => session?.defaultChannelModelId,
+    );
+    // 活动会话的默认模型是权威值；没有活动会话时才使用全局选择。
+    return sessionModelId ?? selectedId;
+  }
+
+  ChannelModelWithChannel? _findModel(
+    List<ChannelModelWithChannel> models,
+    String? modelId,
+  ) {
+    if (modelId == null) return null;
+    return models
+        .where((model) => model.channelModel.id == modelId)
+        .firstOrNull;
+  }
+
+  Widget _buildStateControl(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String semanticsLabel,
+    VoidCallback? onPressed,
+    bool enabled = true,
+  }) {
+    return Semantics(
+      button: true,
+      container: true,
+      enabled: enabled && onPressed != null,
+      label: semanticsLabel,
+      hint: onPressed == null ? null : '点击执行操作',
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _maxControlWidth),
+        child: SizedBox(
+          // 完整状态控件保持 Material 最小触达高度；AppBar 同步增高，不把
+          // 小尺寸视觉胶囊当成唯一的点击区域。
+          height: 44,
+          child: OutlinedButton.icon(
+            key: selectorKey,
+            onPressed: onPressed,
+            icon: Icon(icon, size: 15),
+            // OutlinedButton.icon 内部已经为 label 提供 Flexible；再次嵌套会
+            // 触发冲突的 ParentData。
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModelControl(BuildContext context, String label) {
+    final scheme = Theme.of(context).colorScheme;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _maxControlWidth),
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome_rounded, size: 15, color: scheme.primary),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 17,
+              color: scheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<PopupMenuEntry<String>> _buildMenuItems(
+    BuildContext context,
+    List<ChannelModelWithChannel> models, {
+    required String? selectedId,
+  }) {
+    final grouped = <String, List<ChannelModelWithChannel>>{};
+    for (final model in models) {
+      grouped.putIfAbsent(model.channel.name, () => []).add(model);
+    }
+
+    final items = <PopupMenuEntry<String>>[];
+    for (final entry in grouped.entries) {
+      if (items.isNotEmpty) {
+        items.add(const PopupMenuDivider(height: 1));
+      }
+      items.add(
+        PopupMenuItem<String>(
+          enabled: false,
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Semantics(
+            header: true,
+            child: Text(
+              entry.key,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      for (final model in entry.value) {
+        final isSelected = model.channelModel.id == selectedId;
+        final modelLabel = model.channelModel.modelName;
+        items.add(
+          PopupMenuItem<String>(
+            value: model.channelModel.id,
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Semantics(
+              container: true,
+              selected: isSelected,
+              label: isSelected
+                  ? '$entry.key / $modelLabel，当前已选择'
+                  : '$entry.key / $modelLabel',
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer.withValues(alpha: 0.45)
+                      : null,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        child: isSelected
+                            ? Icon(
+                                Icons.check_rounded,
+                                size: 17,
+                                color: Theme.of(context).colorScheme.primary,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          modelLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isSelected
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    return items;
+  }
+
+  Future<void> _switchModel(
+    BuildContext context,
+    WidgetRef ref, {
+    required ChannelModelWithChannel target,
+    required ChannelModelWithChannel? previous,
+  }) async {
+    try {
+      final result = await switchConversationModel(
+        ref: ref,
+        modelId: target.channelModel.id,
+        modelLabel: target.displayLabel,
+        previousModelId: previous?.channelModel.id,
+        previousModelLabel: previous?.displayLabel,
+      );
+      if (!context.mounted || !result.changed) return;
+      _showMessage(
+        context,
+        result.recorded ? '已切换模型，记录已写入当前对话' : result.message,
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      _showMessage(context, '模型切换失败，当前会话保持不变，请重试');
+    }
+  }
+
+  void _showMessage(BuildContext context, String message) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+  }
 }
 
 const _kDefaultDreamingForegroundCheckInterval = Duration(minutes: 1);
@@ -968,186 +1308,33 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
     );
   }
 
-  /// AppBar 标题：会话名 + 当前模型（桌面端与移动端统一可切换）
+  /// AppBar 标题：会话名 + 当前模型（桌面端与移动端统一可切换）。
+  /// 标题宽度继承 AppBar 的可用空间，模型胶囊本身有上限，避免窄屏被
+  /// 长渠道名或模型名撑出横向溢出。
   Widget _buildChatTitle(
     BuildContext context,
-    WidgetRef ref,
     AsyncValue<Session?> activeSession,
   ) {
-    final modelsAsync = ref.watch(allModelsProvider);
-    final selectedId = ref.watch(selectedModelIdProvider);
-    final sessionDefaultModelId = activeSession.whenOrNull(
-      data: (session) => session?.defaultChannelModelId,
+    final title =
+        activeSession.whenOrNull(data: (session) => session?.title) ??
+        'SimiAIChat';
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontSize: 15),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+          const SizedBox(height: 2),
+          const ChatModelSelector(),
+        ],
+      ),
     );
-    final currentModelId = selectedId ?? sessionDefaultModelId;
-
-    final modelLabel = modelsAsync.whenOrNull(
-      data: (models) {
-        if (currentModelId != null) {
-          final match = models
-              .where((m) => m.channelModel.id == currentModelId)
-              .firstOrNull;
-          if (match != null) return match.displayLabel;
-        }
-        return null;
-      },
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          activeSession.whenOrNull(data: (session) => session?.title) ??
-              'SimiAIChat',
-          style: const TextStyle(fontSize: 16),
-          overflow: TextOverflow.ellipsis,
-          maxLines: 1,
-        ),
-        modelsAsync.when(
-          loading: () => Text(
-            '加载模型中…',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-          ),
-          error: (_, _) => Text(
-            '未选择模型',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-          ),
-          data: (models) {
-            if (models.isEmpty) {
-              return Text(
-                '未选择模型',
-                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-              );
-            }
-
-            return PopupMenuButton<String>(
-              padding: EdgeInsets.zero,
-              tooltip: '切换模型',
-              onSelected: (modelId) async {
-                final target = models
-                    .where((m) => m.channelModel.id == modelId)
-                    .firstOrNull;
-                final targetLabel =
-                    target?.displayLabel ??
-                    target?.channelModel.modelName ??
-                    modelId;
-                try {
-                  final result = await switchConversationModel(
-                    ref: ref,
-                    modelId: modelId,
-                    modelLabel: targetLabel,
-                    previousModelId: currentModelId,
-                    previousModelLabel: modelLabel,
-                  );
-                  if (context.mounted && result.changed) {
-                    ScaffoldMessenger.of(context)
-                      ..clearSnackBars()
-                      ..showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            result.recorded
-                                ? '已切换模型，记录已写入当前对话'
-                                : result.message,
-                          ),
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
-                  }
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                      ..clearSnackBars()
-                      ..showSnackBar(SnackBar(content: Text('模型切换失败，已回滚: $e')));
-                  }
-                }
-              },
-              itemBuilder: (_) =>
-                  _buildMobileModelMenuItems(context, models, currentModelId),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      modelLabel ?? '未选择模型',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  Icon(Icons.expand_more, size: 14, color: Colors.grey[500]),
-                ],
-              ),
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  List<PopupMenuEntry<String>> _buildMobileModelMenuItems(
-    BuildContext context,
-    List<ChannelModelWithChannel> models,
-    String? selectedId,
-  ) {
-    final items = <PopupMenuEntry<String>>[];
-    final grouped = <String, List<ChannelModelWithChannel>>{};
-
-    for (final model in models) {
-      grouped.putIfAbsent(model.channel.name, () => []).add(model);
-    }
-
-    for (final entry in grouped.entries) {
-      items.add(
-        PopupMenuItem<String>(
-          enabled: false,
-          child: Text(
-            entry.key,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[500],
-            ),
-          ),
-        ),
-      );
-
-      for (final model in entry.value) {
-        final isSelected = model.channelModel.id == selectedId;
-        items.add(
-          PopupMenuItem<String>(
-            value: model.channelModel.id,
-            child: Row(
-              children: [
-                if (isSelected)
-                  Icon(
-                    Icons.check,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.primary,
-                  )
-                else
-                  const SizedBox(width: 16),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    model.channelModel.modelName,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.normal,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-    }
-
-    return items;
   }
 
   PreferredSizeWidget _buildChatAppBar(
@@ -1159,6 +1346,9 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
     final activeSessionId = ref.watch(activeSessionIdProvider);
 
     return AppBar(
+      // 会话名位于 44dp 模型控件上方，保留 ChatGPT 风格的两行顶部区域，
+      // 同时不压缩移动端模型选择器的可访问触达范围。
+      toolbarHeight: 72,
       leading: showMenuButton
           ? Builder(
               builder: (ctx) => IconButton(
@@ -1167,7 +1357,7 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
               ),
             )
           : null,
-      title: _buildChatTitle(context, ref, activeSession),
+      title: _buildChatTitle(context, activeSession),
       centerTitle: true,
       actions: [
         IconButton(

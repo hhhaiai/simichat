@@ -5,9 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioFormat
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -15,16 +18,20 @@ import android.webkit.CookieManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import io.flutter.plugin.common.EventChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private lateinit var nodeRuntime: SimiChatNodeRuntime
     private var recorder: MediaRecorder? = null
     private var audioPlayer: MediaPlayer? = null
     private var audioPlayerChannel: MethodChannel? = null
+    private var realtimePcmChannel: MethodChannel? = null
+    private var realtimePcmEventSink: EventChannel.EventSink? = null
     private var deepLinkChannel: MethodChannel? = null
     private var pendingInitialDeepLink: String? = null
     private var audioFocusRequest: Any? = null
@@ -35,13 +42,27 @@ class MainActivity : FlutterActivity() {
     private var recordingFile: File? = null
     private var recordingStartedAtMs: Long = 0L
     private var pendingRecordPermissionResult: MethodChannel.Result? = null
+    private var pendingRealtimePcmPermissionResult: MethodChannel.Result? = null
+    private var realtimeAudioRecord: AudioRecord? = null
+    private var realtimeCaptureThread: Thread? = null
+    private var realtimeAudioTrack: AudioTrack? = null
+    private val realtimePlaybackExecutor = Executors.newSingleThreadExecutor()
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-            -> stopAudioPlayback()
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> audioPlayer?.setVolume(0.3f, 0.3f)
-            AudioManager.AUDIOFOCUS_GAIN -> audioPlayer?.setVolume(1.0f, 1.0f)
+            -> {
+                stopAudioPlayback()
+                stopRealtimePcmPlayback(null)
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                audioPlayer?.setVolume(0.3f, 0.3f)
+                realtimeAudioTrack?.setVolume(0.3f)
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                audioPlayer?.setVolume(1.0f, 1.0f)
+                realtimeAudioTrack?.setVolume(1.0f)
+            }
         }
     }
     private val competingAudioFocusChangeListener = AudioManager.OnAudioFocusChangeListener {}
@@ -155,6 +176,33 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        realtimePcmChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            REALTIME_PCM_AUDIO_CHANNEL,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startCapture" -> startRealtimePcmCapture(call.arguments as? Map<*, *>, result)
+                    "stopCapture" -> stopRealtimePcmCapture(result)
+                    "startPlayback" -> startRealtimePcmPlayback(call.arguments as? Map<*, *>, result)
+                    "writePlayback" -> writeRealtimePcmPlayback(call.arguments as? Map<*, *>, result)
+                    "stopPlayback" -> stopRealtimePcmPlayback(result)
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            REALTIME_PCM_AUDIO_EVENT_CHANNEL,
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                realtimePcmEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                realtimePcmEventSink = null
+            }
+        })
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -339,6 +387,269 @@ class MainActivity : FlutterActivity() {
         }
         file?.delete()
         result.success(true)
+    }
+
+    private fun startRealtimePcmCapture(
+        arguments: Map<*, *>?,
+        result: MethodChannel.Result,
+    ) {
+        val sampleRate = realtimePcmIntArgument(arguments, "sampleRate", REALTIME_INPUT_SAMPLE_RATE)
+        val channels = realtimePcmIntArgument(arguments, "channels", 1)
+        val bitsPerSample = realtimePcmIntArgument(arguments, "bitsPerSample", 16)
+        if (sampleRate != REALTIME_INPUT_SAMPLE_RATE || channels != 1 || bitsPerSample != 16) {
+            result.error("INVALID_ARGUMENT", "实时 PCM 输入仅支持 16kHz mono PCM16", null)
+            return
+        }
+        if (realtimeAudioRecord != null) {
+            result.error("ALREADY_CAPTURING", "实时麦克风已经在运行", null)
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            if (pendingRealtimePcmPermissionResult != null || pendingRecordPermissionResult != null) {
+                result.error("PERMISSION_REQUEST_ACTIVE", "麦克风权限请求正在进行中", null)
+                return
+            }
+            pendingRealtimePcmPermissionResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                REALTIME_PCM_PERMISSION_REQUEST,
+            )
+            return
+        }
+        beginRealtimePcmCapture(result)
+    }
+
+    private fun beginRealtimePcmCapture(result: MethodChannel.Result) {
+        val minBuffer = AudioRecord.getMinBufferSize(
+            REALTIME_INPUT_SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        if (minBuffer <= 0) {
+            result.error("CAPTURE_UNAVAILABLE", "当前设备不支持实时 PCM 麦克风", null)
+            return
+        }
+        val bufferSize = maxOf(minBuffer, REALTIME_INPUT_SAMPLE_RATE / 25 * 2)
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                REALTIME_INPUT_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+            )
+        } catch (_: Throwable) {
+            result.error("CAPTURE_UNAVAILABLE", "无法创建实时 PCM 麦克风", null)
+            return
+        }
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            try {
+                record.release()
+            } catch (_: Throwable) {
+            }
+            result.error("CAPTURE_UNAVAILABLE", "当前设备无法初始化实时 PCM 麦克风", null)
+            return
+        }
+        try {
+            record.startRecording()
+        } catch (_: Throwable) {
+            try {
+                record.release()
+            } catch (_: Throwable) {
+            }
+            result.error("CAPTURE_START_FAILED", "启动实时 PCM 麦克风失败", null)
+            return
+        }
+        realtimeAudioRecord = record
+        val captureThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
+            val buffer = ByteArray(bufferSize)
+            while (realtimeAudioRecord === record && !Thread.currentThread().isInterrupted) {
+                val count = try {
+                    record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                } catch (_: Throwable) {
+                    -1
+                }
+                if (count > 0) {
+                    val payload = buffer.copyOf(count)
+                    runOnUiThread {
+                        if (realtimeAudioRecord === record) {
+                            realtimePcmEventSink?.success(payload)
+                        }
+                    }
+                } else if (count < 0) {
+                    runOnUiThread {
+                        if (realtimeAudioRecord === record) {
+                            realtimePcmEventSink?.error(
+                                "CAPTURE_READ_FAILED",
+                                "实时 PCM 麦克风读取失败",
+                                null,
+                            )
+                            stopRealtimePcmCapture(null)
+                        }
+                    }
+                    break
+                }
+            }
+        }.also { it.name = "simichat-realtime-pcm-capture" }
+        realtimeCaptureThread = captureThread
+        captureThread.start()
+        result.success(true)
+    }
+
+    private fun stopRealtimePcmCapture(result: MethodChannel.Result?) {
+        val record = realtimeAudioRecord
+        realtimeAudioRecord = null
+        realtimeCaptureThread?.interrupt()
+        realtimeCaptureThread = null
+        if (record != null) {
+            try {
+                record.stop()
+            } catch (_: Throwable) {
+            }
+            try {
+                record.release()
+            } catch (_: Throwable) {
+            }
+        }
+        result?.success(true)
+    }
+
+    private fun startRealtimePcmPlayback(
+        arguments: Map<*, *>?,
+        result: MethodChannel.Result,
+    ) {
+        val sampleRate = realtimePcmIntArgument(arguments, "sampleRate", REALTIME_OUTPUT_SAMPLE_RATE)
+        val channels = realtimePcmIntArgument(arguments, "channels", 1)
+        val bitsPerSample = realtimePcmIntArgument(arguments, "bitsPerSample", 16)
+        if (sampleRate != REALTIME_OUTPUT_SAMPLE_RATE || channels != 1 || bitsPerSample != 16) {
+            result.error("INVALID_ARGUMENT", "实时 PCM 输出仅支持 24kHz mono PCM16", null)
+            return
+        }
+        if (realtimeAudioTrack != null) {
+            result.error("ALREADY_PLAYING", "实时音频播放已经在运行", null)
+            return
+        }
+        val minBuffer = AudioTrack.getMinBufferSize(
+            REALTIME_OUTPUT_SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        if (minBuffer <= 0) {
+            result.error("PLAYBACK_UNAVAILABLE", "当前设备不支持实时 PCM 播放", null)
+            return
+        }
+        val bufferSize = maxOf(minBuffer, REALTIME_OUTPUT_SAMPLE_RATE / 10 * 2)
+        @Suppress("DEPRECATION")
+        val track = try {
+            AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                REALTIME_OUTPUT_SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+                AudioTrack.MODE_STREAM,
+            )
+        } catch (_: Throwable) {
+            result.error("PLAYBACK_UNAVAILABLE", "无法创建实时 PCM 播放器", null)
+            return
+        }
+        if (track.state != AudioTrack.STATE_INITIALIZED) {
+            try {
+                track.release()
+            } catch (_: Throwable) {
+            }
+            result.error("PLAYBACK_UNAVAILABLE", "当前设备无法初始化实时 PCM 播放器", null)
+            return
+        }
+        if (!requestAudioPlaybackFocus()) {
+            try {
+                track.release()
+            } catch (_: Throwable) {
+            }
+            result.error("AUDIO_FOCUS_DENIED", "无法获取实时语音音频焦点", null)
+            return
+        }
+        try {
+            track.play()
+            realtimeAudioTrack = track
+            result.success(true)
+        } catch (_: Throwable) {
+            try {
+                track.release()
+            } catch (_: Throwable) {
+            }
+            abandonAudioPlaybackFocus()
+            result.error("PLAYBACK_START_FAILED", "启动实时 PCM 播放失败", null)
+        }
+    }
+
+    private fun writeRealtimePcmPlayback(
+        arguments: Map<*, *>?,
+        result: MethodChannel.Result,
+    ) {
+        val track = realtimeAudioTrack
+        val bytes = arguments?.get("bytes") as? ByteArray
+        if (track == null) {
+            result.error("INVALID_STATE", "实时 PCM 播放尚未启动", null)
+            return
+        }
+        if (bytes == null || bytes.isEmpty() || bytes.size % 2 != 0) {
+            result.error("INVALID_ARGUMENT", "实时 PCM 播放数据无效", null)
+            return
+        }
+        val payload = bytes.copyOf()
+        realtimePlaybackExecutor.execute {
+            var errorMessage: String? = null
+            try {
+                val written = track.write(payload, 0, payload.size, AudioTrack.WRITE_BLOCKING)
+                if (written < 0) errorMessage = "实时 PCM 播放失败"
+            } catch (_: Throwable) {
+                errorMessage = "实时 PCM 播放失败"
+            }
+            runOnUiThread {
+                if (errorMessage == null) {
+                    result.success(true)
+                } else {
+                    result.error("PLAYBACK_WRITE_FAILED", errorMessage, null)
+                    if (realtimeAudioTrack === track) stopRealtimePcmPlayback(null)
+                }
+            }
+        }
+    }
+
+    private fun stopRealtimePcmPlayback(result: MethodChannel.Result?) {
+        val track = realtimeAudioTrack
+        realtimeAudioTrack = null
+        if (track != null) {
+            try {
+                track.pause()
+            } catch (_: Throwable) {
+            }
+            try {
+                track.flush()
+            } catch (_: Throwable) {
+            }
+            try {
+                track.release()
+            } catch (_: Throwable) {
+            }
+            abandonAudioPlaybackFocus()
+        }
+        result?.success(true)
+    }
+
+    private fun realtimePcmIntArgument(
+        arguments: Map<*, *>?,
+        key: String,
+        fallback: Int,
+    ): Int {
+        val value = arguments?.get(key)
+        return when (value) {
+            is Number -> value.toInt()
+            else -> fallback
+        }
     }
 
     private fun playAudioFile(arguments: Map<*, *>?, result: MethodChannel.Result) {
@@ -553,6 +864,17 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REALTIME_PCM_PERMISSION_REQUEST) {
+            val result = pendingRealtimePcmPermissionResult
+            pendingRealtimePcmPermissionResult = null
+            if (result == null) return
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                beginRealtimePcmCapture(result)
+            } else {
+                result.error("PERMISSION_DENIED", "麦克风权限被拒绝", null)
+            }
+            return
+        }
         if (requestCode != RECORD_AUDIO_PERMISSION_REQUEST) return
         val result = pendingRecordPermissionResult ?: return
         pendingRecordPermissionResult = null
@@ -564,6 +886,10 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        stopRealtimePcmCapture(null)
+        stopRealtimePcmPlayback(null)
+        realtimePcmEventSink = null
+        realtimePlaybackExecutor.shutdownNow()
         stopAudioPlayback()
         abandonCompetingAudioFocusForTesting()
         super.onDestroy()
@@ -573,8 +899,13 @@ class MainActivity : FlutterActivity() {
         private const val DATA_EXPORT_SHARE_CHANNEL = "simichat/data_export_share"
         private const val VOICE_RECORDER_CHANNEL = "simichat/voice_recorder"
         private const val AUDIO_PLAYER_CHANNEL = "simichat/audio_player"
+        private const val REALTIME_PCM_AUDIO_CHANNEL = "simichat/realtime_pcm_audio"
+        private const val REALTIME_PCM_AUDIO_EVENT_CHANNEL = "simichat/realtime_pcm_audio/events"
         private const val DEEP_LINK_CHANNEL = "simichat/deep_link"
         private const val IN_APP_H5_PROFILE_CHANNEL = "simichat/in_app_h5_profile"
         private const val RECORD_AUDIO_PERMISSION_REQUEST = 4107
+        private const val REALTIME_PCM_PERMISSION_REQUEST = 4113
+        private const val REALTIME_INPUT_SAMPLE_RATE = 16000
+        private const val REALTIME_OUTPUT_SAMPLE_RATE = 24000
     }
 }

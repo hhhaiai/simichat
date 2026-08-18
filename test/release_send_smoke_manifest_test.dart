@@ -67,6 +67,26 @@ void main() {
     expect(androidInstall, contains(r'adb -s "$DEVICE_ID" install -r'));
     expect(androidInstall, contains('--no-version-check build apk'));
     expect(androidInstall, contains(r'pidof "$PACKAGE_ID"'));
+    expect(
+      androidInstall,
+      contains(
+        r'LAUNCH_COMPONENT="${LAUNCH_COMPONENT:-${PACKAGE_ID}/.MainActivity}"',
+      ),
+    );
+    expect(androidInstall, contains(r'adb -s "$DEVICE_ID" shell monkey'));
+    expect(
+      androidInstall,
+      contains(r'adb -s "$DEVICE_ID" shell am start -n "$LAUNCH_COMPONENT"'),
+    );
+    expect(
+      androidInstall,
+      contains('SIMICHAT_ANDROID_RELEASE_LAUNCH_FALLBACK'),
+    );
+    expect(androidInstall, contains('SIMICHAT_ANDROID_RELEASE_LAUNCH_RESULT'));
+    expect(androidInstall, contains('PID_POLL_ATTEMPTS'));
+    expect(androidInstall, contains(r'sleep "$PID_POLL_INTERVAL_SECONDS"'));
+    expect(androidInstall, isNot(contains('uninstall')));
+    expect(androidInstall, isNot(contains('pm clear')));
   });
 
   test('release smoke shell scripts are syntactically valid', () async {

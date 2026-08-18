@@ -36,12 +36,17 @@ import '../../core/memory/reflection_service.dart';
 import '../../core/memory/user_profile.dart';
 import '../../core/twin/persona_profile.dart';
 import '../../core/twin/live_stream_service.dart';
+import '../../core/media/media_job.dart';
 import '../../core/media/speech_provider_preset.dart';
+import '../../core/media/text_to_speech_service.dart';
+import '../../core/media/xai_custom_voice_adapter.dart';
+import '../../core/media/xai_speech_provider_profile.dart';
 import '../../core/mcp/mcp_client.dart';
 import '../../core/relay/openai_compatible_relay_server.dart';
 import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/audio_transcription_provider.dart';
 import '../../shared/providers/image_generation_provider.dart';
+import '../../shared/providers/universal_media_provider.dart';
 import '../../shared/providers/webdav_backup_provider.dart';
 import '../../shared/providers/s3_backup_provider.dart';
 import '../../shared/providers/one_drive_backup_provider.dart';
@@ -84,6 +89,14 @@ typedef SettingsModelTestRunner =
       required String model,
       required String capability,
     });
+
+String _safeTtsDialogError(Object error, {bool customVoice = true}) {
+  if (error is XaiCustomVoiceException) return error.message;
+  if (error is TextToSpeechException) return error.message;
+  return customVoice
+      ? 'xAI custom voice 创建或 TTS 配置保存失败，请检查设置后重试'
+      : 'TTS 配置保存失败，请检查设置后重试';
+}
 
 class ObsidianSyncConflictDetails extends StatelessWidget {
   const ObsidianSyncConflictDetails({
@@ -255,6 +268,7 @@ class SettingsPage extends ConsumerWidget {
           // 图片生成
           _buildSectionHeader(context, '图片生成'),
           _buildImageGenerationTile(context, ref),
+          _buildUniversalMediaTile(context, ref),
 
           const Divider(),
 
@@ -3425,6 +3439,7 @@ class SettingsPage extends ConsumerWidget {
           channelId: channelId,
           modelName: model.name,
           capability: model.capability,
+          capabilities: model.capabilities,
         );
         modelCount += 1;
       }
@@ -3733,6 +3748,7 @@ class SettingsPage extends ConsumerWidget {
         )?.recommendedModels ??
         const [];
     var capability = ModelCapability.chat;
+    var capabilityTouched = false;
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -3748,6 +3764,13 @@ class SettingsPage extends ConsumerWidget {
                   hintText: '如 gpt-4o / BAAI/bge-m3',
                 ),
                 autofocus: true,
+                onChanged: (v) {
+                  if (!capabilityTouched) {
+                    setDialogState(
+                      () => capability = ModelCapability.inferFromModel(v),
+                    );
+                  }
+                },
               ),
               if (recommendedModels.isNotEmpty) ...[
                 const SizedBox(height: 10),
@@ -3777,6 +3800,11 @@ class SettingsPage extends ConsumerWidget {
                               modelCtrl.selection = TextSelection.collapsed(
                                 offset: modelName.length,
                               );
+                              if (!capabilityTouched) {
+                                capability = ModelCapability.inferFromModel(
+                                  modelName,
+                                );
+                              }
                             });
                           },
                         ),
@@ -3789,7 +3817,8 @@ class SettingsPage extends ConsumerWidget {
                 initialValue: capability,
                 decoration: const InputDecoration(
                   labelText: '模型能力',
-                  helperText: '图片 / 多模态模型请选择 Vision，Relay 会据此路由图片请求',
+                  helperText:
+                      '图片输入请选择 Vision；生成图片 / 语音 / 视频 / 音乐 / 重排请选择对应能力，Relay 会据此路由',
                 ),
                 items: const [
                   DropdownMenuItem(
@@ -3804,8 +3833,35 @@ class SettingsPage extends ConsumerWidget {
                     value: ModelCapability.embedding,
                     child: Text('Embedding 向量'),
                   ),
+                  DropdownMenuItem(
+                    value: ModelCapability.rerank,
+                    child: Text('Rerank 重排'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.reasoner,
+                    child: Text('Reasoner 推理'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.image,
+                    child: Text('Image 图片生成'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.audio,
+                    child: Text('Audio 语音'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.video,
+                    child: Text('Video 视频生成'),
+                  ),
+                  DropdownMenuItem(
+                    value: ModelCapability.music,
+                    child: Text('Music 音乐生成'),
+                  ),
                 ],
-                onChanged: (v) => setDialogState(() => capability = v!),
+                onChanged: (v) => setDialogState(() {
+                  capabilityTouched = true;
+                  capability = v!;
+                }),
               ),
             ],
           ),
@@ -3986,6 +4042,7 @@ class SettingsPage extends ConsumerWidget {
                     channelId: channelId,
                     modelName: modelName,
                     capability: model?.capability ?? ModelCapability.chat,
+                    capabilities: model?.capabilities ?? const <String>{},
                   );
                 }
                 refreshChannelModels(ref, channelId);
@@ -4377,6 +4434,7 @@ class SettingsPage extends ConsumerWidget {
     var isSaving = false;
     String? errorText;
     var language = config.language;
+    final languageController = TextEditingController(text: language);
     var selectedPresetId =
         inferSpeechToTextPreset(
           baseUrl: config.baseUrl,
@@ -4413,7 +4471,11 @@ class SettingsPage extends ConsumerWidget {
                       : (value) => setState(() => enabled = value),
                 ),
                 const SizedBox(height: 8),
-                const Text('厂商：OpenAI 兼容 STT'),
+                Text(
+                  selectedPresetId == kXaiSpeechProviderId
+                      ? '厂商：xAI / Grok Voice REST'
+                      : '厂商：OpenAI 兼容 STT',
+                ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   initialValue: selectedPresetId,
@@ -4436,14 +4498,14 @@ class SettingsPage extends ConsumerWidget {
                           setState(() {
                             selectedPresetId = preset.id;
                             baseUrlController.text = preset.baseUrl;
-                            modelController.text = preset.sttModel!;
+                            modelController.text = preset.sttModel ?? '';
                           });
                         },
                 ),
                 const SizedBox(height: 6),
                 Text(
                   findSpeechProviderPreset(selectedPresetId)?.description ??
-                      '选择预设后会自动填充 Base URL 与模型，API Key 仍只保存在本机。',
+                      '选择预设后会自动填充 Base URL 与协议参数，API Key 仍只保存在本机。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -4456,18 +4518,34 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: modelController,
-                  enabled: !isSaving,
-                  // 模型名决定是否显示识别语言下拉，输入后需重建。
-                  onChanged: isSaving ? null : (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: '模型',
-                    hintText: 'whisper-1',
+                if (selectedPresetId == kXaiSpeechProviderId)
+                  const Text(
+                    '模型字段不是 xAI Voice REST 的请求参数；/v1/stt 不使用模型字段，当前页面不会把聊天模型名伪装成 STT 模型。',
+                  )
+                else
+                  TextField(
+                    controller: modelController,
+                    enabled: !isSaving,
+                    // 模型名决定是否显示识别语言下拉，输入后需重建。
+                    onChanged: isSaving ? null : (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: '模型',
+                      hintText: 'whisper-1',
+                    ),
                   ),
-                ),
+                if (selectedPresetId == kXaiSpeechProviderId)
+                  TextField(
+                    controller: languageController,
+                    enabled: !isSaving,
+                    onChanged: (value) => language = value,
+                    decoration: const InputDecoration(
+                      labelText: '语言（xAI BCP-47 / auto）',
+                      helperText:
+                          '公开 batch STT 默认不发送 language；保存后按 profile 兼容边界处理。',
+                    ),
+                  )
                 // mimo-v2.5-asr：识别语言选择。
-                if (isSimiRouterAsrModel(modelController.text)) ...[
+                else if (isSimiRouterAsrModel(modelController.text)) ...[
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     initialValue: language,
@@ -4549,15 +4627,25 @@ class SettingsPage extends ConsumerWidget {
                         errorText = null;
                       });
                       try {
-                        await ref
-                            .read(speechToTextConfigProvider.notifier)
-                            .saveOpenAiCompatible(
-                              enabled: enabled,
-                              baseUrl: baseUrlController.text,
-                              model: modelController.text,
-                              apiKey: apiKeyController.text,
-                              language: language,
-                            );
+                        final notifier = ref.read(
+                          speechToTextConfigProvider.notifier,
+                        );
+                        if (selectedPresetId == kXaiSpeechProviderId) {
+                          await notifier.saveXai(
+                            enabled: enabled,
+                            baseUrl: baseUrlController.text,
+                            apiKey: apiKeyController.text,
+                            language: language,
+                          );
+                        } else {
+                          await notifier.saveOpenAiCompatible(
+                            enabled: enabled,
+                            baseUrl: baseUrlController.text,
+                            model: modelController.text,
+                            apiKey: apiKeyController.text,
+                            language: language,
+                          );
+                        }
                         if (ctx.mounted) Navigator.pop(ctx);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -4567,7 +4655,11 @@ class SettingsPage extends ConsumerWidget {
                       } catch (error) {
                         setState(() {
                           isSaving = false;
-                          errorText = error.toString();
+                          errorText = _safeTtsDialogError(
+                            error,
+                            customVoice:
+                                selectedPresetId == kXaiSpeechProviderId,
+                          );
                         });
                       }
                     },
@@ -4580,6 +4672,7 @@ class SettingsPage extends ConsumerWidget {
       baseUrlController.dispose();
       modelController.dispose();
       apiKeyController.dispose();
+      languageController.dispose();
     });
   }
 
@@ -4972,6 +5065,610 @@ class SettingsPage extends ConsumerWidget {
 
   // ====== 图片生成 ======
 
+  Widget _buildUniversalMediaTile(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(universalMediaConfigProvider);
+    final videoProfile = config.videoProfile;
+    final musicProfile = config.musicProfile;
+    return ListTile(
+      leading: const Icon(Icons.perm_media_outlined),
+      title: const Text('视频 / 音乐 / 通用媒体接口'),
+      subtitle: Text(
+        '视频：${videoProfile.name} · ${config.videoModel}\n音乐：${musicProfile.name} · ${config.musicModel}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      isThreeLine: true,
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => unawaited(_showUniversalMediaDialog(context, ref)),
+    );
+  }
+
+  Future<void> _showUniversalMediaDialog(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    await ref.read(universalMediaConfigProvider.notifier).ready;
+    if (!context.mounted) return;
+    final config = ref.read(universalMediaConfigProvider);
+    var selectedVideoProfileId = config.videoProfile.id;
+    var selectedMusicProfileId = config.musicProfile.id;
+    var selectedVideoChannelModelId = config.videoChannelModelId;
+    var selectedMusicChannelModelId = config.musicChannelModelId;
+    var videoModelSelectionManual = false;
+    var musicModelSelectionManual = false;
+    var videoProtocol = config.videoTaskOptions.protocol;
+    var videoRequestFormat = config.videoTaskOptions.requestFormat;
+    var musicProtocol = config.musicTaskOptions.protocol;
+    var musicRequestFormat = config.musicTaskOptions.requestFormat;
+    final videoModelController = TextEditingController(text: config.videoModel);
+    final videoEndpointController = TextEditingController(
+      text: config.videoEndpoint,
+    );
+    final musicModelController = TextEditingController(text: config.musicModel);
+    final musicEndpointController = TextEditingController(
+      text: config.musicEndpoint,
+    );
+    final videoReferenceFieldController = TextEditingController(
+      text: config.videoTaskOptions.referenceField ?? '',
+    );
+    final videoPollUrlController = TextEditingController(
+      text: config.videoTaskOptions.pollUrlTemplate ?? '',
+    );
+    final videoContentUrlController = TextEditingController(
+      text: config.videoTaskOptions.contentUrlTemplate ?? '',
+    );
+    final videoCancelUrlController = TextEditingController(
+      text: config.videoTaskOptions.cancelUrlTemplate ?? '',
+    );
+    final musicPollUrlController = TextEditingController(
+      text: config.musicTaskOptions.pollUrlTemplate ?? '',
+    );
+    final musicContentUrlController = TextEditingController(
+      text: config.musicTaskOptions.contentUrlTemplate ?? '',
+    );
+    final musicCancelUrlController = TextEditingController(
+      text: config.musicTaskOptions.cancelUrlTemplate ?? '',
+    );
+    var saving = false;
+    String? errorText;
+
+    String? optionalText(TextEditingController controller) {
+      final value = controller.text.trim();
+      return value.isEmpty ? null : value;
+    }
+
+    UniversalMediaTaskOptions buildVideoTaskOptions() {
+      return UniversalMediaTaskOptions(
+        protocol: videoProtocol,
+        requestFormat: videoRequestFormat,
+        referenceField: optionalText(videoReferenceFieldController),
+        pollUrlTemplate: optionalText(videoPollUrlController),
+        contentUrlTemplate: optionalText(videoContentUrlController),
+        cancelUrlTemplate: optionalText(videoCancelUrlController),
+      );
+    }
+
+    UniversalMediaTaskOptions buildMusicTaskOptions() {
+      return UniversalMediaTaskOptions(
+        protocol: musicProtocol,
+        requestFormat: musicRequestFormat,
+        pollUrlTemplate: optionalText(musicPollUrlController),
+        contentUrlTemplate: optionalText(musicContentUrlController),
+        cancelUrlTemplate: optionalText(musicCancelUrlController),
+      );
+    }
+
+    Widget buildMediaModelSelector({
+      required UniversalMediaKind kind,
+      required TextEditingController modelController,
+      required StateSetter setState,
+    }) {
+      final label = kind == UniversalMediaKind.video ? '视频' : '音乐';
+      return Consumer(
+        builder: (selectorContext, selectorRef, _) {
+          final candidatesAsync = selectorRef.watch(
+            universalMediaModelCandidatesProvider(kind),
+          );
+          return candidatesAsync.when(
+            loading: () => InputDecorator(
+              decoration: InputDecoration(
+                labelText: '$label媒体模型选择',
+                helperText: '正在读取启用渠道的媒体模型目录…',
+              ),
+              child: const LinearProgressIndicator(),
+            ),
+            error: (_, _) => InputDecorator(
+              decoration: InputDecoration(
+                labelText: '$label媒体模型选择',
+                helperText: '媒体目录读取失败，可继续手动输入模型。',
+              ),
+              child: const Text('手动输入 / 自定义模型'),
+            ),
+            data: (candidates) {
+              final currentModel = modelController.text.trim();
+              final manualFallback = UniversalMediaModelCandidate.manual(
+                modelName: currentModel,
+              );
+              final selectionManual = kind == UniversalMediaKind.video
+                  ? videoModelSelectionManual
+                  : musicModelSelectionManual;
+              final selectedChannelModelId = kind == UniversalMediaKind.video
+                  ? selectedVideoChannelModelId
+                  : selectedMusicChannelModelId;
+              UniversalMediaModelCandidate? selected;
+              if (!selectionManual) {
+                for (final candidate in candidates) {
+                  final matchesId =
+                      selectedChannelModelId != null &&
+                      candidate.channelModelId?.trim() ==
+                          selectedChannelModelId.trim();
+                  final matchesLegacyName =
+                      selectedChannelModelId == null &&
+                      candidate.modelName == currentModel;
+                  if (matchesId || matchesLegacyName) {
+                    selected = candidate;
+                    break;
+                  }
+                }
+              }
+              if (!selectionManual &&
+                  selectedChannelModelId != null &&
+                  selected == null) {
+                // 渠道模型被删除、禁用或不再声明媒体能力时，显示手动回退，
+                // 并在保存时清掉已经失效的来源 ID。
+                if (kind == UniversalMediaKind.video) {
+                  selectedVideoChannelModelId = null;
+                  videoModelSelectionManual = true;
+                } else {
+                  selectedMusicChannelModelId = null;
+                  musicModelSelectionManual = true;
+                }
+              }
+              final selectedValue = selected ?? manualFallback;
+              return DropdownButtonFormField<UniversalMediaModelCandidate>(
+                key: ValueKey(
+                  '$kind-media-model-${modelController.text}-${candidates.length}',
+                ),
+                initialValue: selectedValue,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: '$label媒体模型选择',
+                  helperText:
+                      '候选显示的来源渠道会成为实际$label媒体路由来源，不会修改顶部 Chat 模型；旧配置无渠道模型 ID 时仍复用当前 Chat 渠道。仅显式 $label 能力标记会显示为已声明。',
+                ),
+                items: [
+                  for (final candidate in candidates)
+                    DropdownMenuItem<UniversalMediaModelCandidate>(
+                      value: candidate,
+                      child: Text(
+                        candidate.displayText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  DropdownMenuItem<UniversalMediaModelCandidate>(
+                    value: manualFallback,
+                    child: const Text('手动输入 / 自定义模型 · 保存时清空媒体渠道来源 ID'),
+                  ),
+                ],
+                onChanged: saving
+                    ? null
+                    : (candidate) {
+                        final model = candidate?.modelName.trim() ?? '';
+                        final channelModelId = candidate?.channelModelId;
+                        setState(() {
+                          modelController.text = model;
+                          if (kind == UniversalMediaKind.video) {
+                            selectedVideoChannelModelId = channelModelId;
+                            videoModelSelectionManual = channelModelId == null;
+                          } else {
+                            selectedMusicChannelModelId = channelModelId;
+                            musicModelSelectionManual = channelModelId == null;
+                          }
+                        });
+                      },
+              );
+            },
+          );
+        },
+      );
+    }
+
+    void applyProfile(UniversalMediaProviderProfile profile) {
+      final options = profile.taskOptions;
+      if (profile.kind == UniversalMediaKind.video) {
+        selectedVideoProfileId = profile.id;
+        selectedVideoChannelModelId = null;
+        videoModelSelectionManual = true;
+        videoModelController.text = profile.model;
+        videoEndpointController.text = profile.endpoint;
+        videoProtocol = options.protocol;
+        videoRequestFormat = options.requestFormat;
+        videoReferenceFieldController.text = options.referenceField ?? '';
+        videoPollUrlController.text = options.pollUrlTemplate ?? '';
+        videoContentUrlController.text = options.contentUrlTemplate ?? '';
+        videoCancelUrlController.text = options.cancelUrlTemplate ?? '';
+      } else {
+        selectedMusicProfileId = profile.id;
+        selectedMusicChannelModelId = null;
+        musicModelSelectionManual = true;
+        musicModelController.text = profile.model;
+        musicEndpointController.text = profile.endpoint;
+        musicProtocol = options.protocol;
+        musicRequestFormat = options.requestFormat;
+        musicPollUrlController.text = options.pollUrlTemplate ?? '';
+        musicContentUrlController.text = options.contentUrlTemplate ?? '';
+        musicCancelUrlController.text = options.cancelUrlTemplate ?? '';
+      }
+    }
+
+    Widget buildProfileDropdown({
+      required UniversalMediaKind kind,
+      required StateSetter setState,
+    }) {
+      final profiles = universalMediaProviderProfilesFor(kind);
+      final selectedId = kind == UniversalMediaKind.video
+          ? selectedVideoProfileId
+          : selectedMusicProfileId;
+      return DropdownButtonFormField<String>(
+        key: ValueKey('${kind.name}-media-profile-$selectedId'),
+        initialValue: selectedId,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: kind == UniversalMediaKind.video
+              ? '视频 provider profile'
+              : '音乐 provider profile',
+        ),
+        items: profiles
+            .map(
+              (profile) => DropdownMenuItem<String>(
+                value: profile.id,
+                child: Text(profile.name),
+              ),
+            )
+            .toList(growable: false),
+        onChanged: saving
+            ? null
+            : (value) {
+                if (value == null) return;
+                final profile = findUniversalMediaProviderProfile(
+                  value,
+                  kind: kind,
+                );
+                if (profile == null) return;
+                setState(() => applyProfile(profile));
+              },
+      );
+    }
+
+    Widget buildTaskOptionsEditor({
+      required UniversalMediaKind kind,
+      required StateSetter setState,
+    }) {
+      final isVideo = kind == UniversalMediaKind.video;
+      final protocol = isVideo ? videoProtocol : musicProtocol;
+      final requestFormat = isVideo ? videoRequestFormat : musicRequestFormat;
+      final allowedProtocols = isVideo
+          ? const [
+              UniversalMediaProtocol.auto,
+              UniversalMediaProtocol.openAiVideo,
+              UniversalMediaProtocol.xAiVideo,
+              UniversalMediaProtocol.configuredAsync,
+            ]
+          : const [
+              UniversalMediaProtocol.auto,
+              UniversalMediaProtocol.configuredAsync,
+            ];
+      final options = isVideo
+          ? buildVideoTaskOptions()
+          : buildMusicTaskOptions();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<UniversalMediaProtocol>(
+            key: ValueKey('${kind.name}-media-protocol-${protocol.name}'),
+            initialValue: allowedProtocols.contains(protocol)
+                ? protocol
+                : allowedProtocols.first,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: '任务协议'),
+            items: allowedProtocols
+                .map(
+                  (value) => DropdownMenuItem<UniversalMediaProtocol>(
+                    value: value,
+                    child: Text(universalMediaProtocolLabel(value)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: saving
+                ? null
+                : (value) {
+                    if (value == null) return;
+                    setState(() {
+                      if (isVideo) {
+                        videoProtocol = value;
+                      } else {
+                        musicProtocol = value;
+                      }
+                    });
+                  },
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<UniversalMediaRequestFormat>(
+            key: ValueKey('${kind.name}-media-format-${requestFormat.name}'),
+            initialValue: requestFormat,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: '请求编码'),
+            items: UniversalMediaRequestFormat.values
+                .map(
+                  (value) => DropdownMenuItem<UniversalMediaRequestFormat>(
+                    value: value,
+                    child: Text(universalMediaRequestFormatLabel(value)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: saving
+                ? null
+                : (value) {
+                    if (value == null) return;
+                    setState(() {
+                      if (isVideo) {
+                        videoRequestFormat = value;
+                      } else {
+                        musicRequestFormat = value;
+                      }
+                    });
+                  },
+          ),
+          if (isVideo) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: videoReferenceFieldController,
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: '参考图字段（可选）',
+                hintText: 'input_reference 或 image',
+                helperText:
+                    'xAI / Grok profile 会使用 image.url data URL，不会把本机路径发给服务端。',
+              ),
+            ),
+          ],
+          if (protocol == UniversalMediaProtocol.configuredAsync) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: isVideo
+                  ? videoPollUrlController
+                  : musicPollUrlController,
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: '轮询 URL 模板',
+                hintText: '/jobs/{id}/status',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: isVideo
+                  ? videoContentUrlController
+                  : musicContentUrlController,
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: '结果 URL 模板',
+                hintText: '/jobs/{id}/content',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: isVideo
+                  ? videoCancelUrlController
+                  : musicCancelUrlController,
+              enabled: !saving,
+              decoration: const InputDecoration(
+                labelText: '取消 URL 模板（可选）',
+                hintText: '/jobs/{id}',
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Text(
+            '已保存 wire options：${universalMediaTaskOptionsSummary(options)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      );
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('通用媒体接口'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '媒体模型与顶部 Chat 模型选择器分离，不会把视频 / 音乐模型送入普通 Chat 发送路径。候选显示的来源渠道会成为实际媒体路由来源，不会修改顶部 Chat 模型；旧配置没有渠道模型 ID 时仍复用当前 Chat 渠道，直到用户选择具体媒体渠道。这里从启用渠道的全部模型目录读取显式媒体候选；TTS 仍从独立的语音播报配置选择。profile 只快速填充公开的模型、endpoint 和任务协议；不会复制 API Key。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                buildProfileDropdown(
+                  kind: UniversalMediaKind.video,
+                  setState: setState,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  (findUniversalMediaProviderProfile(
+                            selectedVideoProfileId,
+                            kind: UniversalMediaKind.video,
+                          ) ??
+                          config.videoProfile)
+                      .description,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                buildMediaModelSelector(
+                  kind: UniversalMediaKind.video,
+                  modelController: videoModelController,
+                  setState: setState,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: videoModelController,
+                  enabled: !saving,
+                  onChanged: saving
+                      ? null
+                      : (_) {
+                          setState(() {
+                            selectedVideoChannelModelId = null;
+                            videoModelSelectionManual = true;
+                          });
+                        },
+                  decoration: const InputDecoration(labelText: '视频模型'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: videoEndpointController,
+                  enabled: !saving,
+                  decoration: const InputDecoration(
+                    labelText: '视频接口路径',
+                    hintText: '/v1/videos/generations',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                buildTaskOptionsEditor(
+                  kind: UniversalMediaKind.video,
+                  setState: setState,
+                ),
+                const Divider(height: 24),
+                buildProfileDropdown(
+                  kind: UniversalMediaKind.music,
+                  setState: setState,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  (findUniversalMediaProviderProfile(
+                            selectedMusicProfileId,
+                            kind: UniversalMediaKind.music,
+                          ) ??
+                          config.musicProfile)
+                      .description,
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                buildMediaModelSelector(
+                  kind: UniversalMediaKind.music,
+                  modelController: musicModelController,
+                  setState: setState,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: musicModelController,
+                  enabled: !saving,
+                  onChanged: saving
+                      ? null
+                      : (_) {
+                          setState(() {
+                            selectedMusicChannelModelId = null;
+                            musicModelSelectionManual = true;
+                          });
+                        },
+                  decoration: const InputDecoration(labelText: '音乐模型'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: musicEndpointController,
+                  enabled: !saving,
+                  decoration: const InputDecoration(
+                    labelText: '音乐接口路径',
+                    hintText: '/v1/audio/music',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                buildTaskOptionsEditor(
+                  kind: UniversalMediaKind.music,
+                  setState: setState,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '图片 / 视频 / 音乐生成仅在用户主动点击工具后调用；生成文件默认保存到应用私有目录。',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errorText!,
+                    style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      setState(() {
+                        saving = true;
+                        errorText = null;
+                      });
+                      try {
+                        await ref
+                            .read(universalMediaConfigProvider.notifier)
+                            .save(
+                              videoModel: videoModelController.text,
+                              videoEndpoint: videoEndpointController.text,
+                              videoChannelModelId: videoModelSelectionManual
+                                  ? null
+                                  : selectedVideoChannelModelId,
+                              musicModel: musicModelController.text,
+                              musicEndpoint: musicEndpointController.text,
+                              musicChannelModelId: musicModelSelectionManual
+                                  ? null
+                                  : selectedMusicChannelModelId,
+                              videoProfileId: selectedVideoProfileId,
+                              musicProfileId: selectedMusicProfileId,
+                              videoTaskOptions: buildVideoTaskOptions(),
+                              musicTaskOptions: buildMusicTaskOptions(),
+                            );
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                      } catch (error) {
+                        setState(() {
+                          saving = false;
+                          errorText = '保存失败：$error';
+                        });
+                      }
+                    },
+              child: Text(saving ? '保存中…' : '保存'),
+            ),
+          ],
+        ),
+      ),
+    ).whenComplete(() {
+      // showDialog completes when Navigator.pop is requested, while the
+      // route's exit transition can still rebuild the dialog.  Dispose after
+      // that transition instead of invalidating TextFields during the pop.
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        videoModelController.dispose();
+        videoEndpointController.dispose();
+        musicModelController.dispose();
+        musicEndpointController.dispose();
+        videoReferenceFieldController.dispose();
+        videoPollUrlController.dispose();
+        videoContentUrlController.dispose();
+        videoCancelUrlController.dispose();
+        musicPollUrlController.dispose();
+        musicContentUrlController.dispose();
+        musicCancelUrlController.dispose();
+      });
+    });
+  }
+
   Widget _buildImageGenerationTile(BuildContext context, WidgetRef ref) {
     final config = ref.watch(imageGenerationConfigProvider);
     return ListTile(
@@ -5054,20 +5751,39 @@ class SettingsPage extends ConsumerWidget {
     final voiceController = TextEditingController(text: config.voice);
     final apiKeyController = TextEditingController();
     final styleController = TextEditingController(text: config.style);
+    final xaiCustomVoiceNameController = TextEditingController();
+    final xaiCustomVoiceDescriptionController = TextEditingController();
+    final xaiCustomVoiceGenderController = TextEditingController();
+    final xaiCustomVoiceAccentController = TextEditingController();
+    final xaiCustomVoiceAgeController = TextEditingController();
+    final xaiCustomVoiceLanguageController = TextEditingController(
+      text: config.language.toLowerCase() == 'auto' ? '' : config.language,
+    );
+    final xaiCustomVoiceUseCaseController = TextEditingController();
+    final xaiCustomVoiceToneController = TextEditingController();
     var enabled = config.enabled || hasTtsEngine;
     var isSaving = false;
+    var isCreatingCustomVoice = false;
     String? errorText;
+    String? xaiCustomVoiceAudioPath;
+    String? xaiCustomVoiceAudioName;
+    String? xaiCustomVoiceStatusText;
     var speed = double.tryParse(config.speed) ?? 1.0;
     var responseFormat = config.responseFormat;
     String? referenceAudioPath = config.referenceAudioPath;
     String? referenceAudioName = config.referenceAudioPath?.split('/').last;
-    var selectedPresetId =
-        inferTextToSpeechPreset(
-          baseUrl: config.baseUrl,
-          model: config.model,
-          voice: config.voice,
-        )?.id ??
-        'custom_openai_compatible';
+    var selectedPresetId = config.isXai
+        ? kXaiSpeechProviderId
+        : inferTextToSpeechPreset(
+                baseUrl: config.baseUrl,
+                model: config.model,
+                voice: config.voice,
+              )?.id ??
+              'custom_openai_compatible';
+    if (selectedPresetId == kXaiSpeechProviderId &&
+        !kXaiTextToSpeechPlaybackFormats.contains(responseFormat)) {
+      responseFormat = 'mp3';
+    }
 
     showDialog(
       context: context,
@@ -5082,6 +5798,7 @@ class SettingsPage extends ConsumerWidget {
                 const Text('已完成：'),
                 const SizedBox(height: 6),
                 const Text('• OpenAI 兼容 TTS 语音生成'),
+                const Text('• xAI / Grok Voice REST TTS 语音生成'),
                 const Text('• AI 回复卡片一键语音播报'),
                 const Text('• iOS / Android 原生本地音频播放通道'),
                 const SizedBox(height: 12),
@@ -5097,7 +5814,11 @@ class SettingsPage extends ConsumerWidget {
                       : (value) => setState(() => enabled = value),
                 ),
                 const SizedBox(height: 8),
-                const Text('厂商：OpenAI 兼容 TTS'),
+                Text(
+                  selectedPresetId == kXaiSpeechProviderId
+                      ? '厂商：xAI / Grok Voice REST'
+                      : '厂商：OpenAI 兼容 TTS',
+                ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
                   initialValue: selectedPresetId,
@@ -5120,8 +5841,19 @@ class SettingsPage extends ConsumerWidget {
                           setState(() {
                             selectedPresetId = preset.id;
                             baseUrlController.text = preset.baseUrl;
-                            modelController.text = preset.ttsModel!;
+                            modelController.text = preset.ttsModel ?? '';
                             voiceController.text = preset.ttsVoice!;
+                            if (preset.id == kXaiSpeechProviderId) {
+                              speed = speed.clamp(
+                                kXaiTextToSpeechMinSpeed,
+                                kXaiTextToSpeechMaxSpeed,
+                              );
+                              if (!kXaiTextToSpeechPlaybackFormats.contains(
+                                responseFormat,
+                              )) {
+                                responseFormat = 'mp3';
+                              }
+                            }
                           });
                         },
                 ),
@@ -5141,7 +5873,206 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                if (simiRouterTtsModeOf(modelController.text) != null)
+                if (selectedPresetId == kXaiSpeechProviderId) ...[
+                  const Text(
+                    'xAI / Grok Voice REST 不使用 model；TTS 使用 voice_id。',
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Custom Voice 创建是 POST /v1/custom-voices 的真实网络能力：参考音频最多 120 秒，API 创建可能要求团队 / Enterprise 权限；403 或 413 会明确提示，不会生成伪 voice_id。',
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.library_music_outlined, size: 18),
+                    label: Text(
+                      isCreatingCustomVoice ? '创建 custom voice 中…' : '选择参考音频',
+                    ),
+                    onPressed: isSaving || isCreatingCustomVoice
+                        ? null
+                        : () async {
+                            final result = await FilePicker.platform.pickFiles(
+                              type: FileType.audio,
+                              allowMultiple: false,
+                            );
+                            final path = result?.files.single.path?.trim();
+                            if (path == null || path.isEmpty || !ctx.mounted) {
+                              return;
+                            }
+                            setState(() {
+                              xaiCustomVoiceAudioPath = path;
+                              xaiCustomVoiceAudioName = p.basename(path);
+                              errorText = null;
+                              xaiCustomVoiceStatusText = null;
+                            });
+                          },
+                  ),
+                  if (xaiCustomVoiceAudioName != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '已选择参考音频：$xaiCustomVoiceAudioName',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: xaiCustomVoiceNameController,
+                    enabled: !isSaving,
+                    decoration: const InputDecoration(
+                      labelText: 'name（可选）',
+                      hintText: '例如：Friendly Narrator',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: xaiCustomVoiceDescriptionController,
+                    enabled: !isSaving,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'description（可选）',
+                      hintText: '声音用途或特点',
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    initiallyExpanded: true,
+                    title: const Text('官方 metadata（可选）'),
+                    subtitle: const Text(
+                      '仅发送 xAI 文档定义的 gender / accent / age / language / use_case / tone',
+                    ),
+                    children: [
+                      TextField(
+                        controller: xaiCustomVoiceGenderController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'gender（可选）',
+                          hintText: 'male / female / neutral',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: xaiCustomVoiceAccentController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'accent（可选）',
+                          hintText: '例如：American / British',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: xaiCustomVoiceAgeController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'age（可选）',
+                          hintText: 'young / middle-aged / old',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: xaiCustomVoiceLanguageController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'language（可选）',
+                          hintText: 'en / zh-CN',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: xaiCustomVoiceUseCaseController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'use_case（可选）',
+                          hintText: 'narration / conversational',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: xaiCustomVoiceToneController,
+                        enabled: !isSaving,
+                        decoration: const InputDecoration(
+                          labelText: 'tone（可选）',
+                          hintText: 'warm / calm / professional',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.cloud_upload_outlined, size: 18),
+                    label: Text(
+                      isCreatingCustomVoice ? '向 xAI 创建中…' : '创建并保存 voice_id',
+                    ),
+                    onPressed: isSaving || isCreatingCustomVoice
+                        ? null
+                        : () async {
+                            final audioPath = xaiCustomVoiceAudioPath;
+                            if (audioPath == null || audioPath.isEmpty) {
+                              setState(() {
+                                errorText = '请先选择参考音频';
+                                xaiCustomVoiceStatusText = null;
+                              });
+                              return;
+                            }
+                            setState(() {
+                              isSaving = true;
+                              isCreatingCustomVoice = true;
+                              errorText = null;
+                              xaiCustomVoiceStatusText = null;
+                            });
+                            try {
+                              final result = await ref
+                                  .read(textToSpeechConfigProvider.notifier)
+                                  .createAndSaveXaiCustomVoice(
+                                    enabled: enabled,
+                                    baseUrl: baseUrlController.text,
+                                    request: XaiCustomVoiceRequest(
+                                      audioPath: audioPath,
+                                      fileName:
+                                          xaiCustomVoiceAudioName ??
+                                          p.basename(audioPath),
+                                      name: xaiCustomVoiceNameController.text,
+                                      description:
+                                          xaiCustomVoiceDescriptionController
+                                              .text,
+                                      gender:
+                                          xaiCustomVoiceGenderController.text,
+                                      accent:
+                                          xaiCustomVoiceAccentController.text,
+                                      age: xaiCustomVoiceAgeController.text,
+                                      language:
+                                          xaiCustomVoiceLanguageController.text,
+                                      useCase:
+                                          xaiCustomVoiceUseCaseController.text,
+                                      tone: xaiCustomVoiceToneController.text,
+                                    ),
+                                    apiKey: apiKeyController.text,
+                                    language: config.language,
+                                    speed: speed.toStringAsFixed(2),
+                                    responseFormat: responseFormat,
+                                  );
+                              if (!ctx.mounted) return;
+                              setState(() {
+                                voiceController.text = result.voiceId;
+                                isSaving = false;
+                                isCreatingCustomVoice = false;
+                                xaiCustomVoiceStatusText =
+                                    '已创建并保存 voice_id=${result.voiceId}，后续 xAI TTS 将使用该 voice_id。';
+                              });
+                            } catch (error) {
+                              if (!ctx.mounted) return;
+                              setState(() {
+                                isSaving = false;
+                                isCreatingCustomVoice = false;
+                                errorText = _safeTtsDialogError(error);
+                              });
+                            }
+                          },
+                  ),
+                  if (xaiCustomVoiceStatusText != null) ...[
+                    const SizedBox(height: 6),
+                    Text(xaiCustomVoiceStatusText!),
+                  ],
+                ] else if (simiRouterTtsModeOf(modelController.text) != null)
                   DropdownButtonFormField<String>(
                     initialValue: modelController.text,
                     decoration: const InputDecoration(
@@ -5220,10 +6151,14 @@ class SettingsPage extends ConsumerWidget {
                   TextField(
                     controller: voiceController,
                     enabled: !isSaving,
-                    decoration: const InputDecoration(
-                      labelText: '音色',
+                    decoration: InputDecoration(
+                      labelText: selectedPresetId == kXaiSpeechProviderId
+                          ? 'voice_id（内置或已创建 custom voice）'
+                          : '音色',
                       hintText: 'alloy',
-                      helperText: '仅允许字母、数字、点、下划线和短横线',
+                      helperText: selectedPresetId == kXaiSpeechProviderId
+                          ? '可填内置 voice_id 或已由 xAI Console/API 创建的 custom voice ID。'
+                          : '仅允许字母、数字、点、下划线和短横线',
                     ),
                   ),
                 // 声音设计模式：风格描述。
@@ -5277,7 +6212,8 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 ],
                 // mimo 模式通用：语速 + 输出格式。
-                if (simiRouterTtsModeOf(modelController.text) != null) ...[
+                if (simiRouterTtsModeOf(modelController.text) != null ||
+                    selectedPresetId == kXaiSpeechProviderId) ...[
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -5288,11 +6224,19 @@ class SettingsPage extends ConsumerWidget {
                       Expanded(
                         child: Slider(
                           value: speed.clamp(
-                            kSimiRouterTtsMinSpeed,
-                            kSimiRouterTtsMaxSpeed,
+                            selectedPresetId == kXaiSpeechProviderId
+                                ? kXaiTextToSpeechMinSpeed
+                                : kSimiRouterTtsMinSpeed,
+                            selectedPresetId == kXaiSpeechProviderId
+                                ? kXaiTextToSpeechMaxSpeed
+                                : kSimiRouterTtsMaxSpeed,
                           ),
-                          min: kSimiRouterTtsMinSpeed,
-                          max: kSimiRouterTtsMaxSpeed,
+                          min: selectedPresetId == kXaiSpeechProviderId
+                              ? kXaiTextToSpeechMinSpeed
+                              : kSimiRouterTtsMinSpeed,
+                          max: selectedPresetId == kXaiSpeechProviderId
+                              ? kXaiTextToSpeechMaxSpeed
+                              : kSimiRouterTtsMaxSpeed,
                           divisions: 60,
                           label: speed.toStringAsFixed(2),
                           onChanged: isSaving
@@ -5306,7 +6250,10 @@ class SettingsPage extends ConsumerWidget {
                     initialValue: responseFormat,
                     decoration: const InputDecoration(labelText: '输出格式'),
                     items: [
-                      for (final format in kSimiRouterTtsResponseFormats)
+                      for (final format
+                          in selectedPresetId == kXaiSpeechProviderId
+                              ? kXaiTextToSpeechPlaybackFormats
+                              : kSimiRouterTtsResponseFormats)
                         DropdownMenuItem(value: format, child: Text(format)),
                     ],
                     onChanged: isSaving
@@ -5379,19 +6326,32 @@ class SettingsPage extends ConsumerWidget {
                         errorText = null;
                       });
                       try {
-                        await ref
-                            .read(textToSpeechConfigProvider.notifier)
-                            .saveOpenAiCompatible(
-                              enabled: enabled,
-                              baseUrl: baseUrlController.text,
-                              model: modelController.text,
-                              voice: voiceController.text,
-                              apiKey: apiKeyController.text,
-                              speed: speed.toStringAsFixed(2),
-                              responseFormat: responseFormat,
-                              style: styleController.text,
-                              referenceAudioPath: referenceAudioPath,
-                            );
+                        final notifier = ref.read(
+                          textToSpeechConfigProvider.notifier,
+                        );
+                        if (selectedPresetId == kXaiSpeechProviderId) {
+                          await notifier.saveXai(
+                            enabled: enabled,
+                            baseUrl: baseUrlController.text,
+                            voice: voiceController.text,
+                            apiKey: apiKeyController.text,
+                            language: config.language,
+                            speed: speed.toStringAsFixed(2),
+                            responseFormat: responseFormat,
+                          );
+                        } else {
+                          await notifier.saveOpenAiCompatible(
+                            enabled: enabled,
+                            baseUrl: baseUrlController.text,
+                            model: modelController.text,
+                            voice: voiceController.text,
+                            apiKey: apiKeyController.text,
+                            speed: speed.toStringAsFixed(2),
+                            responseFormat: responseFormat,
+                            style: styleController.text,
+                            referenceAudioPath: referenceAudioPath,
+                          );
+                        }
                         if (ctx.mounted) Navigator.pop(ctx);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -5416,6 +6376,14 @@ class SettingsPage extends ConsumerWidget {
       voiceController.dispose();
       apiKeyController.dispose();
       styleController.dispose();
+      xaiCustomVoiceNameController.dispose();
+      xaiCustomVoiceDescriptionController.dispose();
+      xaiCustomVoiceGenderController.dispose();
+      xaiCustomVoiceAccentController.dispose();
+      xaiCustomVoiceAgeController.dispose();
+      xaiCustomVoiceLanguageController.dispose();
+      xaiCustomVoiceUseCaseController.dispose();
+      xaiCustomVoiceToneController.dispose();
     });
   }
 
@@ -8210,27 +9178,27 @@ class SettingsPage extends ConsumerWidget {
                   onChanged: isMobileMcpPlatform && isPcOnlyMcpConfig(server)
                       ? null
                       : (v) async {
-                    final updated = server.copyWith(isEnabled: v);
-                    await manager.updateServer(updated);
-                    if (v) {
-                      try {
-                        await manager.connectServer(updated);
-                      } catch (e) {
-                        // Do not persist a broken enabled row. Otherwise the
-                        // next cold start repeats the same failed handshake.
-                        await manager.updateServer(
-                          updated.copyWith(isEnabled: false),
-                        );
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('MCP 连接失败: $e')),
-                          );
-                        }
-                      }
-                    } else {
-                      await manager.disconnectServer(server.id);
-                    }
-                  },
+                          final updated = server.copyWith(isEnabled: v);
+                          await manager.updateServer(updated);
+                          if (v) {
+                            try {
+                              await manager.connectServer(updated);
+                            } catch (e) {
+                              // Do not persist a broken enabled row. Otherwise the
+                              // next cold start repeats the same failed handshake.
+                              await manager.updateServer(
+                                updated.copyWith(isEnabled: false),
+                              );
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('MCP 连接失败: $e')),
+                                );
+                              }
+                            }
+                          } else {
+                            await manager.disconnectServer(server.id);
+                          }
+                        },
                 ),
                 IconButton(
                   icon: const Icon(Icons.delete, size: 18, color: Colors.red),

@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:ai_chat_app/core/media/audio_player.dart';
 import 'package:ai_chat_app/core/media/text_to_speech_service.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -151,6 +152,98 @@ void main() {
       player.emit(expected);
     });
 
+    test(
+      'tracks synthesis, playback, completion, stop, and error states',
+      () async {
+        final player = _FakeAudioPlayer();
+        final service = TextToSpeechService(
+          engine: _FakeTextToSpeechEngine([1]),
+          player: player,
+          outputDirectory: () async => tempDir,
+          now: () => DateTime.fromMillisecondsSinceEpoch(1234),
+        );
+        final states = <TextToSpeechPlaybackState>[];
+        final subscription = service.playbackStates.listen(
+          (snapshot) => states.add(snapshot.state),
+        );
+        addTearDown(subscription.cancel);
+
+        final result = await service.speak(text: 'hello', voice: 'alloy');
+        expect(service.playbackState, TextToSpeechPlaybackState.playing);
+
+        player.emit(
+          AudioPlaybackEvent(
+            type: AudioPlaybackEventType.completed,
+            path: result.audioFile.path,
+          ),
+        );
+        player.emit(
+          AudioPlaybackEvent(
+            type: AudioPlaybackEventType.stopped,
+            path: result.audioFile.path,
+          ),
+        );
+        player.emit(
+          AudioPlaybackEvent(
+            type: AudioPlaybackEventType.error,
+            path: result.audioFile.path,
+            message: 'focus lost',
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          states,
+          containsAll(<TextToSpeechPlaybackState>[
+            TextToSpeechPlaybackState.synthesizing,
+            TextToSpeechPlaybackState.playing,
+            TextToSpeechPlaybackState.completed,
+            TextToSpeechPlaybackState.stopped,
+            TextToSpeechPlaybackState.error,
+          ]),
+        );
+        expect(service.playbackState, TextToSpeechPlaybackState.error);
+        expect(service.playbackSnapshot.message, 'focus lost');
+      },
+    );
+
+    test(
+      'cancelling while player is pending stops playback and deletes file',
+      () async {
+        final player = _BlockingAudioPlayer();
+        final service = TextToSpeechService(
+          engine: _FakeTextToSpeechEngine([1, 2, 3]),
+          player: player,
+          outputDirectory: () async => tempDir,
+          now: () => DateTime.fromMillisecondsSinceEpoch(5678),
+        );
+        final cancelToken = CancelToken();
+        final operation = service.speak(
+          text: 'hello',
+          voice: 'alloy',
+          cancelToken: cancelToken,
+        );
+
+        final path = await player.playStarted.future;
+        cancelToken.cancel('stop playback');
+        player.release();
+
+        await expectLater(
+          operation,
+          throwsA(
+            isA<TextToSpeechException>().having(
+              (error) => error.message,
+              'message',
+              contains('取消'),
+            ),
+          ),
+        );
+        expect(player.stopped, isTrue);
+        expect(await File(path).exists(), isFalse);
+        expect(service.playbackState, TextToSpeechPlaybackState.stopped);
+      },
+    );
+
     test('parses native audio playback method call events safely', () {
       final completed = AudioPlaybackEvent.fromMethodCall(
         const MethodCall('playbackCompleted', {'path': ' /app/audio.mp3 '}),
@@ -250,7 +343,10 @@ class _FakeTextToSpeechEngine implements TextToSpeechEngine {
   TextToSpeechInput? lastInput;
 
   @override
-  Future<List<int>> synthesize(TextToSpeechInput input) async {
+  Future<List<int>> synthesize(
+    TextToSpeechInput input, {
+    CancelToken? cancelToken,
+  }) async {
     lastInput = input;
     return bytes;
   }
@@ -276,5 +372,30 @@ class _FakeAudioPlayer implements AudioPlayerPlatform {
 
   void emit(AudioPlaybackEvent event) {
     _events.add(event);
+  }
+}
+
+class _BlockingAudioPlayer implements AudioPlayerPlatform {
+  final playStarted = Completer<String>();
+  final playGate = Completer<void>();
+  var stopped = false;
+
+  @override
+  Stream<AudioPlaybackEvent> get events =>
+      const Stream<AudioPlaybackEvent>.empty();
+
+  @override
+  Future<void> playFile(String audioPath) async {
+    if (!playStarted.isCompleted) playStarted.complete(audioPath);
+    await playGate.future;
+  }
+
+  @override
+  Future<void> stop() async {
+    stopped = true;
+  }
+
+  void release() {
+    if (!playGate.isCompleted) playGate.complete();
   }
 }

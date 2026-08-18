@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:dio/dio.dart' show CancelToken;
 
+export 'protocol_stream_exception.dart';
+
 /// 统一的 AI 消息格式
 class AiMessage {
   final String role; // user | assistant | system
@@ -15,7 +17,7 @@ class AiMessage {
 }
 
 class Attachment {
-  final String type; // image | pdf | audio | document
+  final String type; // image | pdf | audio | video | document
   final String path;
   final String? mimeType;
 
@@ -32,6 +34,13 @@ class AiChunk {
 
 /// AI 协议适配器接口
 abstract class AiProtocol {
+  /// Attachment parts emitted by this adapter as real protocol input.
+  ///
+  /// This is deliberately a protocol contract, not a model-name heuristic.
+  /// In particular, an `audio` model label must not make an adapter emit an
+  /// `input_audio` part unless the adapter explicitly declares it here.
+  Set<String> get nativeAttachmentTypes;
+
   /// 流式发送，返回 token 增量流
   Stream<AiChunk> sendStream({
     required String baseUrl,

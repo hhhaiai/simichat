@@ -178,5 +178,34 @@ void main() {
       expect(transcript, '你好');
       expect(await seen.future, isNot(contains('stt-test-key')));
     });
+
+    test('resolves STT through a configured /api/v3 prefix', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      unawaited(
+        server.forEach((request) async {
+          expect(request.uri.path, '/api/v3/audio/transcriptions');
+          await request.drain<void>();
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({'text': 'prefix ok'}));
+          await request.response.close();
+        }),
+      );
+
+      final engine = OpenAiCompatibleSpeechToTextEngine(
+        baseUrl: 'http://${server.address.host}:${server.port}/api/v3',
+        apiKey: 'stt-test-key',
+      );
+      final transcript = await engine.transcribe(
+        AudioTranscriptionInput(
+          audioPath: audioFile.path,
+          fileName: 'voice.m4a',
+          fileSize: await audioFile.length(),
+        ),
+      );
+
+      expect(transcript, 'prefix ok');
+    });
   });
 }

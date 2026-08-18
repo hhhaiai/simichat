@@ -3,9 +3,47 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/ai/ai_protocol.dart';
+import 'package:ai_chat_app/core/ai/attachment_helper.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ai_chat_app/core/ai/openai_chat_protocol.dart';
+
+Future<void> _expectOpenAiChatError(
+  String body, {
+  required ProtocolStreamErrorKind kind,
+}) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  try {
+    unawaited(
+      server.forEach((request) async {
+        await request.drain();
+        request.response
+          ..headers.contentType = ContentType('text', 'event-stream')
+          ..add(utf8.encode(body));
+        await request.response.close();
+      }),
+    );
+    await expectLater(
+      OpenAiChatProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}',
+            apiKey: 'openai-test-key',
+            model: 'gpt-test',
+            messages: const [AiMessage(role: 'user', content: 'hello')],
+          )
+          .toList(),
+      throwsA(
+        isA<ProtocolStreamException>().having(
+          (error) => error.kind,
+          'kind',
+          kind,
+        ),
+      ),
+    );
+  } finally {
+    await server.close(force: true);
+  }
+}
 
 void main() {
   group('OpenAiChatProtocol.extractChunksFromEventData', () {
@@ -53,7 +91,54 @@ void main() {
       expect(chunks.last.content, 'Hi there! 👋 How are you doing today?');
     });
 
-    test('sends audio attachments as text with full base64 payload', () async {
+    test('extracts structured content and reasoning from a chat response', () {
+      final response = OpenAiChatProtocol.extractMessageFromResponseData({
+        'choices': [
+          {
+            'message': {
+              'content': [
+                {'type': 'text', 'text': 'Hello'},
+                {'type': 'text', 'text': ' world'},
+              ],
+              'reasoning': [
+                {'type': 'text', 'text': 'Plan'},
+              ],
+            },
+          },
+        ],
+      });
+
+      expect(response.content, 'Hello world');
+      expect(response.thinking, 'Plan');
+    });
+
+    test('surfaces event:error instead of silently ending the stream', () {
+      return _expectOpenAiChatError(
+        'event: error\n'
+        'data: {"message":"failed with Bearer hidden-key at https://upstream.test"}\n\n',
+        kind: ProtocolStreamErrorKind.failed,
+      );
+    });
+
+    test('surfaces content_filter as a safety terminal result', () {
+      return _expectOpenAiChatError(
+        'data: {"choices":[{"finish_reason":"content_filter"}]}\n\n',
+        kind: ProtocolStreamErrorKind.safety,
+      );
+    });
+
+    test('surfaces length as an incomplete terminal result', () {
+      return _expectOpenAiChatError(
+        'data: {"choices":[{"finish_reason":"length"}]}\n\n',
+        kind: ProtocolStreamErrorKind.incomplete,
+      );
+    });
+
+    test('sends native audio parts and OpenAI JSON response mode', () async {
+      expect(
+        OpenAiChatProtocol().nativeAttachmentTypes,
+        containsAll(<String>['image', 'audio']),
+      );
       final tempDir = await Directory.systemTemp.createTemp(
         'simichat_openai_audio_',
       );
@@ -93,6 +178,7 @@ void main() {
                 attachments: [Attachment(type: 'audio', path: audio.path)],
               ),
             ],
+            jsonResponse: true,
           )
           .toList();
 
@@ -103,17 +189,56 @@ void main() {
           (messages.single as Map<String, dynamic>)['content'] as List<dynamic>;
       expect(content.first, {'type': 'text', 'text': '听一下'});
       final audioPart = content.last as Map<String, dynamic>;
-      expect(audioPart['type'], 'text');
-      expect(audioPart['text'], contains('[附件: audio]'));
-      expect(audioPart['text'], contains('mime_type: audio/mp4'));
-      expect(audioPart['text'], contains('format: m4a'));
-      expect(
-        audioPart['text'],
-        contains(base64Encode([0x01, 0x02, 0x03, 0x04])),
-      );
-      expect(jsonEncode(payload), isNot(contains('base64 数据已省略')));
-      expect(jsonEncode(payload), isNot(contains('input_audio')));
+      expect(audioPart, {
+        'type': 'input_audio',
+        'input_audio': {
+          'data': base64Encode([0x01, 0x02, 0x03, 0x04]),
+          'format': 'm4a',
+        },
+      });
+      expect(payload['response_format'], {'type': 'json_object'});
     });
+
+    test(
+      'rejects non-uploaded document parts instead of adding placeholder text',
+      () async {
+        var requestSeen = false;
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        unawaited(
+          server.forEach((request) async {
+            requestSeen = true;
+            await request.drain();
+            await request.response.close();
+          }),
+        );
+
+        await expectLater(
+          OpenAiChatProtocol()
+              .sendStream(
+                baseUrl: 'http://${server.address.host}:${server.port}/v1',
+                apiKey: 'test-key',
+                model: 'audio4',
+                messages: const [
+                  AiMessage(
+                    role: 'user',
+                    content: '请读取',
+                    attachments: [
+                      Attachment(type: 'document', path: '/not-read/notes.txt'),
+                    ],
+                  ),
+                ],
+              )
+              .toList(),
+          throwsA(
+            isA<UnsupportedAttachmentException>()
+                .having((error) => error.attachmentType, 'type', 'document')
+                .having((error) => error.protocol, 'protocol', 'openai_chat'),
+          ),
+        );
+        expect(requestSeen, isFalse);
+      },
+    );
 
     test('sends image attachments as OpenAI image_url data URLs', () async {
       final tempDir = await Directory.systemTemp.createTemp(

@@ -1,3 +1,44 @@
+import 'xai_speech_provider_profile.dart';
+
+/// Voice cloning is not one interchangeable feature across vendors.
+///
+/// `externalVoiceId` means the TTS adapter accepts an identifier created
+/// elsewhere (for example in a vendor console). `referenceAudioInline` means
+/// the current OpenAI-compatible adapter embeds local reference audio. The
+/// `multipartUpload` flag means this project has a protocol adapter for
+/// creating a vendor voice; it does not imply that the configured account is
+/// entitled to use that vendor endpoint.
+enum SpeechVoiceCloneSupport {
+  externalVoiceId,
+  referenceAudioInline,
+  multipartUpload,
+}
+
+enum SpeechVoiceDesignSupport { stylePrompt }
+
+/// Explicit capability contract used by provider selection and settings.
+///
+/// This is intentionally independent from `sttModel` / `ttsModel`: xAI Voice
+/// REST batch endpoints do not take a model field at all.
+class SpeechProviderCapabilities {
+  const SpeechProviderCapabilities({
+    this.supportsStt = false,
+    this.supportsTts = false,
+    this.voiceClone = const <SpeechVoiceCloneSupport>{},
+    this.voiceDesign = const <SpeechVoiceDesignSupport>{},
+    this.supportsRealtime = false,
+  });
+
+  final bool supportsStt;
+  final bool supportsTts;
+  final Set<SpeechVoiceCloneSupport> voiceClone;
+  final Set<SpeechVoiceDesignSupport> voiceDesign;
+  final bool supportsRealtime;
+
+  bool get supportsVoiceClone => voiceClone.isNotEmpty;
+  bool get supportsVoiceDesign => voiceDesign.isNotEmpty;
+}
+
 class SpeechProviderPreset {
   const SpeechProviderPreset({
     required this.id,
@@ -8,6 +49,9 @@ class SpeechProviderPreset {
     this.sttModel,
     this.ttsModel,
     this.ttsVoice,
+    this.supportsVoiceDesign = false,
+    this.supportsVoiceClone = false,
+    this.capabilities = const SpeechProviderCapabilities(),
   });
 
   final String id;
@@ -18,9 +62,12 @@ class SpeechProviderPreset {
   final String? sttModel;
   final String? ttsModel;
   final String? ttsVoice;
+  final bool supportsVoiceDesign;
+  final bool supportsVoiceClone;
+  final SpeechProviderCapabilities capabilities;
 
-  bool get supportsStt => sttModel != null;
-  bool get supportsTts => ttsModel != null && ttsVoice != null;
+  bool get supportsStt => capabilities.supportsStt;
+  bool get supportsTts => capabilities.supportsTts;
 }
 
 const kSpeechProviderPresets = [
@@ -31,6 +78,10 @@ const kSpeechProviderPresets = [
     sttModel: 'whisper-1',
     ttsModel: 'tts-1',
     ttsVoice: 'alloy',
+    capabilities: SpeechProviderCapabilities(
+      supportsStt: true,
+      supportsTts: true,
+    ),
     description: '官方 OpenAI Audio API，覆盖 STT 转写和 TTS 语音生成。',
     docsUrl: 'https://platform.openai.com/docs/guides/audio',
   ),
@@ -39,6 +90,7 @@ const kSpeechProviderPresets = [
     name: 'Groq STT',
     baseUrl: 'https://api.groq.com/openai',
     sttModel: 'whisper-large-v3-turbo',
+    capabilities: SpeechProviderCapabilities(supportsStt: true),
     description: 'Groq OpenAI 兼容音频转写接口，适合快速语音转文字。',
     docsUrl: 'https://console.groq.com/docs/speech-to-text',
   ),
@@ -49,8 +101,38 @@ const kSpeechProviderPresets = [
     sttModel: 'mimo-v2.5-asr',
     ttsModel: 'mimo-v2.5-tts',
     ttsVoice: 'alloy',
+    supportsVoiceDesign: true,
+    supportsVoiceClone: true,
+    capabilities: SpeechProviderCapabilities(
+      supportsStt: true,
+      supportsTts: true,
+      voiceClone: {SpeechVoiceCloneSupport.referenceAudioInline},
+      voiceDesign: {SpeechVoiceDesignSupport.stylePrompt},
+    ),
     description: 'SimiRouter 语音：mimo TTS 三种模式（合成 / 声音设计 / 声音克隆）+ mimo ASR 识别。',
     docsUrl: 'https://api.dwchainless.com/',
+  ),
+  SpeechProviderPreset(
+    id: kXaiSpeechProviderId,
+    name: 'xAI Voice',
+    baseUrl: kXaiSpeechProviderBaseUrl,
+    // xAI batch STT/TTS deliberately has no model parameter.  Empty strings
+    // keep the existing settings form selectable without fabricating a model;
+    // the xAI adapters omit the field from the wire request.
+    sttModel: '',
+    ttsModel: '',
+    ttsVoice: kXaiDefaultTextToSpeechVoice,
+    capabilities: SpeechProviderCapabilities(
+      supportsStt: true,
+      supportsTts: true,
+      voiceClone: {
+        SpeechVoiceCloneSupport.externalVoiceId,
+        SpeechVoiceCloneSupport.multipartUpload,
+      },
+    ),
+    description:
+        'xAI / Grok Voice REST：STT 使用 /v1/stt，TTS 使用 /v1/tts（text、voice_id、language）；custom voice ID 可由 /v1/custom-voices adapter 创建。当前不接入实时 WSS 与声音设计。',
+    docsUrl: 'https://docs.x.ai/developers/rest-api-reference/inference/voice',
   ),
   SpeechProviderPreset(
     id: 'custom_openai_compatible',
@@ -59,10 +141,16 @@ const kSpeechProviderPresets = [
     sttModel: 'whisper-1',
     ttsModel: 'tts-1',
     ttsVoice: 'alloy',
+    capabilities: SpeechProviderCapabilities(
+      supportsStt: true,
+      supportsTts: true,
+    ),
     description: '用于兼容 /v1/audio/transcriptions 与 /v1/audio/speech 的自定义服务。',
     docsUrl: '',
   ),
 ];
+
+const kSimiRouterSpeechProviderId = 'dwchainless';
 
 /// SimiRouter mimo TTS 的三种模型模式。
 enum SimiRouterTtsMode {
@@ -130,6 +218,26 @@ SpeechProviderPreset? findSpeechProviderPreset(String id) {
     if (preset.id == id) return preset;
   }
   return null;
+}
+
+/// Returns true only for the explicit SimiRouter preset or its official host.
+/// A generic OpenAI-compatible endpoint must not be treated as a provider for
+/// SimiRouter-only voice design/clone fields merely because its model string
+/// happens to contain `mimo`.
+bool isSimiRouterSpeechProvider({String? provider, String? baseUrl}) {
+  if (provider?.trim().toLowerCase() == kSimiRouterSpeechProviderId) {
+    return true;
+  }
+  final candidate = baseUrl?.trim() ?? '';
+  if (candidate.isEmpty) return false;
+  try {
+    var normalized = candidate;
+    if (!normalized.contains('://')) normalized = 'https://$normalized';
+    final host = Uri.tryParse(normalized)?.host.toLowerCase();
+    return host == 'api.dwchainless.com';
+  } catch (_) {
+    return false;
+  }
 }
 
 SpeechProviderPreset? inferSpeechToTextPreset({

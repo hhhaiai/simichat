@@ -58,6 +58,7 @@
 | [历史 UI 设计说明](ui.md) | UI 早期设计与实现参考 |
 | [对话页 Markdown 渲染](markdown-rendering.md) | Markdown、公式、Mermaid、Draw.io、媒体卡片和安全边界 |
 | [语音、图片与附件](media-attachments.md) | 录音、STT、TTS、图片、文件、归档和多模态输入 |
+| [ChatGPT 风格多模态 Composer](chat-composer-multimodal.md) | 多文件输入、参考图、图片 / 视频 / 音频 / 音乐生成、通用媒体接口和消息卡片 |
 | [数据同步、导出与笔记工具](data-sync.md) | 导出、导入、Obsidian、Notion、语雀、思源、云备份 |
 | [深度链接](deep-linking.md) | `ai-chat://` 外部唤起协议 |
 | [技能市场](skills-market.md) | SkillHub、通用 HTTP 技能源、安装和 SHA-256 校验 |

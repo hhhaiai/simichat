@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:path/path.dart' as p;
 
 import '../database/app_database.dart';
+import '../database/dao/channel_dao.dart' show decodeModelCapabilities;
 import 'archive_attachment_path.dart';
 
 const kLocalDatabaseArchivePath = 'structured_data/local_database.json';
@@ -23,6 +24,8 @@ class LocalDatabaseSnapshotPreview {
     required this.channelModelCount,
     required this.dreamingJobCount,
     required this.dreamingReportCount,
+    this.mediaJobCount = 0,
+    this.invalidMediaJobCount = 0,
     required this.existingSessionCount,
     required this.existingMessageCount,
     required this.existingAttachmentCount,
@@ -34,6 +37,7 @@ class LocalDatabaseSnapshotPreview {
     required this.existingChannelModelCount,
     required this.existingDreamingJobCount,
     required this.existingDreamingReportCount,
+    this.existingMediaJobCount = 0,
   });
 
   final int sessionCount;
@@ -47,6 +51,8 @@ class LocalDatabaseSnapshotPreview {
   final int channelModelCount;
   final int dreamingJobCount;
   final int dreamingReportCount;
+  final int mediaJobCount;
+  final int invalidMediaJobCount;
   final int existingSessionCount;
   final int existingMessageCount;
   final int existingAttachmentCount;
@@ -58,6 +64,7 @@ class LocalDatabaseSnapshotPreview {
   final int existingChannelModelCount;
   final int existingDreamingJobCount;
   final int existingDreamingReportCount;
+  final int existingMediaJobCount;
 
   int get configurationRecordCount =>
       folderCount +
@@ -67,7 +74,8 @@ class LocalDatabaseSnapshotPreview {
       modelChannelCount +
       channelModelCount +
       dreamingJobCount +
-      dreamingReportCount;
+      dreamingReportCount +
+      mediaJobCount;
 
   int get totalRecordCount =>
       sessionCount + messageCount + attachmentCount + configurationRecordCount;
@@ -80,7 +88,8 @@ class LocalDatabaseSnapshotPreview {
       existingModelChannelCount +
       existingChannelModelCount +
       existingDreamingJobCount +
-      existingDreamingReportCount;
+      existingDreamingReportCount +
+      existingMediaJobCount;
 
   int get existingRecordCount =>
       existingSessionCount +
@@ -116,6 +125,9 @@ class LocalDatabaseRestoreResult {
     required this.skippedInvalidMessages,
     required this.skippedInvalidAttachments,
     required this.skippedInvalidChannelModels,
+    this.restoredMediaJobs = 0,
+    this.skippedExistingMediaJobs = 0,
+    this.skippedInvalidMediaJobs = 0,
   });
 
   final int restoredSessions;
@@ -143,6 +155,9 @@ class LocalDatabaseRestoreResult {
   final int skippedInvalidMessages;
   final int skippedInvalidAttachments;
   final int skippedInvalidChannelModels;
+  final int restoredMediaJobs;
+  final int skippedExistingMediaJobs;
+  final int skippedInvalidMediaJobs;
 
   int get restoredConfigurationRecords =>
       restoredFolders +
@@ -152,7 +167,8 @@ class LocalDatabaseRestoreResult {
       restoredModelChannels +
       restoredChannelModels +
       restoredDreamingJobs +
-      restoredDreamingReports;
+      restoredDreamingReports +
+      restoredMediaJobs;
 
   int get restoredRecordCount =>
       restoredSessions +
@@ -168,7 +184,8 @@ class LocalDatabaseRestoreResult {
       skippedExistingModelChannels +
       skippedExistingChannelModels +
       skippedExistingDreamingJobs +
-      skippedExistingDreamingReports;
+      skippedExistingDreamingReports +
+      skippedExistingMediaJobs;
 
   int get skippedExistingRecordCount =>
       skippedExistingSessions +
@@ -178,7 +195,8 @@ class LocalDatabaseRestoreResult {
   int get skippedInvalidRecordCount =>
       skippedInvalidMessages +
       skippedInvalidAttachments +
-      skippedInvalidChannelModels;
+      skippedInvalidChannelModels +
+      skippedInvalidMediaJobs;
 }
 
 class LocalDatabaseSnapshotService {
@@ -217,6 +235,9 @@ class LocalDatabaseSnapshotService {
     final dreamingReports = await (database.select(
       database.dreamingReports,
     )..orderBy([(t) => OrderingTerm.asc(t.generatedAt)])).get();
+    final mediaJobs = await (database.select(
+      database.mediaJobs,
+    )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
     final sessions = await (database.select(
       database.sessions,
     )..orderBy([(t) => OrderingTerm.asc(t.createdAt)])).get();
@@ -235,6 +256,7 @@ class LocalDatabaseSnapshotService {
         channelModels.isEmpty &&
         dreamingJobs.isEmpty &&
         dreamingReports.isEmpty &&
+        mediaJobs.isEmpty &&
         sessions.isEmpty &&
         messages.isEmpty &&
         attachments.isEmpty) {
@@ -265,8 +287,11 @@ class LocalDatabaseSnapshotService {
       'privacy': {
         'contains_model_api_keys': false,
         'contains_mcp_headers': false,
+        'contains_media_job_secrets': false,
+        'contains_media_binaries': false,
         'contains_absolute_paths': false,
-        'note': '导出本地会话、消息、附件元数据和非密钥配置；不包含模型渠道密钥、MCP headers 或本机绝对路径。',
+        'note':
+            '导出本地会话、消息、附件元数据、媒体任务元数据和非密钥配置；不包含模型渠道密钥、MCP headers、媒体二进制或本机绝对路径。',
       },
       'folders': folders
           .map(
@@ -348,6 +373,10 @@ class LocalDatabaseSnapshotService {
               'channel_id': model.channelId,
               'model_name': model.modelName,
               'capability': model.capability,
+              'capabilities': decodeModelCapabilities(
+                model.capability,
+                model.capabilities,
+              ).toList(growable: false),
               'is_default': model.isDefault,
             },
           )
@@ -387,6 +416,10 @@ class LocalDatabaseSnapshotService {
             },
           )
           .toList(growable: false),
+      'media_jobs': mediaJobs
+          .map(_exportMediaJob)
+          .whereType<Map<String, Object?>>()
+          .toList(growable: false),
       'sessions': sessions
           .map(
             (session) => {
@@ -397,6 +430,7 @@ class LocalDatabaseSnapshotService {
               'total_tokens': session.totalTokens,
               'created_at': session.createdAt,
               'last_message_at': session.lastMessageAt,
+              'is_pinned': session.isPinned,
             },
           )
           .toList(growable: false),
@@ -438,6 +472,8 @@ class LocalDatabaseSnapshotService {
       channelModelCount: snapshot.channelModels.length,
       dreamingJobCount: snapshot.dreamingJobs.length,
       dreamingReportCount: snapshot.dreamingReports.length,
+      mediaJobCount: snapshot.mediaJobs.length,
+      invalidMediaJobCount: snapshot.invalidMediaJobCount,
       existingSessionCount: await _countExistingIds(
         'sessions',
         snapshot.sessions.map((row) => row.id),
@@ -481,6 +517,10 @@ class LocalDatabaseSnapshotService {
       existingDreamingReportCount: await _countExistingDreamingReports(
         snapshot.dreamingReports,
       ),
+      existingMediaJobCount: await _countExistingIds(
+        'media_jobs',
+        snapshot.mediaJobs.map((row) => row.id),
+      ),
     );
   }
 
@@ -501,6 +541,7 @@ class LocalDatabaseSnapshotService {
     var restoredChannelModels = 0;
     var restoredDreamingJobs = 0;
     var restoredDreamingReports = 0;
+    var restoredMediaJobs = 0;
     var skippedExistingSessions = 0;
     var skippedExistingMessages = 0;
     var skippedExistingAttachments = 0;
@@ -512,9 +553,11 @@ class LocalDatabaseSnapshotService {
     var skippedExistingChannelModels = 0;
     var skippedExistingDreamingJobs = 0;
     var skippedExistingDreamingReports = 0;
+    var skippedExistingMediaJobs = 0;
     var skippedInvalidMessages = 0;
     var skippedInvalidAttachments = 0;
     var skippedInvalidChannelModels = 0;
+    var skippedInvalidMediaJobs = snapshot.invalidMediaJobCount;
 
     await database.transaction(() async {
       for (final row in snapshot.folders) {
@@ -679,6 +722,7 @@ class LocalDatabaseSnapshotService {
           channelId: row.channelId,
           modelName: row.modelName,
           capability: Value(row.capability),
+          capabilities: Value(jsonEncode(row.capabilities)),
           isDefault: Value(row.isDefault),
         );
         if (overwriteExisting) {
@@ -784,6 +828,7 @@ class LocalDatabaseSnapshotService {
           totalTokens: Value(row.totalTokens),
           createdAt: row.createdAt,
           lastMessageAt: row.lastMessageAt,
+          isPinned: Value(row.isPinned),
         );
         if (overwriteExisting) {
           await database
@@ -871,6 +916,78 @@ class LocalDatabaseSnapshotService {
         }
         restoredAttachments++;
       }
+
+      for (final row in snapshot.mediaJobs) {
+        final exists = await _recordExists('media_jobs', row.id);
+        if (exists && !overwriteExisting) {
+          skippedExistingMediaJobs++;
+          continue;
+        }
+        final sessionId = await _existingReferenceOrNull(
+          'sessions',
+          row.sessionId,
+        );
+        final companion = MediaJobsCompanion.insert(
+          id: row.id,
+          sessionId: Value(sessionId),
+          kind: row.kind,
+          provider: Value(row.provider),
+          model: Value(row.model),
+          endpoint: Value(row.endpoint),
+          status: row.status,
+          progress: Value(row.progress),
+          phase: Value(row.phase),
+          requestUrl: Value(row.requestUrl),
+          providerJobId: Value(row.providerJobId),
+          requestId: Value(row.requestId),
+          pollUrl: Value(row.pollUrl),
+          cancelUrl: Value(row.cancelUrl),
+          contentUrl: Value(row.contentUrl),
+          assetPath: Value(_restoreMediaAssetPath(row.assetPath)),
+          assetMime: Value(row.assetMime),
+          assetExtension: Value(row.assetExtension),
+          prompt: Value(_safeDiagnosticString(row.prompt, maxLength: 4000)),
+          error: Value(_safeDiagnosticString(row.error)),
+          attempts: Value(row.attempts),
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          deadline: Value(row.deadline),
+          endpointStyle: Value(row.endpointStyle),
+          channelModelId: Value(row.channelModelId),
+          deliveryUserMessageId: Value(row.deliveryUserMessageId),
+          deliveryAssistantMessageId: Value(row.deliveryAssistantMessageId),
+          deliveryAttachmentId: Value(row.deliveryAttachmentId),
+          deliverySourceAttachmentId: Value(row.deliverySourceAttachmentId),
+          deliveryPhase: Value(row.deliveryPhase),
+          deliveryUserContent: Value(
+            _safeDiagnosticString(row.deliveryUserContent, maxLength: 4000),
+          ),
+          deliveryAssistantContent: Value(
+            _safeDiagnosticString(
+              row.deliveryAssistantContent,
+              maxLength: 4000,
+            ),
+          ),
+          deliveryFileType: Value(row.deliveryFileType),
+          deliverySourcePath: Value(
+            _restoreMediaAssetPath(row.deliverySourcePath),
+          ),
+          deliverySourceFileName: Value(
+            _safeDiagnosticString(row.deliverySourceFileName, maxLength: 256),
+          ),
+          deliverySourceFileType: Value(row.deliverySourceFileType),
+        );
+        if (overwriteExisting) {
+          await database
+              .into(database.mediaJobs)
+              .insertOnConflictUpdate(companion);
+        } else {
+          await database
+              .into(database.mediaJobs)
+              .insert(companion, mode: InsertMode.insertOrIgnore);
+        }
+        restoredMediaJobs++;
+      }
     });
 
     return LocalDatabaseRestoreResult(
@@ -899,7 +1016,87 @@ class LocalDatabaseSnapshotService {
       skippedInvalidMessages: skippedInvalidMessages,
       skippedInvalidAttachments: skippedInvalidAttachments,
       skippedInvalidChannelModels: skippedInvalidChannelModels,
+      restoredMediaJobs: restoredMediaJobs,
+      skippedExistingMediaJobs: skippedExistingMediaJobs,
+      skippedInvalidMediaJobs: skippedInvalidMediaJobs,
     );
+  }
+
+  Map<String, Object?>? _exportMediaJob(MediaJob job) {
+    final id = _safeMediaJobIdentifier(job.id);
+    final kind = _safeMediaJobKind(job.kind);
+    final status = _safeMediaJobStatus(job.status);
+    if (id == null || kind == null || status == null) return null;
+
+    return <String, Object?>{
+      'id': id,
+      'session_id': _safeConfigString(job.sessionId, maxLength: 256),
+      'kind': kind,
+      'provider': _safeConfigString(job.provider, maxLength: 256),
+      'model': _safeConfigString(job.model, maxLength: 256),
+      'endpoint': _safeConfigString(job.endpoint, maxLength: 512),
+      'status': status,
+      'progress': _safeMediaJobProgress(job.progress),
+      'phase': _safeConfigString(job.phase, maxLength: 64),
+      'request_url': _safeUrlString(job.requestUrl),
+      'provider_job_id': _safeConfigString(job.providerJobId, maxLength: 512),
+      'request_id': _safeConfigString(job.requestId, maxLength: 512),
+      'poll_url': _safeUrlString(job.pollUrl),
+      'cancel_url': _safeUrlString(job.cancelUrl),
+      'content_url': _safeUrlString(job.contentUrl),
+      'asset_path': _exportMediaAssetPath(job.assetPath),
+      'asset_mime': _safeConfigString(job.assetMime, maxLength: 128),
+      'asset_extension': _safeConfigString(job.assetExtension, maxLength: 32),
+      'prompt': _safeDiagnosticString(job.prompt, maxLength: 4000),
+      'error': _safeDiagnosticString(job.error),
+      'attempts': job.attempts < 0 ? 0 : job.attempts,
+      'created_at': _safeMediaJobTimestamp(job.createdAt),
+      'updated_at': _safeMediaJobTimestamp(job.updatedAt),
+      'deadline': _safeMediaJobOptionalTimestamp(job.deadline),
+      'endpoint_style': _safeConfigString(job.endpointStyle, maxLength: 32),
+      'channel_model_id': _safeDiagnosticString(
+        job.channelModelId,
+        maxLength: 256,
+      ),
+      'delivery_user_message_id': _safeDiagnosticString(
+        job.deliveryUserMessageId,
+        maxLength: 256,
+      ),
+      'delivery_assistant_message_id': _safeDiagnosticString(
+        job.deliveryAssistantMessageId,
+        maxLength: 256,
+      ),
+      'delivery_attachment_id': _safeDiagnosticString(
+        job.deliveryAttachmentId,
+        maxLength: 256,
+      ),
+      'delivery_source_attachment_id': _safeDiagnosticString(
+        job.deliverySourceAttachmentId,
+        maxLength: 256,
+      ),
+      'delivery_phase': _safeConfigString(job.deliveryPhase, maxLength: 64),
+      'delivery_user_content': _safeDiagnosticString(
+        job.deliveryUserContent,
+        maxLength: 4000,
+      ),
+      'delivery_assistant_content': _safeDiagnosticString(
+        job.deliveryAssistantContent,
+        maxLength: 4000,
+      ),
+      'delivery_file_type': _safeConfigString(
+        job.deliveryFileType,
+        maxLength: 32,
+      ),
+      'delivery_source_path': _exportMediaAssetPath(job.deliverySourcePath),
+      'delivery_source_file_name': _safeDiagnosticString(
+        job.deliverySourceFileName,
+        maxLength: 256,
+      ),
+      'delivery_source_file_type': _safeConfigString(
+        job.deliverySourceFileType,
+        maxLength: 32,
+      ),
+    };
   }
 
   Future<String?> _archivePathForAttachment(
@@ -960,6 +1157,35 @@ class LocalDatabaseSnapshotService {
     return p.joinAll([rootDirectory.path, ...p.posix.split(normalized)]);
   }
 
+  String? _exportMediaAssetPath(String? rawPath) {
+    if (rawPath == null || rawPath.trim().isEmpty) return null;
+    final normalized = rawPath.trim();
+    if (normalized.contains('\u0000') ||
+        normalized.contains('?') ||
+        normalized.contains('#')) {
+      return null;
+    }
+    final uri = Uri.tryParse(normalized);
+    final path = uri?.scheme == 'file' ? uri!.path : normalized;
+    if (uri != null && uri.scheme.isNotEmpty && uri.scheme != 'file') {
+      return null;
+    }
+
+    if (p.isAbsolute(path)) {
+      final relative = p.relative(path, from: rootDirectory.path);
+      return _normalizeRelativeMediaAssetPath(relative);
+    }
+    return _normalizeRelativeMediaAssetPath(path);
+  }
+
+  String? _restoreMediaAssetPath(String? relativePath) {
+    final normalized = relativePath == null
+        ? null
+        : _normalizeRelativeMediaAssetPath(relativePath);
+    if (normalized == null) return null;
+    return p.joinAll([rootDirectory.path, ...p.posix.split(normalized)]);
+  }
+
   Future<int> _countExistingIds(String table, Iterable<String> ids) async {
     var count = 0;
     for (final id in ids) {
@@ -1015,12 +1241,71 @@ class LocalDatabaseSnapshotService {
   }
 }
 
+String? _normalizeRelativeMediaAssetPath(String rawPath) {
+  if (rawPath.startsWith('/') ||
+      rawPath.contains('\\') ||
+      rawPath.contains('\u0000') ||
+      rawPath.contains('?') ||
+      rawPath.contains('#')) {
+    return null;
+  }
+  final uri = Uri.tryParse(rawPath);
+  if (uri != null && uri.scheme.isNotEmpty) return null;
+  final parts = p.posix
+      .split(rawPath)
+      .where((part) => part.isNotEmpty)
+      .toList(growable: false);
+  if (parts.isEmpty || parts.any((part) => part == '.' || part == '..')) {
+    return null;
+  }
+  return parts.join('/');
+}
+
+String? _safeMediaJobIdentifier(String value) {
+  final normalized = value.trim();
+  if (normalized.isEmpty || normalized.length > 256) return null;
+  return _safeConfigString(normalized, maxLength: 256);
+}
+
+String? _safeMediaJobKind(String value) {
+  final normalized = value.trim().toLowerCase();
+  return _mediaJobKinds.contains(normalized) ? normalized : null;
+}
+
+String? _safeMediaJobStatus(String value) {
+  final normalized = value.trim().toLowerCase();
+  return _mediaJobStatuses.contains(normalized) ? normalized : null;
+}
+
+int? _safeMediaJobProgress(int? value) {
+  if (value == null) return null;
+  return value.clamp(0, 100).toInt();
+}
+
+int _safeMediaJobTimestamp(int value) => value < 0 ? 0 : value;
+
+int? _safeMediaJobOptionalTimestamp(int? value) {
+  if (value == null || value < 0) return null;
+  return value;
+}
+
+const _mediaJobKinds = <String>{'image', 'video', 'music'};
+const _mediaJobStatuses = <String>{
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'expired',
+  'cancelled',
+};
+
 _LocalDatabaseSnapshot _parseSnapshot(List<int> bytes) {
   final json = jsonDecode(utf8.decode(bytes));
   if (json is! Map<String, Object?> ||
       json['format'] != kLocalDatabaseSnapshotFormat) {
     throw const FormatException('本地数据库快照格式不受支持');
   }
+  final mediaJobParse = _parseMediaJobs(_listOfMaps(json['media_jobs']));
   return _LocalDatabaseSnapshot(
     folders: _listOfMaps(
       json['folders'],
@@ -1046,6 +1331,8 @@ _LocalDatabaseSnapshot _parseSnapshot(List<int> bytes) {
     dreamingReports: _listOfMaps(
       json['dreaming_reports'],
     ).map(_SnapshotDreamingReport.fromJson).toList(growable: false),
+    mediaJobs: mediaJobParse.jobs,
+    invalidMediaJobCount: mediaJobParse.invalidCount,
     sessions: _listOfMaps(
       json['sessions'],
     ).map(_SnapshotSession.fromJson).toList(growable: false),
@@ -1056,6 +1343,27 @@ _LocalDatabaseSnapshot _parseSnapshot(List<int> bytes) {
       json['attachments'],
     ).map(_SnapshotAttachment.fromJson).toList(growable: false),
   );
+}
+
+_MediaJobParseResult _parseMediaJobs(List<Map<String, Object?>> values) {
+  final jobs = <_SnapshotMediaJob>[];
+  var invalidCount = 0;
+  for (final value in values) {
+    try {
+      jobs.add(_SnapshotMediaJob.fromJson(value));
+    } on FormatException {
+      // 单条媒体任务损坏时跳过该条，保留同一快照中的其他数据。
+      invalidCount++;
+    }
+  }
+  return _MediaJobParseResult(jobs: jobs, invalidCount: invalidCount);
+}
+
+class _MediaJobParseResult {
+  const _MediaJobParseResult({required this.jobs, required this.invalidCount});
+
+  final List<_SnapshotMediaJob> jobs;
+  final int invalidCount;
 }
 
 List<Map<String, Object?>> _listOfMaps(Object? value) {
@@ -1098,11 +1406,56 @@ String _stringValue(
   throw FormatException('快照字段 $key 类型错误');
 }
 
+List<String> _stringListValue(
+  Map<String, Object?> json,
+  String key, {
+  List<String> defaultValue = const <String>[],
+}) {
+  final value = json[key];
+  if (value == null) return defaultValue;
+  if (value is! List) throw FormatException('快照字段 $key 类型错误');
+  return value
+      .whereType<String>()
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
 int _intValue(Map<String, Object?> json, String key, {int defaultValue = 0}) {
   final value = json[key];
   if (value == null) return defaultValue;
   if (value is int) return value;
   throw FormatException('快照字段 $key 类型错误');
+}
+
+int? _nullableInt(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is int) return value;
+  throw FormatException('快照字段 $key 类型错误');
+}
+
+int _nonNegativeIntValue(
+  Map<String, Object?> json,
+  String key, {
+  int defaultValue = 0,
+}) {
+  final value = _intValue(json, key, defaultValue: defaultValue);
+  return value < 0 ? 0 : value;
+}
+
+int? _nullableNonNegativeIntValue(Map<String, Object?> json, String key) {
+  final value = _nullableInt(json, key);
+  if (value == null || value < 0) return null;
+  return value;
+}
+
+String? _safeMediaJobNullableText(String? value, {required int maxLength}) {
+  return _safeConfigString(value, maxLength: maxLength);
+}
+
+String? _safeMediaJobUrl(Map<String, Object?> json, String key) {
+  return _safeUrlString(_nullableString(json, key));
 }
 
 bool _boolValue(
@@ -1142,7 +1495,7 @@ String? _safeUrlString(String? value) {
   return safe;
 }
 
-String? _safeDiagnosticString(String? value) {
+String? _safeDiagnosticString(String? value, {int maxLength = 512}) {
   if (value == null) return null;
   var sanitized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (sanitized.isEmpty) return sanitized;
@@ -1166,9 +1519,9 @@ String? _safeDiagnosticString(String? value) {
     ),
     (match) => '${match.group(1) ?? ''}${match.group(2)}=***',
   );
-  return sanitized.length <= 512
+  return sanitized.length <= maxLength
       ? sanitized
-      : '${sanitized.substring(0, 512)}...';
+      : '${sanitized.substring(0, maxLength)}...';
 }
 
 bool _containsSensitiveConfigText(String value) {
@@ -1200,6 +1553,8 @@ class _LocalDatabaseSnapshot {
     required this.channelModels,
     required this.dreamingJobs,
     required this.dreamingReports,
+    required this.mediaJobs,
+    required this.invalidMediaJobCount,
     required this.sessions,
     required this.messages,
     required this.attachments,
@@ -1213,6 +1568,8 @@ class _LocalDatabaseSnapshot {
   final List<_SnapshotChannelModel> channelModels;
   final List<_SnapshotDreamingJob> dreamingJobs;
   final List<_SnapshotDreamingReport> dreamingReports;
+  final List<_SnapshotMediaJob> mediaJobs;
+  final int invalidMediaJobCount;
   final List<_SnapshotSession> sessions;
   final List<_SnapshotMessage> messages;
   final List<_SnapshotAttachment> attachments;
@@ -1404,6 +1761,7 @@ class _SnapshotChannelModel {
     required this.channelId,
     required this.modelName,
     required this.capability,
+    required this.capabilities,
     required this.isDefault,
   });
 
@@ -1411,6 +1769,7 @@ class _SnapshotChannelModel {
   final String channelId;
   final String modelName;
   final String capability;
+  final List<String> capabilities;
   final bool isDefault;
 
   factory _SnapshotChannelModel.fromJson(Map<String, Object?> json) {
@@ -1419,6 +1778,7 @@ class _SnapshotChannelModel {
       channelId: _requiredString(json, 'channel_id'),
       modelName: _requiredString(json, 'model_name'),
       capability: _nullableString(json, 'capability') ?? 'chat',
+      capabilities: _stringListValue(json, 'capabilities'),
       isDefault: _boolValue(json, 'is_default'),
     );
   }
@@ -1522,6 +1882,227 @@ class _SnapshotDreamingReport {
   }
 }
 
+class _SnapshotMediaJob {
+  const _SnapshotMediaJob({
+    required this.id,
+    required this.sessionId,
+    required this.kind,
+    required this.provider,
+    required this.model,
+    required this.endpoint,
+    required this.status,
+    required this.progress,
+    required this.phase,
+    required this.requestUrl,
+    required this.providerJobId,
+    required this.requestId,
+    required this.pollUrl,
+    required this.cancelUrl,
+    required this.contentUrl,
+    required this.assetPath,
+    required this.assetMime,
+    required this.assetExtension,
+    required this.prompt,
+    required this.error,
+    required this.attempts,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.deadline,
+    required this.endpointStyle,
+    required this.channelModelId,
+    required this.deliveryUserMessageId,
+    required this.deliveryAssistantMessageId,
+    required this.deliveryAttachmentId,
+    required this.deliverySourceAttachmentId,
+    required this.deliveryPhase,
+    required this.deliveryUserContent,
+    required this.deliveryAssistantContent,
+    required this.deliveryFileType,
+    required this.deliverySourcePath,
+    required this.deliverySourceFileName,
+    required this.deliverySourceFileType,
+  });
+
+  final String id;
+  final String? sessionId;
+  final String kind;
+  final String? provider;
+  final String? model;
+  final String? endpoint;
+  final String status;
+  final int? progress;
+  final String? phase;
+  final String? requestUrl;
+  final String? providerJobId;
+  final String? requestId;
+  final String? pollUrl;
+  final String? cancelUrl;
+  final String? contentUrl;
+  final String? assetPath;
+  final String? assetMime;
+  final String? assetExtension;
+  final String? prompt;
+  final String? error;
+  final int attempts;
+  final int createdAt;
+  final int updatedAt;
+  final int? deadline;
+  final String? endpointStyle;
+  final String? channelModelId;
+  final String? deliveryUserMessageId;
+  final String? deliveryAssistantMessageId;
+  final String? deliveryAttachmentId;
+  final String? deliverySourceAttachmentId;
+  final String? deliveryPhase;
+  final String? deliveryUserContent;
+  final String? deliveryAssistantContent;
+  final String? deliveryFileType;
+  final String? deliverySourcePath;
+  final String? deliverySourceFileName;
+  final String? deliverySourceFileType;
+
+  factory _SnapshotMediaJob.fromJson(Map<String, Object?> json) {
+    final id = _safeMediaJobIdentifier(_requiredString(json, 'id'));
+    if (id == null) {
+      throw const FormatException('媒体任务 id 无效');
+    }
+
+    final kind = (_nullableString(json, 'kind') ?? 'image')
+        .trim()
+        .toLowerCase();
+    if (!_mediaJobKinds.contains(kind)) {
+      throw const FormatException('媒体任务类型不受支持');
+    }
+    final status = (_nullableString(json, 'status') ?? 'pending')
+        .trim()
+        .toLowerCase();
+    if (!_mediaJobStatuses.contains(status)) {
+      throw const FormatException('媒体任务状态不受支持');
+    }
+
+    final rawAssetPath = _nullableString(json, 'asset_path');
+    final assetPath = rawAssetPath == null
+        ? null
+        : _normalizeRelativeMediaAssetPath(rawAssetPath);
+    if (rawAssetPath != null && assetPath == null) {
+      throw const FormatException('媒体任务资源路径不安全');
+    }
+    final rawDeliverySourcePath = _nullableString(json, 'delivery_source_path');
+    final deliverySourcePath = rawDeliverySourcePath == null
+        ? null
+        : _normalizeRelativeMediaAssetPath(rawDeliverySourcePath);
+    if (rawDeliverySourcePath != null && deliverySourcePath == null) {
+      throw const FormatException('媒体任务交付源路径不安全');
+    }
+
+    return _SnapshotMediaJob(
+      id: id,
+      sessionId: _safeMediaJobNullableText(
+        _nullableString(json, 'session_id'),
+        maxLength: 256,
+      ),
+      kind: kind,
+      provider: _safeMediaJobNullableText(
+        _nullableString(json, 'provider'),
+        maxLength: 256,
+      ),
+      model: _safeMediaJobNullableText(
+        _nullableString(json, 'model'),
+        maxLength: 256,
+      ),
+      endpoint: _safeMediaJobNullableText(
+        _nullableString(json, 'endpoint'),
+        maxLength: 512,
+      ),
+      status: status,
+      progress: _safeMediaJobProgress(_nullableInt(json, 'progress')),
+      phase: _safeMediaJobNullableText(
+        _nullableString(json, 'phase'),
+        maxLength: 64,
+      ),
+      requestUrl: _safeMediaJobUrl(json, 'request_url'),
+      providerJobId: _safeMediaJobNullableText(
+        _nullableString(json, 'provider_job_id'),
+        maxLength: 512,
+      ),
+      requestId: _safeMediaJobNullableText(
+        _nullableString(json, 'request_id'),
+        maxLength: 512,
+      ),
+      pollUrl: _safeMediaJobUrl(json, 'poll_url'),
+      cancelUrl: _safeMediaJobUrl(json, 'cancel_url'),
+      contentUrl: _safeMediaJobUrl(json, 'content_url'),
+      assetPath: assetPath,
+      assetMime: _safeMediaJobNullableText(
+        _nullableString(json, 'asset_mime'),
+        maxLength: 128,
+      ),
+      assetExtension: _safeMediaJobNullableText(
+        _nullableString(json, 'asset_extension'),
+        maxLength: 32,
+      ),
+      prompt: _safeDiagnosticString(
+        _nullableString(json, 'prompt'),
+        maxLength: 4000,
+      ),
+      error: _safeDiagnosticString(_nullableString(json, 'error')),
+      attempts: _nonNegativeIntValue(json, 'attempts'),
+      createdAt: _nonNegativeIntValue(json, 'created_at'),
+      updatedAt: _nonNegativeIntValue(json, 'updated_at'),
+      deadline: _nullableNonNegativeIntValue(json, 'deadline'),
+      endpointStyle: _safeMediaJobNullableText(
+        _nullableString(json, 'endpoint_style') ?? 'auto',
+        maxLength: 32,
+      ),
+      channelModelId: _safeDiagnosticString(
+        _nullableString(json, 'channel_model_id'),
+        maxLength: 256,
+      ),
+      deliveryUserMessageId: _safeDiagnosticString(
+        _nullableString(json, 'delivery_user_message_id'),
+        maxLength: 256,
+      ),
+      deliveryAssistantMessageId: _safeDiagnosticString(
+        _nullableString(json, 'delivery_assistant_message_id'),
+        maxLength: 256,
+      ),
+      deliveryAttachmentId: _safeDiagnosticString(
+        _nullableString(json, 'delivery_attachment_id'),
+        maxLength: 256,
+      ),
+      deliverySourceAttachmentId: _safeDiagnosticString(
+        _nullableString(json, 'delivery_source_attachment_id'),
+        maxLength: 256,
+      ),
+      deliveryPhase: _safeMediaJobNullableText(
+        _nullableString(json, 'delivery_phase'),
+        maxLength: 64,
+      ),
+      deliveryUserContent: _safeDiagnosticString(
+        _nullableString(json, 'delivery_user_content'),
+        maxLength: 4000,
+      ),
+      deliveryAssistantContent: _safeDiagnosticString(
+        _nullableString(json, 'delivery_assistant_content'),
+        maxLength: 4000,
+      ),
+      deliveryFileType: _safeMediaJobNullableText(
+        _nullableString(json, 'delivery_file_type'),
+        maxLength: 32,
+      ),
+      deliverySourcePath: deliverySourcePath,
+      deliverySourceFileName: _safeDiagnosticString(
+        _nullableString(json, 'delivery_source_file_name'),
+        maxLength: 256,
+      ),
+      deliverySourceFileType: _safeMediaJobNullableText(
+        _nullableString(json, 'delivery_source_file_type'),
+        maxLength: 32,
+      ),
+    );
+  }
+}
+
 class _SnapshotSession {
   const _SnapshotSession({
     required this.id,
@@ -1531,6 +2112,7 @@ class _SnapshotSession {
     required this.totalTokens,
     required this.createdAt,
     required this.lastMessageAt,
+    required this.isPinned,
   });
 
   final String id;
@@ -1540,6 +2122,7 @@ class _SnapshotSession {
   final int totalTokens;
   final int createdAt;
   final int lastMessageAt;
+  final bool isPinned;
 
   factory _SnapshotSession.fromJson(Map<String, Object?> json) {
     return _SnapshotSession(
@@ -1550,6 +2133,8 @@ class _SnapshotSession {
       totalTokens: _intValue(json, 'total_tokens'),
       createdAt: _intValue(json, 'created_at'),
       lastMessageAt: _intValue(json, 'last_message_at'),
+      // 旧快照没有该字段，默认 false。
+      isPinned: _boolValue(json, 'is_pinned'),
     );
   }
 }

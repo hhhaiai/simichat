@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,9 @@ import '../../core/media/openai_text_to_speech_engine.dart';
 import '../../core/media/reference_audio_store.dart';
 import '../../core/media/speech_provider_preset.dart';
 import '../../core/media/text_to_speech_service.dart';
+import '../../core/media/xai_custom_voice_adapter.dart';
+import '../../core/media/xai_speech_provider_profile.dart';
+import '../../core/media/xai_text_to_speech_engine.dart';
 
 const kTextToSpeechEnabledStorageKey = 'tts_enabled_v1';
 const kTextToSpeechProviderStorageKey = 'tts_provider_v1';
@@ -21,9 +25,30 @@ const kTextToSpeechResponseFormatStorageKey = 'tts_response_format_v1';
 const kTextToSpeechStyleStorageKey = 'tts_style_v1';
 const kTextToSpeechReferenceAudioPathStorageKey = 'tts_reference_audio_path_v1';
 const kTextToSpeechProviderOpenAiCompatible = 'openai_compatible';
+const kTextToSpeechProviderSimiRouter = kSimiRouterSpeechProviderId;
+const kTextToSpeechProviderXai = kXaiSpeechProviderId;
+// Compatibility alias for callers that spell the vendor acronym in caps.
+const kTextToSpeechProviderXAI = kTextToSpeechProviderXai;
+const kTextToSpeechLanguageStorageKey = 'tts_language_v1';
 
 const kTextToSpeechDefaultSpeed = '1.0';
 const kTextToSpeechDefaultResponseFormat = 'mp3';
+const kTextToSpeechDefaultLanguage = kXaiDefaultSpeechLanguage;
+
+String _inferTextToSpeechProviderFromBaseUrl(String baseUrl) {
+  try {
+    var candidate = baseUrl.trim();
+    if (!candidate.contains('://')) candidate = 'https://$candidate';
+    final host = Uri.tryParse(candidate)?.host.toLowerCase();
+    if (host == 'api.x.ai' || host?.endsWith('.x.ai') == true) {
+      return kTextToSpeechProviderXai;
+    }
+    if (host == 'api.dwchainless.com') {
+      return kTextToSpeechProviderSimiRouter;
+    }
+  } catch (_) {}
+  return kTextToSpeechProviderOpenAiCompatible;
+}
 
 class TextToSpeechConfig {
   const TextToSpeechConfig({
@@ -35,6 +60,7 @@ class TextToSpeechConfig {
     this.apiKeyEncrypted,
     this.speed = kTextToSpeechDefaultSpeed,
     this.responseFormat = kTextToSpeechDefaultResponseFormat,
+    this.language = kTextToSpeechDefaultLanguage,
     this.style = '',
     this.referenceAudioPath,
   });
@@ -52,6 +78,10 @@ class TextToSpeechConfig {
   /// 输出格式：mp3 / wav / opus / aac / flac。
   final String responseFormat;
 
+  /// xAI TTS 要求的 BCP-47 / `auto` 语言值；OpenAI-compatible 与
+  /// SimiRouter TTS 保留该配置但不会把它加入旧请求体。
+  final String language;
+
   /// 声音设计模式的音色文字描述（mimo-v2.5-tts-voicedesign）。
   final String style;
 
@@ -59,6 +89,18 @@ class TextToSpeechConfig {
   final String? referenceAudioPath;
 
   bool get hasApiKey => apiKeyEncrypted != null && apiKeyEncrypted!.isNotEmpty;
+
+  bool get isXai => isXaiSpeechProvider(provider);
+
+  bool get isSimiRouter =>
+      isSimiRouterSpeechProvider(provider: provider, baseUrl: baseUrl);
+
+  SimiRouterTtsMode? get requestedMode => simiRouterTtsModeOf(model);
+
+  bool get requestedModeHasProviderCapability {
+    final mode = requestedMode;
+    return mode == null || mode == SimiRouterTtsMode.standard || isSimiRouter;
+  }
 
   bool get hasUsableReferenceAudio {
     final path = referenceAudioPath?.trim();
@@ -72,24 +114,47 @@ class TextToSpeechConfig {
 
   bool get isConfigured {
     if (!enabled ||
-        provider != kTextToSpeechProviderOpenAiCompatible ||
+        (provider != kTextToSpeechProviderOpenAiCompatible &&
+            !isXai &&
+            !isSimiRouter) ||
         baseUrl.trim().isEmpty ||
-        model.trim().isEmpty ||
+        (isXai ? false : model.trim().isEmpty) ||
         voice.trim().isEmpty ||
         !hasApiKey) {
       return false;
     }
-    return switch (simiRouterTtsModeOf(model)) {
-      SimiRouterTtsMode.voiceDesign => style.trim().isNotEmpty,
-      SimiRouterTtsMode.voiceClone => hasUsableReferenceAudio,
+    final mode = simiRouterTtsModeOf(model);
+    if (isXai) {
+      try {
+        normalizeXaiTextToSpeechSpeed(speed);
+        normalizeXaiTextToSpeechResponseFormat(responseFormat);
+        return true;
+      } on TextToSpeechException {
+        return false;
+      }
+    }
+    return switch (mode) {
+      SimiRouterTtsMode.voiceDesign =>
+        style.trim().isNotEmpty && requestedModeHasProviderCapability,
+      SimiRouterTtsMode.voiceClone =>
+        hasUsableReferenceAudio && requestedModeHasProviderCapability,
       SimiRouterTtsMode.standard || null => true,
     };
   }
 
-  String get providerLabel => 'OpenAI 兼容 TTS';
+  String get providerLabel => isXai
+      ? 'xAI TTS'
+      : isSimiRouter
+      ? 'SimiRouter TTS'
+      : 'OpenAI 兼容 TTS';
 
   String get statusLabel {
     if (!enabled) return '未启用';
+    if (provider != kTextToSpeechProviderOpenAiCompatible &&
+        !isXai &&
+        !isSimiRouter) {
+      return '不支持的 TTS 厂商';
+    }
     if (!hasApiKey) return '缺少 API Key';
     if (simiRouterTtsModeOf(model) == SimiRouterTtsMode.voiceDesign &&
         style.trim().isEmpty) {
@@ -100,6 +165,16 @@ class TextToSpeechConfig {
       return referenceAudioPath?.trim().isNotEmpty == true
           ? '参考音频已失效，请重新选择'
           : '缺少声音克隆参考音频';
+    }
+    final mode = requestedMode;
+    if ((mode == SimiRouterTtsMode.voiceDesign ||
+            mode == SimiRouterTtsMode.voiceClone) &&
+        !requestedModeHasProviderCapability) {
+      final label = mode == SimiRouterTtsMode.voiceDesign ? '声音设计' : '声音克隆';
+      return '$label已保存 · 当前 provider 未声明该能力，尚未验证';
+    }
+    if (isXai) {
+      return '$providerLabel 已配置 · /v1/tts · voice_id=$voice · $language · $responseFormat · custom voice 创建需团队/Enterprise API 权限';
     }
     final modeLabel = switch (simiRouterTtsModeOf(model)) {
       SimiRouterTtsMode.voiceDesign => '声音设计',
@@ -118,6 +193,7 @@ class TextToSpeechConfig {
     String? apiKeyEncrypted,
     String? speed,
     String? responseFormat,
+    String? language,
     String? style,
     String? referenceAudioPath,
     bool clearApiKey = false,
@@ -133,6 +209,7 @@ class TextToSpeechConfig {
           : (apiKeyEncrypted ?? this.apiKeyEncrypted),
       speed: speed ?? this.speed,
       responseFormat: responseFormat ?? this.responseFormat,
+      language: language ?? this.language,
       style: style ?? this.style,
       referenceAudioPath: referenceAudioPath ?? this.referenceAudioPath,
     );
@@ -154,6 +231,8 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
   }
 
   final ReferenceAudioStore _referenceAudioStore;
+
+  Future<XaiCustomVoiceResult>? _activeXaiCustomVoiceCreation;
 
   late final Future<void> ready;
 
@@ -179,6 +258,9 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     final responseFormat =
         prefs.getString(kTextToSpeechResponseFormatStorageKey) ??
         kTextToSpeechDefaultResponseFormat;
+    final language =
+        prefs.getString(kTextToSpeechLanguageStorageKey) ??
+        kTextToSpeechDefaultLanguage;
     final style = prefs.getString(kTextToSpeechStyleStorageKey) ?? '';
     var referenceAudioPath = prefs.getString(
       kTextToSpeechReferenceAudioPathStorageKey,
@@ -224,6 +306,7 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
           : apiKeyEncrypted,
       speed: speed,
       responseFormat: responseFormat,
+      language: language,
       style: style,
       referenceAudioPath: referenceAudioPath,
     );
@@ -237,19 +320,188 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     String? apiKey,
     String? speed,
     String? responseFormat,
+    String? language,
+    String? style,
+    String? referenceAudioPath,
+    String? provider,
+  }) {
+    final selectedProvider = provider?.trim().toLowerCase().isNotEmpty == true
+        ? provider!.trim().toLowerCase()
+        : _inferTextToSpeechProviderFromBaseUrl(baseUrl);
+    return _save(
+      enabled: enabled,
+      provider: selectedProvider,
+      baseUrl: baseUrl,
+      model: model,
+      voice: voice,
+      apiKey: apiKey,
+      speed: speed,
+      responseFormat: responseFormat,
+      language: language,
+      style: style,
+      referenceAudioPath: referenceAudioPath,
+    );
+  }
+
+  /// Save xAI's batch REST profile.  xAI uses `voice_id` rather than a model
+  /// and does not accept a local reference audio data URI.  Custom voices must
+  /// be created separately through xAI `/v1/custom-voices` and then referenced
+  /// by their returned voice id.
+  Future<void> saveXai({
+    required bool enabled,
+    required String voice,
+    String baseUrl = kXaiSpeechProviderBaseUrl,
+    String? apiKey,
+    String? language,
+    String? speed,
+    String? responseFormat,
+  }) => _save(
+    enabled: enabled,
+    provider: kTextToSpeechProviderXai,
+    baseUrl: baseUrl,
+    model: '',
+    voice: voice,
+    apiKey: apiKey,
+    language: language,
+    speed: speed,
+    responseFormat: responseFormat,
+  );
+
+  /// Creates an xAI custom voice through the real `/v1/custom-voices`
+  /// multipart endpoint.  A blank [apiKey] means "use the encrypted key
+  /// already stored in the current TTS config"; a non-blank value is only used
+  /// for this request and can then be persisted by [saveXai].
+  ///
+  /// The settings dialog may pass an edited [baseUrl] before saving it.  The
+  /// adapter still owns endpoint resolution and response validation, while
+  /// this notifier owns decryption and the duplicate-request gate.
+  Future<XaiCustomVoiceResult> createXaiCustomVoice({
+    required XaiCustomVoiceRequest request,
+    String? baseUrl,
+    String? apiKey,
+    CancelToken? cancelToken,
+  }) {
+    if (_activeXaiCustomVoiceCreation != null) {
+      throw const XaiCustomVoiceException('xAI custom voice 创建正在进行，请稍候');
+    }
+
+    final token = _resolveXaiApiKey(apiKey);
+    final selectedBaseUrl = baseUrl?.trim().isNotEmpty == true
+        ? baseUrl!.trim()
+        : state.baseUrl;
+    final operation = XaiCustomVoiceAdapter(
+      baseUrl: selectedBaseUrl,
+      apiKey: token,
+    ).createVoice(request, cancelToken: cancelToken);
+
+    late Future<XaiCustomVoiceResult> guardedOperation;
+    guardedOperation = operation.whenComplete(() {
+      if (identical(_activeXaiCustomVoiceCreation, guardedOperation)) {
+        _activeXaiCustomVoiceCreation = null;
+      }
+    });
+    _activeXaiCustomVoiceCreation = guardedOperation;
+    return guardedOperation;
+  }
+
+  /// Creates a custom voice and only then writes the returned, validated
+  /// `voice_id` into the normal xAI TTS configuration.  The reference path is
+  /// deliberately not a TTS configuration field: `/v1/tts` receives only the
+  /// returned voice ID and never receives the local audio path.
+  Future<XaiCustomVoiceResult> createAndSaveXaiCustomVoice({
+    required bool enabled,
+    required String baseUrl,
+    required XaiCustomVoiceRequest request,
+    String? apiKey,
+    String? language,
+    String? speed,
+    String? responseFormat,
+    CancelToken? cancelToken,
+  }) async {
+    final result = await createXaiCustomVoice(
+      request: request,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      cancelToken: cancelToken,
+    );
+    await saveXai(
+      enabled: enabled,
+      baseUrl: baseUrl,
+      voice: result.voiceId,
+      apiKey: apiKey,
+      language: language,
+      speed: speed,
+      responseFormat: responseFormat,
+    );
+    return result;
+  }
+
+  String _resolveXaiApiKey(String? apiKey) {
+    final inlineKey = apiKey?.trim() ?? '';
+    if (inlineKey.isNotEmpty) return inlineKey;
+
+    final encryptedKey = state.apiKeyEncrypted?.trim() ?? '';
+    if (encryptedKey.isEmpty) {
+      throw const XaiCustomVoiceException('TTS API Key 未配置，请先填写 API Key');
+    }
+    try {
+      final decryptedKey = KeyEncryptor.decrypt(encryptedKey).trim();
+      if (decryptedKey.isEmpty) {
+        throw const FormatException('empty key');
+      }
+      return decryptedKey;
+    } catch (_) {
+      throw const XaiCustomVoiceException('TTS API Key 解密失败，请重新输入 API Key');
+    }
+  }
+
+  Future<void> _save({
+    required bool enabled,
+    required String provider,
+    required String baseUrl,
+    required String model,
+    required String voice,
+    String? apiKey,
+    String? speed,
+    String? responseFormat,
+    String? language,
     String? style,
     String? referenceAudioPath,
   }) async {
     final normalizedBaseUrl = normalizeTextToSpeechBaseUrl(baseUrl);
-    final normalizedModel = normalizeTextToSpeechModel(model);
+    final xai = isXaiSpeechProvider(provider);
+    final simiRouter = isSimiRouterSpeechProvider(
+      provider: provider,
+      baseUrl: normalizedBaseUrl,
+    );
+    final normalizedModel = xai ? '' : normalizeTextToSpeechModel(model);
     final normalizedVoice = normalizeTextToSpeechVoice(voice);
-    final normalizedSpeed = speed == null
+    final normalizedSpeed = xai
+        ? normalizeXaiTextToSpeechSpeed(
+            speed ??
+                (isXaiSpeechProvider(state.provider)
+                    ? state.speed
+                    : kTextToSpeechDefaultSpeed),
+          )
+        : speed == null
         ? state.speed
         : normalizeTextToSpeechSpeed(speed);
-    final normalizedFormat = responseFormat == null
+    final normalizedFormat = xai
+        ? normalizeXaiTextToSpeechResponseFormat(
+            responseFormat ??
+                (isXaiSpeechProvider(state.provider)
+                    ? state.responseFormat
+                    : kTextToSpeechDefaultResponseFormat),
+          )
+        : responseFormat == null
         ? state.responseFormat
         : normalizeTextToSpeechResponseFormat(responseFormat);
-    final normalizedStyle = (style ?? state.style).trim();
+    final normalizedLanguage = xai
+        ? normalizeXaiTextToSpeechLanguage(language ?? state.language)
+        : language ?? state.language;
+    // xAI's REST body has no style/reference-audio fields.  A custom voice is
+    // represented only by its voice_id returned by /v1/custom-voices.
+    final normalizedStyle = xai ? '' : (style ?? state.style).trim();
     if (normalizedStyle.length > 500) {
       throw const TextToSpeechException('声音风格描述过长（最多 500 字）');
     }
@@ -260,14 +512,15 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     if (enabled && (encryptedKey == null || encryptedKey.isEmpty)) {
       throw const TextToSpeechException('请填写 TTS API Key');
     }
-    final mode = simiRouterTtsModeOf(normalizedModel);
+    final mode = xai ? null : simiRouterTtsModeOf(normalizedModel);
     if (enabled &&
         mode == SimiRouterTtsMode.voiceDesign &&
         normalizedStyle.isEmpty) {
       throw const TextToSpeechException('声音设计模式需要填写声音风格描述');
     }
-    final requestedReferenceAudioPath =
-        referenceAudioPath ?? state.referenceAudioPath;
+    final requestedReferenceAudioPath = xai
+        ? null
+        : referenceAudioPath ?? state.referenceAudioPath;
     if (enabled &&
         mode == SimiRouterTtsMode.voiceClone &&
         requestedReferenceAudioPath?.isNotEmpty != true) {
@@ -285,13 +538,16 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
 
     final next = TextToSpeechConfig(
       enabled: enabled,
-      provider: kTextToSpeechProviderOpenAiCompatible,
+      provider: xai
+          ? kTextToSpeechProviderXai
+          : (simiRouter ? kTextToSpeechProviderSimiRouter : provider),
       baseUrl: normalizedBaseUrl,
       model: normalizedModel,
       voice: normalizedVoice,
       apiKeyEncrypted: encryptedKey,
       speed: normalizedSpeed,
       responseFormat: normalizedFormat,
+      language: normalizedLanguage,
       style: normalizedStyle,
       referenceAudioPath: archivedReferenceAudioPath,
     );
@@ -306,6 +562,7 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
       kTextToSpeechResponseFormatStorageKey,
       next.responseFormat,
     );
+    await prefs.setString(kTextToSpeechLanguageStorageKey, next.language);
     await prefs.setString(kTextToSpeechStyleStorageKey, next.style);
     if (next.referenceAudioPath == null || next.referenceAudioPath!.isEmpty) {
       await prefs.remove(kTextToSpeechReferenceAudioPathStorageKey);
@@ -344,6 +601,7 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     await prefs.remove(kTextToSpeechApiKeyStorageKey);
     await prefs.remove(kTextToSpeechSpeedStorageKey);
     await prefs.remove(kTextToSpeechResponseFormatStorageKey);
+    await prefs.remove(kTextToSpeechLanguageStorageKey);
     await prefs.remove(kTextToSpeechStyleStorageKey);
     await prefs.remove(kTextToSpeechReferenceAudioPathStorageKey);
     state = const TextToSpeechConfig();
@@ -361,6 +619,15 @@ final textToSpeechEngineProvider = Provider<TextToSpeechEngine?>((ref) {
   try {
     final apiKey = KeyEncryptor.decrypt(config.apiKeyEncrypted!);
     if (apiKey.trim().isEmpty) return null;
+    if (config.isXai) {
+      return XaiTextToSpeechEngine(
+        baseUrl: config.baseUrl,
+        apiKey: apiKey,
+        language: config.language,
+        speed: config.speed,
+        responseFormat: config.responseFormat,
+      );
+    }
     return OpenAiCompatibleTextToSpeechEngine(
       baseUrl: config.baseUrl,
       apiKey: apiKey,
@@ -383,11 +650,15 @@ final textToSpeechServiceProvider = Provider<TextToSpeechService?>((ref) {
   final config = ref.watch(textToSpeechConfigProvider);
   final engine = ref.watch(textToSpeechEngineProvider);
   if (engine == null) return null;
-  return TextToSpeechService(
+  final service = TextToSpeechService(
     engine: engine,
     player: ref.watch(audioPlayerProvider),
-    audioFileExtension: simiRouterTtsModeOf(config.model) == null
+    audioFileExtension: config.isXai
+        ? config.responseFormat
+        : simiRouterTtsModeOf(config.model) == null
         ? 'mp3'
         : config.responseFormat,
   );
+  ref.onDispose(service.dispose);
+  return service;
 });

@@ -7,16 +7,14 @@ import 'package:gal/gal.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/storage/atomic_file_writer.dart';
+
 /// 全屏图片查看器，支持缩放/平移 + 导出图片
 class ImageViewer extends StatefulWidget {
   final ImageProvider imageProvider;
   final String? imageUrl;
 
-  const ImageViewer({
-    super.key,
-    required this.imageProvider,
-    this.imageUrl,
-  });
+  const ImageViewer({super.key, required this.imageProvider, this.imageUrl});
 
   @override
   State<ImageViewer> createState() => _ImageViewerState();
@@ -37,7 +35,21 @@ class _ImageViewerState extends State<ImageViewer> {
     try {
       late Uint8List bytes;
 
-      if (widget.imageProvider is NetworkImage) {
+      // Markdown 网络图片使用 CachedNetworkImageProvider，不能通过
+      // `imageProvider is NetworkImage` 判断；优先使用调用方传入的原始
+      // imageUrl，确保全屏预览中的“保存到相册”不会误报“不支持此类型”。
+      final suppliedUrl = widget.imageUrl?.trim();
+      if (suppliedUrl != null && suppliedUrl.isNotEmpty) {
+        final uri = Uri.tryParse(suppliedUrl);
+        if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+          throw const FormatException('图片地址无效');
+        }
+        final response = await http.get(uri);
+        if (response.statusCode != 200) {
+          throw Exception('HTTP ${response.statusCode}');
+        }
+        bytes = response.bodyBytes;
+      } else if (widget.imageProvider is NetworkImage) {
         final url = (widget.imageProvider as NetworkImage).url;
         final response = await http.get(Uri.parse(url));
         if (response.statusCode != 200) {
@@ -46,11 +58,14 @@ class _ImageViewerState extends State<ImageViewer> {
         bytes = response.bodyBytes;
       } else if (widget.imageProvider is MemoryImage) {
         bytes = (widget.imageProvider as MemoryImage).bytes;
+      } else if (widget.imageProvider is FileImage) {
+        final source = (widget.imageProvider as FileImage).file;
+        bytes = await source.readAsBytes();
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('不支持保存此类型的图片')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('不支持保存此类型的图片')));
         }
         return;
       }
@@ -58,38 +73,40 @@ class _ImageViewerState extends State<ImageViewer> {
       final tempDir = await getTemporaryDirectory();
       final fileName = 'ai_chat_${DateTime.now().millisecondsSinceEpoch}.png';
       final file = File('${tempDir.path}/$fileName');
-      await file.writeAsBytes(bytes);
+      await writeBytesAtomically(file, bytes);
 
-      if (_isDesktop) {
-        final downloadsDir = await getDownloadsDirectory();
-        final targetPath = await FilePicker.platform.saveFile(
-          dialogTitle: '保存图片',
-          fileName: fileName,
-          initialDirectory: downloadsDir?.path,
-          type: FileType.custom,
-          allowedExtensions: const ['png'],
-        );
-        if (targetPath == null) return;
-        await file.copy(targetPath);
-      } else {
-        await Gal.putImage(file.path);
-      }
-
-      // 清理临时文件
       try {
-        await file.delete();
-      } catch (_) {}
+        if (_isDesktop) {
+          final downloadsDir = await getDownloadsDirectory();
+          final targetPath = await FilePicker.platform.saveFile(
+            dialogTitle: '保存图片',
+            fileName: fileName,
+            initialDirectory: downloadsDir?.path,
+            type: FileType.custom,
+            allowedExtensions: const ['png'],
+          );
+          if (targetPath == null) return;
+          await writeBytesAtomically(File(targetPath), bytes);
+        } else {
+          await Gal.putImage(file.path);
+        }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_exportSuccessLabel)),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(_exportSuccessLabel)));
+        }
+      } finally {
+        // 取消保存对话框时也清理临时文件。
+        try {
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保存失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -130,9 +147,8 @@ class _ImageViewerState extends State<ImageViewer> {
         minScale: PhotoViewComputedScale.contained,
         maxScale: PhotoViewComputedScale.covered * 3,
         backgroundDecoration: const BoxDecoration(color: Colors.black),
-        loadingBuilder: (_, _) => const Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
+        loadingBuilder: (_, _) =>
+            const Center(child: CircularProgressIndicator(color: Colors.white)),
         errorBuilder: (_, _, _) => const Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -157,10 +173,8 @@ void showImageViewer(
   Navigator.of(context).push(
     PageRouteBuilder(
       opaque: false,
-      pageBuilder: (_, _, _) => ImageViewer(
-        imageProvider: imageProvider,
-        imageUrl: imageUrl,
-      ),
+      pageBuilder: (_, _, _) =>
+          ImageViewer(imageProvider: imageProvider, imageUrl: imageUrl),
       transitionsBuilder: (_, animation, _, child) =>
           FadeTransition(opacity: animation, child: child),
     ),

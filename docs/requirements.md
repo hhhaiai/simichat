@@ -86,6 +86,10 @@
 ### M8 — 语音与图片
 
 - 支持语音对话：语音文件附件、移动端录音输入、OpenAI 兼容 STT 自动转写配置入口、OpenAI 兼容 TTS 语音播报、STT/TTS 厂商预设 v1、播放停止控制、播放完成事件回传和 Android / iOS 原生播放通道已落地。
+- 支持 ChatGPT 风格实时语音面板：可配置 OpenAI / xAI / 自定义 `wss://` Realtime 服务商、模型、音色、Bearer / ephemeral 凭据和 protocol prefix；支持 WebSocket 文本 fallback、输入转写、助手文本 / 转写、输出音频帧统计、停止回答、断开和加密配置持久化。Android 已接入 16 kHz mono PCM16 `AudioRecord` 采集、24 kHz mono PCM16 `AudioTrack` 播放和原生通道生命周期；iOS 原生 PCM 仍待接入。未连接或不支持平台时必须明确提示，普通麦克风继续使用“录音文件 → STT → 聊天”链路。
+- 对话 Composer 采用 ChatGPT 风格单一输入区：支持一次选择多个图片、视频、音频、PDF 和普通文件；支持参考图生图、图片编辑、通用视频生成、声音合成、声音克隆、声音设计、语音识别成文字和音乐生成。视频 / 音乐 endpoint 与模型可按当前聊天渠道配置，不绑定单一厂商。
+- 生成结果必须回到同一条消息时间线：图片显示缩略图，视频支持本地播放与进度控制，音频 / 音乐显示播放卡片和文件信息，PDF / 普通文件显示安全文件卡片；生成失败不得写入半条消息。
+- 视频 / 音乐等长任务必须持久化 provider job ID、轮询地址、deadline、提交时渠道模型和本地交付 ID；应用首帧后可按 lease 恢复 pending / running 任务。只有媒体文件、用户 / assistant 消息和附件事务全部提交后，任务才进入 `completed`；重复恢复不得创建第二套消息或附件。当前 schema 11、本地恢复和快照测试已通过，但 fake adapter / 内存 SQLite 不替代真实厂商异步协议、真机冷启动和媒体质量验证。
 - 后台自动保存语音转文字稿件；设置页启用 OpenAI 兼容 STT 后可自动调用 `/v1/audio/transcriptions` 更新稿件；稿件明确标记 `pending` / `ready` / `empty` / `failed`，失败说明必须脱敏。
 - 语音原始文件本地存储。
 - 聊天音频卡片应直接展示本地转写状态，方便用户知道语音是否等待转写、已完成、空结果或失败；用户应能从音频卡片查看转写详情，并在转写完成时复制正文。
@@ -136,6 +140,8 @@
 - [x] 基础主题与字体调节：全局字体缩放已收敛为 90%–120%，5% 步进。
 - [x] 每个对话 1 个 Markdown 原始文件基础能力。
 - [x] 移动端语音录音输入与播报 v1：输入栏语音按钮、Android / iOS 原生运行时权限与 `.m4a` 录音附件已接入；OpenAI 兼容 STT 自动转写、OpenAI 兼容 TTS 语音播报、STT/TTS 厂商预设 v1、停止播报控制和播放完成事件回传已接入；更多非 OpenAI 兼容语音厂商和真机长时间场景仍待实现。
+- [x] ChatGPT 风格多模态 Composer v1：多文件输入、视频附件、参考图 / 图片编辑、图片 / 视频 / 音频 / 音乐生成工具和统一本地媒体消息展示已接入；异步媒体任务 schema 11、进程内启动恢复、固定渠道模型和本地幂等交付已接入；通用媒体实现与边界见 `docs/chat-composer-multimodal.md`，真实厂商异步任务与质量仍待验证。
+- [x] 实时语音配置与文本 fallback v1：`RealtimeVoiceSession`、provider、Composer 入口和真机面板已接入；Android 原生 PCM 采集 / 播放 v1 和 Pixel 8 smoke 已通过；iOS 原生 PCM、真实 WebSocket + 云端回答仍待补证，不以文件录音伪装实时流。
 - [x] 移动端应用身份 v1：Android / iOS 展示名改为 `SimiAIChat`，包名 / Bundle ID 改为 `top.simitalk.aichat`。
 - [x] 对话页扩展 Markdown 渲染 v1：兼容参考样例中的新旧 Markdown、数学公式、媒体、Mermaid、Draw.io 和折叠块，具体见 `docs/markdown-rendering.md`。
 - [ ] 移动端真机主链路冒烟：Android 多条真机 smoke 与 iOS release 发送 / 后台 / deep link 已补；iOS release 网络恢复 fake connectivity 入口已补，真实 iOS 物理网络切换、手工 UI 停止 / 重试 / 模型切换和长会话仍待补。
@@ -230,7 +236,8 @@
 - 人工智能回复支持扩展 Markdown、代码块、图片、行内 / 块级 LaTeX、Mermaid、Draw.io / mxGraph、折叠块、HTML 音视频安全卡片和思考过程；具体实现见 `docs/markdown-rendering.md`。
 - 每条人工智能回复底部操作：复制、重试、语音播报；播报中应可停止，播放自然结束、停止或原生错误后应自动恢复为可再次播报状态。
 - 流式输出支持中断。
-- 底部输入区：多行文本框，发送按钮，附件入口，移动端语音录制按钮。
+- 底部输入区：ChatGPT 风格多行文本框、`+` 工具菜单、发送 / 停止按钮、附件预览、移动端语音录制按钮；工具菜单提供图片、视频、声音和音乐动作，动作结果直接回到当前消息流。
+- 实时语音从 `+` 菜单进入独立的 ChatGPT 风格面板，展示连接状态、用户 / 助手转写、配置摘要、文本 fallback 和停止回答；未接入原生 PCM 时必须明确提示边界，不能将文件录音伪装为实时输入。
 
 ### 4.2 模型选择器
 

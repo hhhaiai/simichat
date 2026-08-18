@@ -1,14 +1,28 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:dio/dio.dart';
-import 'http_helper.dart';
 
-/// SSE 流式事件
+import 'package:dio/dio.dart';
+
+import 'http_helper.dart';
+import 'protocol_stream_exception.dart';
+
+export 'api_endpoint_resolver.dart';
+export 'protocol_stream_exception.dart';
+
+/// A parsed Server-Sent Event.
+///
+/// [data] is the SSE payload after all data lines have been joined with a
+/// newline. [event] is preserved when the server sends an event field.
 class SseEvent {
   final String data;
-  const SseEvent(this.data);
+  final String? event;
+
+  const SseEvent(this.data, {this.event});
+
+  String? get eventType => event;
 }
 
-/// SSE 请求配置
+/// SSE request configuration.
 class SseRequestConfig {
   final String url;
   final Map<String, String> headers;
@@ -23,94 +37,145 @@ class SseRequestConfig {
   });
 }
 
-/// 解析字节流为 SSE 数据事件
-/// 处理：utf8 解码（多字节安全）、行缓冲、data: 前缀剥离、空行跳过、[DONE] 哨兵检测
-Stream<SseEvent> parseSseStream(Stream<List<int>> byteStream) async* {
-  String lineBuffer = '';
-  List<int> byteBuffer = [];
+/// Stateful text parser used by [parseSseStream].
+///
+/// Keeping this parser public makes byte/chunk boundary behavior directly
+/// testable without opening a network socket.
+class SseIncrementalParser {
+  String _lineBuffer = '';
+  String? _eventName;
+  final List<String> _dataLines = [];
+  bool _done = false;
 
-  await for (final chunk in byteStream) {
-    byteBuffer.addAll(chunk);
+  bool get done => _done;
 
-    // 找到安全的 UTF-8 解码边界：丢弃尾部可能不完整的多字节序列
-    final safeBytes = _trimIncompleteUtf8(byteBuffer);
-    if (safeBytes.isEmpty) continue; // 还没有足够的字节
+  /// Feed already UTF-8-decoded text and return complete events.
+  List<SseEvent> addText(String text) {
+    if (_done || text.isEmpty) return const [];
+    _lineBuffer += text;
+    final events = <SseEvent>[];
 
-    final decoded = utf8.decode(safeBytes);
-    final lastNewline = decoded.lastIndexOf('\n');
-
-    if (lastNewline == -1) {
-      // 没有换行，全部累积到 lineBuffer
-      lineBuffer += decoded;
-      byteBuffer = [];
-      continue;
-    }
-
-    final completeText = lineBuffer + decoded.substring(0, lastNewline);
-    lineBuffer = decoded.substring(lastNewline + 1);
-
-    // 保留最后一行对应的原始字节（未解码部分）
-    byteBuffer = List<int>.from(
-      utf8.encode(decoded.substring(lastNewline + 1)),
-    );
-
-    final lines = completeText.split('\n');
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty || !trimmed.startsWith('data:')) continue;
-      final data = trimmed.substring(5).trimLeft();
-      if (data == '[DONE]') return;
-      yield SseEvent(data);
-    }
-  }
-
-  // 流结束，处理剩余缓冲（此时不会有更多数据，强制解码）
-  if (byteBuffer.isNotEmpty) {
-    final remaining = utf8.decode(byteBuffer, allowMalformed: true);
-    lineBuffer += remaining;
-  }
-  if (lineBuffer.isNotEmpty) {
-    final trimmed = lineBuffer.trim();
-    if (trimmed.isNotEmpty &&
-        trimmed.startsWith('data:') &&
-        trimmed != 'data:[DONE]' &&
-        trimmed != 'data: [DONE]') {
-      yield SseEvent(trimmed.substring(5).trimLeft());
-    }
-  }
-}
-
-/// 从字节序列尾部移除可能不完整的 UTF-8 多字节序列
-/// UTF-8 编码规则：首字节高位标识长度，后续字节以 10xxxxxx 开头
-List<int> _trimIncompleteUtf8(List<int> bytes) {
-  if (bytes.isEmpty) return bytes;
-  // 从尾部向前检查最多 4 字节（UTF-8 最大长度）
-  for (var i = 1; i <= 4 && i <= bytes.length; i++) {
-    final b = bytes[bytes.length - i];
-    if (b & 0x80 == 0) {
-      // ASCII 字节（0xxxxxxx），截断点在它之后
-      return bytes.sublist(0, bytes.length - i + 1);
-    } else if (b & 0xC0 == 0xC0) {
-      // 多字节序列首字节（11xxxxxx）
-      final expectedLen = (b & 0xE0) == 0xC0
-          ? 2
-          : (b & 0xF0) == 0xE0
-          ? 3
-          : 4;
-      final actualLen = i;
-      if (actualLen >= expectedLen) {
-        return bytes; // 完整的多字节序列
-      } else {
-        return bytes.sublist(0, bytes.length - i); // 不完整，截掉
+    while (!_done) {
+      var newlineIndex = -1;
+      var newlineLength = 1;
+      for (var index = 0; index < _lineBuffer.length; index++) {
+        final codeUnit = _lineBuffer.codeUnitAt(index);
+        if (codeUnit == 0x0a) {
+          newlineIndex = index;
+          newlineLength = 1;
+          break;
+        }
+        if (codeUnit == 0x0d) {
+          // Keep a trailing CR until the next chunk so a split CRLF pair is
+          // treated as one line ending rather than an empty extra line.
+          if (index == _lineBuffer.length - 1) break;
+          newlineIndex = index;
+          newlineLength = _lineBuffer.codeUnitAt(index + 1) == 0x0a ? 2 : 1;
+          break;
+        }
       }
+      if (newlineIndex < 0) break;
+
+      final line = _lineBuffer.substring(0, newlineIndex);
+      _lineBuffer = _lineBuffer.substring(newlineIndex + newlineLength);
+      final event = _consumeLine(line);
+      if (event != null) events.add(event);
     }
-    // 0x80-0xBF 是后续字节，继续向前检查
+    return events;
   }
-  // 全是后续字节，全部截掉
-  return const [];
+
+  /// Finish the stream and dispatch a final event without a blank line.
+  List<SseEvent> finish() {
+    if (_done) return const [];
+    final events = <SseEvent>[];
+    if (_lineBuffer.isNotEmpty) {
+      final trailing = _lineBuffer.endsWith('\r')
+          ? _lineBuffer.substring(0, _lineBuffer.length - 1)
+          : _lineBuffer;
+      _lineBuffer = '';
+      final event = _consumeLine(trailing);
+      if (event != null) events.add(event);
+    }
+    if (!_done) {
+      final event = _dispatch();
+      if (event != null) events.add(event);
+    }
+    return events;
+  }
+
+  SseEvent? _consumeLine(String line) {
+    if (line.isEmpty) return _dispatch();
+    if (line.startsWith(':')) return null;
+
+    final colon = line.indexOf(':');
+    final field = colon < 0 ? line : line.substring(0, colon);
+    var value = colon < 0 ? '' : line.substring(colon + 1);
+    if (value.startsWith(' ')) value = value.substring(1);
+
+    switch (field) {
+      case 'data':
+        _dataLines.add(value);
+      case 'event':
+        _eventName = value;
+      // id/retry are intentionally ignored until callers need them. They do
+      // not affect the data/event contract used by the protocol adapters.
+      case 'id':
+      case 'retry':
+      default:
+        break;
+    }
+    return null;
+  }
+
+  SseEvent? _dispatch() {
+    if (_dataLines.isEmpty && _eventName == null) return null;
+    final data = _dataLines.join('\n');
+    final eventName = _eventName;
+    _dataLines.clear();
+    _eventName = null;
+
+    if (data.trim() == '[DONE]') {
+      _done = true;
+      return null;
+    }
+    return SseEvent(data, event: eventName);
+  }
 }
 
-/// 执行 POST 请求并返回 SSE 字节流
+/// Parse a byte stream using an incremental UTF-8 decoder and SSE event
+/// boundaries. UTF-8 characters may be split at any byte and data may span
+/// multiple data lines.
+Stream<SseEvent> parseSseStream(Stream<List<int>> byteStream) async* {
+  final parser = SseIncrementalParser();
+  try {
+    await for (final text in byteStream.transform(utf8.decoder)) {
+      for (final event in parser.addText(text)) {
+        yield event;
+      }
+      if (parser.done) return;
+    }
+    for (final event in parser.finish()) {
+      yield event;
+    }
+  } on FormatException catch (error) {
+    throw ProtocolStreamException(
+      'SSE UTF-8 数据无效: ${error.message}',
+      protocol: 'sse',
+      kind: ProtocolStreamErrorKind.malformed,
+      code: 'invalid_utf8',
+    );
+  } on ProtocolStreamException {
+    rethrow;
+  } catch (error) {
+    throw ProtocolStreamException(
+      error.toString(),
+      protocol: 'sse',
+      kind: ProtocolStreamErrorKind.transport,
+    );
+  }
+}
+
+/// Execute a POST request and return its response byte stream.
 Future<Stream<List<int>>> openSseStream(SseRequestConfig config) async {
   final dio = getDio(config.url);
   try {
@@ -127,18 +192,44 @@ Future<Stream<List<int>>> openSseStream(SseRequestConfig config) async {
       data: jsonEncode(config.body),
       cancelToken: config.cancelToken,
     );
-    return _cancelAwareByteStream(response.data!.stream, config.cancelToken);
-  } on DioException catch (e) {
-    if (e.type == DioExceptionType.cancel) {
-      throw Exception('请求已取消');
+    final body = response.data;
+    if (body == null) {
+      throw ProtocolStreamException(
+        '流式接口未返回响应体',
+        protocol: 'sse',
+        kind: ProtocolStreamErrorKind.remote,
+        code: 'empty_response',
+      );
     }
-    // 保留状态码信息
-    final statusCode = e.response?.statusCode;
-    final message = formatDioError(e);
-    if (statusCode != null) {
-      throw Exception('[$statusCode] $message');
+    return _cancelAwareByteStream(body.stream, config.cancelToken);
+  } on ProtocolStreamException {
+    rethrow;
+  } on DioException catch (error) {
+    if (error.type == DioExceptionType.cancel) {
+      throw ProtocolStreamException(
+        '请求已取消',
+        protocol: 'sse',
+        kind: ProtocolStreamErrorKind.cancelled,
+        code: 'cancelled',
+        retryable: false,
+      );
     }
-    throw Exception(message);
+    final statusCode = error.response?.statusCode;
+    throw ProtocolStreamException(
+      _safeSseDioMessage(error),
+      protocol: 'sse',
+      kind: statusCode == null
+          ? ProtocolStreamErrorKind.transport
+          : ProtocolStreamErrorKind.remote,
+      code: statusCode == null ? null : 'http_$statusCode',
+      statusCode: statusCode,
+    );
+  } catch (error) {
+    throw ProtocolStreamException(
+      error.toString(),
+      protocol: 'sse',
+      kind: ProtocolStreamErrorKind.transport,
+    );
   }
 }
 
@@ -152,14 +243,29 @@ Stream<List<int>> _cancelAwareByteStream(
       yield chunk;
     }
     completedNormally = true;
-  } on DioException catch (e) {
-    if (e.type == DioExceptionType.cancel &&
+  } on DioException catch (error) {
+    if (error.type == DioExceptionType.cancel &&
         cancelToken != null &&
         cancelToken.isCancelled) {
       completedNormally = true;
       return;
     }
-    rethrow;
+    throw ProtocolStreamException(
+      _safeSseDioMessage(error),
+      protocol: 'sse',
+      kind: ProtocolStreamErrorKind.transport,
+    );
+  } catch (error) {
+    if (cancelToken?.isCancelled ?? false) {
+      completedNormally = true;
+      return;
+    }
+    if (error is ProtocolStreamException) rethrow;
+    throw ProtocolStreamException(
+      error.toString(),
+      protocol: 'sse',
+      kind: ProtocolStreamErrorKind.transport,
+    );
   } finally {
     if (!completedNormally && cancelToken != null && !cancelToken.isCancelled) {
       cancelToken.cancel('SSE stream subscription cancelled');
@@ -167,47 +273,35 @@ Stream<List<int>> _cancelAwareByteStream(
   }
 }
 
-/// 标准化 URL（去除尾部斜杠）
-String normalizeUrl(String baseUrl) {
-  final trimmed = baseUrl.trim();
-  if (trimmed.isEmpty) return trimmed;
-
-  final normalized = trimmed.replaceAll(RegExp(r'/+$'), '');
-  final hasScheme = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(normalized);
-  if (hasScheme) return normalized;
-
-  final lower = normalized.toLowerCase();
-  final isIpv4 = RegExp(
-    r'^(\d{1,3}\.){3}\d{1,3}(:\d+)?(/.*)?$',
-  ).hasMatch(lower);
-  final isPrivateIpv4 = RegExp(
-    r'^(127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?(/.*)?$',
-  ).hasMatch(lower);
-  final isIpv6 =
-      RegExp(r'^\[[0-9a-f:]+\](:\d+)?(/.*)?$').hasMatch(lower) ||
-      RegExp(r'^[0-9a-f:]+$').hasMatch(lower);
-  final isLocalHost =
-      lower == 'localhost' ||
-      lower.startsWith('localhost:') ||
-      lower.startsWith('localhost/') ||
-      lower == '0.0.0.0' ||
-      lower.startsWith('0.0.0.0:') ||
-      lower.startsWith('0.0.0.0/') ||
-      lower == '[::1]' ||
-      lower.startsWith('[::1]:') ||
-      lower.startsWith('[::1]/') ||
-      lower == '::1';
-
-  final scheme = (isLocalHost || isPrivateIpv4 || isIpv4 || isIpv6)
-      ? 'http'
-      : 'https';
-  return '$scheme://$normalized';
-}
-
-String normalizeOpenAiBaseUrl(String baseUrl) {
-  final normalized = normalizeUrl(baseUrl);
-  if (normalized.endsWith('/v1')) {
-    return normalized.substring(0, normalized.length - 3);
+String _safeSseDioMessage(DioException error) {
+  final statusCode = error.response?.statusCode;
+  if (statusCode != null) {
+    switch (statusCode) {
+      case 401:
+        return 'API Key 无效';
+      case 403:
+        return '流式接口访问被拒绝';
+      case 404:
+        return '流式接口不存在，请检查 Base URL';
+      case 408:
+        return '流式接口请求超时';
+      case 429:
+        return '请求频率超限，请稍后重试';
+      default:
+        if (statusCode >= 500) return '上游服务暂时不可用';
+        return '流式接口请求失败';
+    }
   }
-  return normalized;
+  switch (error.type) {
+    case DioExceptionType.connectionTimeout:
+    case DioExceptionType.sendTimeout:
+    case DioExceptionType.receiveTimeout:
+      return '流式接口连接超时，请检查网络';
+    case DioExceptionType.connectionError:
+      return '无法连接流式接口，请检查 Base URL 和网络';
+    case DioExceptionType.cancel:
+      return '请求已取消';
+    default:
+      return '流式接口请求失败';
+  }
 }

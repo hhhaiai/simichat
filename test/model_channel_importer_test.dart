@@ -201,6 +201,32 @@ void main() {
       }
     });
 
+    test('parses rerank capability on imported models', () {
+      final channels = ModelChannelImportParser.parse('''
+      {
+        "channels": [
+          {
+            "name": "Jina",
+            "baseUrl": "https://api.jina.ai/v1",
+            "protocol": "openai_chat",
+            "apiKey": "jina-test-key",
+            "models": [
+              {"id": "jina-reranker-v2-base-multilingual", "capability": "rerank"},
+              {"id": "jina-embeddings-v3", "capability": "embedding"}
+            ]
+          }
+        ]
+      }
+      ''');
+
+      expect(channels.single.models, hasLength(2));
+      expect(
+        channels.single.models.first.capability,
+        ModelCapability.rerank,
+      );
+      expect(channels.single.models.last.capability, ModelCapability.embedding);
+    });
+
     test('sanitizes secret-like unknown provider preset diagnostics', () {
       const secret = 'sk-test-secret-provider-1234567890';
       try {

@@ -253,6 +253,7 @@ class DataImportService {
         try {
           final snapshotPreview = await service.previewSnapshot(entry.bytes);
           structuredKeyCount += snapshotPreview.totalRecordCount;
+          unsupportedStructuredKeyCount += snapshotPreview.invalidMediaJobCount;
           existingStructuredData =
               existingStructuredData || snapshotPreview.existingRecordCount > 0;
           importable.add(

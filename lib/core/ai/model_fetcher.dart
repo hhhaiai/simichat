@@ -7,8 +7,21 @@ import 'sse_helper.dart';
 class FetchedModel {
   final String id;
   final String capability;
+  final Set<String> capabilities;
 
-  const FetchedModel({required this.id, required this.capability});
+  const FetchedModel({
+    required this.id,
+    required this.capability,
+    this.capabilities = const <String>{},
+  });
+
+  bool supports(String capability) {
+    final expected = ModelCapability.normalize(capability);
+    return ModelCapability.normalize(this.capability) == expected ||
+        capabilities.any(
+          (value) => ModelCapability.normalize(value) == expected,
+        );
+  }
 }
 
 /// 从 API 获取可用模型列表。
@@ -50,8 +63,38 @@ class ModelFetcher {
     if (status == 403) return '权限不足，请检查 API Key 权限';
     if (status == 404) return '接口不存在，请检查 Base URL';
     if (status == 429) return '请求过于频繁，请稍后再试';
-    // Delegate to centralized formatter for timeout and connection errors
-    return formatDioError(e);
+    // Delegate to centralized formatter for timeout and connection errors,
+    // then remove accidental credential echoes from proxy/server diagnostics.
+    return _sanitizeErrorMessage(formatDioError(e));
+  }
+
+  static String _sanitizeErrorMessage(String message) {
+    var sanitized = message;
+    sanitized = sanitized.replaceAll(
+      RegExp(r'Bearer\s+[^\s,;}]+', caseSensitive: false),
+      'Bearer ***',
+    );
+    sanitized = sanitized.replaceAll(
+      RegExp(
+        r'(api[_-]?key|authorization|token|secret)\s*[:=]\s*[^\s,;}]+',
+        caseSensitive: false,
+      ),
+      'credential=***',
+    );
+    sanitized = sanitized.replaceAll(
+      RegExp(r'sk-[A-Za-z0-9_-]{6,}', caseSensitive: false),
+      'sk-***',
+    );
+    return sanitized;
+  }
+
+  static Map<String, dynamic>? _asStringMap(dynamic value) {
+    if (value is! Map) return null;
+    final result = <String, dynamic>{};
+    for (final entry in value.entries) {
+      if (entry.key is String) result[entry.key as String] = entry.value;
+    }
+    return result;
   }
 
   /// 获取 OpenAI 兼容接口的模型列表，并尽量识别 chat / embedding 能力。
@@ -60,7 +103,7 @@ class ModelFetcher {
     required String apiKey,
   }) async {
     final dio = _createDio();
-    final normalizedUrl = '${normalizeOpenAiBaseUrl(baseUrl)}/v1/models';
+    final normalizedUrl = resolveOpenAiEndpoint(baseUrl, 'models');
 
     try {
       final response = await dio.get(
@@ -73,8 +116,8 @@ class ModelFetcher {
         ),
       );
 
-      final data = response.data as Map<String, dynamic>;
-      return parseOpenAIModels(data);
+      final data = _asStringMap(response.data);
+      return data == null ? const [] : parseOpenAIModels(data);
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
     } finally {
@@ -83,18 +126,27 @@ class ModelFetcher {
   }
 
   static List<FetchedModel> parseOpenAIModels(Map<String, dynamic> data) {
-    final modelList = data['data'] as List?;
-    if (modelList == null) return [];
+    final modelList = data['data'];
+    if (modelList is! Iterable) return [];
 
     final models = <FetchedModel>[];
+    final seen = <String>{};
     for (final raw in modelList) {
-      if (raw is! Map<String, dynamic>) continue;
-      final id = raw['id'] as String?;
-      if (id == null || id.isEmpty) continue;
+      final metadata = _asStringMap(raw);
+      if (metadata == null) continue;
+      final rawId = metadata['id'];
+      if (rawId is! String) continue;
+      final id = rawId.trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      final capabilities = ModelCapability.capabilitiesFromMetadata(
+        id,
+        metadata: metadata,
+      );
       models.add(
         FetchedModel(
           id: id,
-          capability: ModelCapability.inferFromModel(id, metadata: raw),
+          capability: ModelCapability.primaryCapability(id, metadata: metadata),
+          capabilities: Set.unmodifiable(capabilities),
         ),
       );
     }
@@ -134,34 +186,115 @@ class ModelFetcher {
     ];
   }
 
-  /// 获取 Gemini 模型列表（返回全部，不做过滤）
+  /// 获取 Gemini 模型列表；只保留可生成内容的模型。
   static Future<List<String>> fetchGeminiModels({
     required String baseUrl,
     required String apiKey,
   }) async {
+    final models = await fetchGeminiModelInfos(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+    );
+    return models.map((model) => model.id).toList(growable: false);
+  }
+
+  /// 获取并分页读取 Gemini 模型能力。
+  ///
+  /// `supportedGenerationMethods` 缺少 `generateContent` /
+  /// `streamGenerateContent` 的条目（例如只支持 `embedContent` 的模型）
+  /// 不会进入聊天模型列表。
+  static Future<List<FetchedModel>> fetchGeminiModelInfos({
+    required String baseUrl,
+    required String apiKey,
+    int pageSize = 100,
+    int maxPages = 100,
+  }) async {
+    if (pageSize <= 0 || maxPages <= 0) return const [];
+
     final dio = _createDio();
-    final url = '${normalizeUrl(baseUrl)}/v1beta/models';
+    final url = resolveGeminiEndpoint(baseUrl, 'models');
 
     try {
-      final response = await dio.get(
-        url,
-        options: Options(headers: {'x-goog-api-key': apiKey}),
-      );
+      final result = <FetchedModel>[];
+      final seen = <String>{};
+      final requestedPageTokens = <String?>{};
+      String? pageToken;
+      for (var page = 0; page < maxPages; page++) {
+        if (!requestedPageTokens.add(pageToken)) break;
+        final query = <String, dynamic>{'pageSize': pageSize};
+        if (pageToken != null && pageToken.isNotEmpty) {
+          query['pageToken'] = pageToken;
+        }
+        final response = await dio.get(
+          url,
+          queryParameters: query,
+          options: Options(headers: {'x-goog-api-key': apiKey}),
+        );
 
-      final data = response.data as Map<String, dynamic>;
-      final modelList = data['models'] as List?;
+        final data = _asStringMap(response.data);
+        if (data == null) break;
+        final modelList = data['models'];
+        if (modelList is List) {
+          for (final raw in modelList) {
+            final metadata = _asStringMap(raw);
+            if (metadata == null) continue;
+            final methods = metadata['supportedGenerationMethods'];
+            if (methods is! List ||
+                !methods.any(
+                  (method) => switch (method.toString().toLowerCase()) {
+                    'generatecontent' || 'streamgeneratecontent' => true,
+                    _ => false,
+                  },
+                )) {
+              continue;
+            }
+            final rawNameValue = metadata['name'];
+            if (rawNameValue is! String) continue;
+            final rawName = rawNameValue.trim();
+            if (rawName.isEmpty) continue;
+            final id =
+                (rawName.contains('/')
+                        ? rawName.substring(rawName.lastIndexOf('/') + 1)
+                        : rawName)
+                    .trim();
+            if (id.isEmpty) continue;
+            if (!seen.add(id)) continue;
+            final discoveredCapability = ModelCapability.primaryCapability(
+              id,
+              metadata: metadata,
+              inferFromModelName: false,
+            );
+            final supportsVision = ModelCapability.supportsVisionModel(
+              capability: discoveredCapability,
+              modelId: id,
+              protocol: 'gemini',
+            );
+            final capabilities = <String>{
+              ...ModelCapability.capabilitiesFromMetadata(
+                id,
+                metadata: metadata,
+                inferFromModelName: false,
+              ),
+              if (supportsVision) ModelCapability.vision,
+            };
+            result.add(
+              FetchedModel(
+                id: id,
+                capability: supportsVision
+                    ? ModelCapability.vision
+                    : discoveredCapability,
+                capabilities: Set.unmodifiable(capabilities),
+              ),
+            );
+          }
+        }
 
-      if (modelList == null) return [];
-
-      return modelList
-          .map((m) {
-            final name = m['name'] as String?;
-            if (name == null) return null;
-            return name.contains('/') ? name.split('/').last : name;
-          })
-          .whereType<String>()
-          .toList()
-        ..sort();
+        final next = data['nextPageToken']?.toString();
+        if (next == null || next.isEmpty || next == pageToken) break;
+        pageToken = next;
+      }
+      result.sort((a, b) => a.id.compareTo(b.id));
+      return result;
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
     } finally {
@@ -169,13 +302,13 @@ class ModelFetcher {
     }
   }
 
-  /// 获取 Ollama 模型列表
+  /// 获取 Ollama 模型名称列表（兼容旧调用，不请求 /api/show）。
   static Future<List<String>> fetchOllamaModels({
     required String baseUrl,
     String apiKey = '',
   }) async {
     final dio = _createDio();
-    final url = '${normalizeUrl(baseUrl)}/api/tags';
+    final url = resolveOllamaEndpoint(baseUrl, 'api/tags');
     try {
       final token = apiKey.trim();
       final response = await dio.get(
@@ -184,22 +317,84 @@ class ModelFetcher {
             ? null
             : Options(headers: {'Authorization': 'Bearer $token'}),
       );
-      final data = response.data as Map<String, dynamic>;
-      final models = data['models'] as List?;
-      if (models == null) return [];
-      return models
-          .map((m) {
-            final name = (m as Map<String, dynamic>)['name'] as String?;
-            if (name == null) return null;
-            return name.endsWith(':latest')
-                ? name.substring(0, name.length - 7)
-                : name;
-          })
-          .whereType<String>()
-          .toList()
-        ..sort();
+      final data = _asStringMap(response.data);
+      final models = data?['models'];
+      if (models is! Iterable) return const [];
+
+      final names = <String>[];
+      final seen = <String>{};
+      for (final raw in models) {
+        final metadata = _asStringMap(raw);
+        final rawName = metadata?['name'];
+        if (rawName is! String) continue;
+        final trimmed = rawName.trim();
+        if (trimmed.isEmpty) continue;
+        final name = trimmed.endsWith(':latest')
+            ? trimmed.substring(0, trimmed.length - 7)
+            : trimmed;
+        if (name.isNotEmpty && seen.add(name)) names.add(name);
+      }
+      names.sort();
+      return names;
     } on DioException catch (e) {
       throw Exception(_errorMessage(e));
+    } finally {
+      dio.close();
+    }
+  }
+
+  /// 获取 Ollama 模型及 `/api/show` 能力；show 失败时保留模型但只给出
+  /// 保守的 chat 能力，不把未知模型标成 video/music。
+  static Future<List<FetchedModel>> fetchOllamaModelInfos({
+    required String baseUrl,
+    String apiKey = '',
+  }) async {
+    final names = await fetchOllamaModels(baseUrl: baseUrl, apiKey: apiKey);
+    if (names.isEmpty) return const [];
+
+    final dio = _createDio();
+    final showUrl = resolveOllamaEndpoint(baseUrl, 'api/show');
+    final token = apiKey.trim();
+    final headers = token.isEmpty
+        ? <String, String>{}
+        : <String, String>{'Authorization': 'Bearer $token'};
+    try {
+      final result = <FetchedModel>[];
+      for (final id in names) {
+        Map<String, dynamic>? metadata;
+        try {
+          final response = await dio.post<Map<String, dynamic>>(
+            showUrl,
+            data: {'name': id},
+            options: Options(headers: headers),
+          );
+          metadata = _asStringMap(response.data);
+        } on DioException {
+          // Model listing remains useful when an older Ollama/proxy does not
+          // expose /api/show.
+        } on FormatException {
+          // A proxy may return a non-JSON body for /api/show; keep the tag.
+        } on TypeError {
+          // The same conservative fallback applies to an invalid JSON shape.
+        }
+        final capabilities = ModelCapability.capabilitiesFromMetadata(
+          id,
+          metadata: metadata,
+          inferFromModelName: false,
+        );
+        result.add(
+          FetchedModel(
+            id: id,
+            capability: ModelCapability.primaryCapability(
+              id,
+              metadata: metadata,
+              inferFromModelName: false,
+            ),
+            capabilities: Set.unmodifiable(capabilities),
+          ),
+        );
+      }
+      return result;
     } finally {
       dio.close();
     }
@@ -211,22 +406,30 @@ class ModelFetcher {
     required String baseUrl,
     required String apiKey,
   }) async {
-    switch (protocol) {
+    switch (protocol.trim().toLowerCase()) {
       case 'openai_chat':
       case 'openai_response':
         return fetchOpenAIModelInfos(baseUrl: baseUrl, apiKey: apiKey);
       case 'claude':
         return (await fetchClaudeModels(baseUrl: baseUrl, apiKey: apiKey))
-            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
+            .map(
+              (id) => FetchedModel(
+                id: id,
+                capability:
+                    ModelCapability.supportsVisionModel(
+                      capability: ModelCapability.chat,
+                      modelId: id,
+                      protocol: 'claude',
+                    )
+                    ? ModelCapability.vision
+                    : ModelCapability.chat,
+              ),
+            )
             .toList();
       case 'gemini':
-        return (await fetchGeminiModels(baseUrl: baseUrl, apiKey: apiKey))
-            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
-            .toList();
+        return fetchGeminiModelInfos(baseUrl: baseUrl, apiKey: apiKey);
       case 'ollama':
-        return (await fetchOllamaModels(baseUrl: baseUrl, apiKey: apiKey))
-            .map((id) => FetchedModel(id: id, capability: ModelCapability.chat))
-            .toList();
+        return fetchOllamaModelInfos(baseUrl: baseUrl, apiKey: apiKey);
       default:
         throw UnsupportedError('不支持的协议: $protocol');
     }

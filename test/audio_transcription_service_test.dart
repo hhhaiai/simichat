@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:ai_chat_app/core/media/audio_transcript_archive.dart';
 import 'package:ai_chat_app/core/media/audio_transcription_service.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -123,6 +124,74 @@ void main() {
       expect(result.transcript, '第二个引擎识别成功');
     });
 
+    test(
+      'fallback stops after cancellation from a generic provider error',
+      () async {
+        final cancelToken = CancelToken();
+        final nextEngine = _CountingSpeechToTextEngine('不应调用');
+        final service = AudioTranscriptionService(
+          archive: archive,
+          engine: FallbackSpeechToTextEngine([
+            _CancellingGenericSpeechToTextEngine(cancelToken),
+            nextEngine,
+          ]),
+        );
+
+        await expectLater(
+          service.transcribeAndArchive(
+            const AudioTranscriptionJob(
+              messageId: 'message:cancel-generic',
+              attachmentId: 'attachment:cancel-generic',
+              audioPath: '/private/audio/cancel.wav',
+              fileName: 'cancel.wav',
+              fileSize: 1024,
+            ),
+            cancelToken: cancelToken,
+          ),
+          throwsA(
+            isA<AudioTranscriptionException>().having(
+              (error) => error.message,
+              'message',
+              contains('已取消'),
+            ),
+          ),
+        );
+        expect(nextEngine.calls, 0);
+      },
+    );
+
+    test(
+      'fallback reports an error when an empty result is followed by failure',
+      () async {
+        final service = AudioTranscriptionService(
+          archive: archive,
+          engine: FallbackSpeechToTextEngine([
+            _FakeSpeechToTextEngine('   '),
+            _ThrowingAudioTranscriptionExceptionEngine(),
+          ]),
+        );
+
+        await expectLater(
+          service.transcribeAndArchive(
+            const AudioTranscriptionJob(
+              messageId: 'message:empty-error',
+              attachmentId: 'attachment:empty-error',
+              audioPath: '/private/audio/empty-error.wav',
+              fileName: 'empty-error.wav',
+              fileSize: 1024,
+            ),
+          ),
+          throwsA(
+            isA<AudioTranscriptionException>().having(
+              (error) => error.message,
+              'message',
+              contains('STT provider rejected'),
+            ),
+          ),
+        );
+      },
+    );
+
     test('sanitizes engine failures before surfacing them', () async {
       final service = AudioTranscriptionService(
         archive: archive,
@@ -216,7 +285,10 @@ class _FakeSpeechToTextEngine implements SpeechToTextEngine {
   _FakeSpeechToTextEngine(this.transcript);
 
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
     lastInput = input;
     return transcript;
   }
@@ -224,16 +296,53 @@ class _FakeSpeechToTextEngine implements SpeechToTextEngine {
 
 class _ThrowingSpeechToTextEngine implements SpeechToTextEngine {
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
     throw Exception('provider failed for ${input.audioPath}');
   }
 }
 
 class _ThrowingAudioTranscriptionExceptionEngine implements SpeechToTextEngine {
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
     throw AudioTranscriptionException(
       'STT provider rejected sk-secret-token for ${input.audioPath}',
     );
+  }
+}
+
+class _CancellingGenericSpeechToTextEngine implements SpeechToTextEngine {
+  _CancellingGenericSpeechToTextEngine(this.cancelToken);
+
+  final CancelToken cancelToken;
+
+  @override
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
+    this.cancelToken.cancel('provider cancelled');
+    throw Exception('provider transport cancelled');
+  }
+}
+
+class _CountingSpeechToTextEngine implements SpeechToTextEngine {
+  _CountingSpeechToTextEngine(this.transcript);
+
+  final String transcript;
+  int calls = 0;
+
+  @override
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
+    calls++;
+    return transcript;
   }
 }

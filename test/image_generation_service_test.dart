@@ -74,6 +74,34 @@ void main() {
       expect(lastRequestBody?['response_format'], 'b64_json');
     });
 
+    test(
+      'resolves image generation through a configured /api/v3 prefix',
+      () async {
+        serveImageEndpoint(
+          responder: (request) {
+            expect(request.uri.path, '/api/v3/images/generations');
+            return {
+              'payload': {
+                'data': [
+                  {
+                    'b64_json': base64Encode([6, 7, 8]),
+                  },
+                ],
+              },
+            };
+          },
+        );
+
+        final image = await ImageGenerationService(
+          baseUrl: '$baseUrl/api/v3',
+          apiKey: 'sk-test',
+          model: 'dall-e-3',
+        ).generate('prefix image');
+
+        expect(image.bytes, [6, 7, 8]);
+      },
+    );
+
     test('rejects missing api key before calling upstream', () async {
       final service = ImageGenerationService(
         baseUrl: baseUrl,
@@ -197,6 +225,180 @@ void main() {
       expect(image.bytes, [9, 8, 7]);
     });
 
+    test(
+      'preserves image MIME and extension from an OpenAI-compatible response',
+      () async {
+        serveImageEndpoint(
+          responder: (_) => {
+            'payload': {
+              'data': [
+                {
+                  'b64_json': base64Encode([0xff, 0xd8, 0xff, 0xd9]),
+                  'output_format': 'jpeg',
+                },
+              ],
+            },
+          },
+        );
+
+        final image = await ImageGenerationService(
+          baseUrl: baseUrl,
+          apiKey: 'sk-test',
+          model: 'dall-e-3',
+        ).generate('jpeg image');
+
+        expect(image.mimeType, 'image/jpeg');
+        expect(image.extension, 'jpg');
+      },
+    );
+
+    test(
+      'uses gpt-image output_format without legacy response_format',
+      () async {
+        serveImageEndpoint(
+          responder: (_) => {
+            'payload': {
+              'data': [
+                {
+                  'b64_json': base64Encode([1, 2, 3]),
+                },
+              ],
+            },
+          },
+        );
+
+        final image =
+            await ImageGenerationService(
+              baseUrl: baseUrl,
+              apiKey: 'sk-test',
+              model: 'gpt-image-1',
+            ).generate(
+              'gpt image',
+              extra: const <String, dynamic>{'output_format': 'webp'},
+            );
+
+        expect(lastRequestBody?['output_format'], 'webp');
+        expect(lastRequestBody?.containsKey('response_format'), isFalse);
+        expect(image.bytes, [1, 2, 3]);
+        expect(image.mimeType, 'image/webp');
+        expect(image.extension, 'webp');
+      },
+    );
+
+    test('accepts a data URL returned in the image url field', () async {
+      const webpBytes = [
+        0x52,
+        0x49,
+        0x46,
+        0x46,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x57,
+        0x45,
+        0x42,
+        0x50,
+      ];
+      serveImageEndpoint(
+        responder: (_) => {
+          'payload': {
+            'data': [
+              {'url': 'data:image/webp;base64,${base64Encode(webpBytes)}'},
+            ],
+          },
+        },
+      );
+
+      final image = await ImageGenerationService(
+        baseUrl: baseUrl,
+        apiKey: 'sk-test',
+        model: 'gpt-image-1',
+      ).generate('webp image');
+
+      expect(image.bytes, webpBytes);
+      expect(image.mimeType, 'image/webp');
+      expect(image.extension, 'webp');
+    });
+
+    test('uses the downloaded image MIME instead of assuming PNG', () async {
+      const webpBytes = [
+        0x52,
+        0x49,
+        0x46,
+        0x46,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x57,
+        0x45,
+        0x42,
+        0x50,
+      ];
+      server.listen((request) async {
+        if (request.uri.path == '/v1/images/generations') {
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'data': [
+                  {'url': '$baseUrl/generated.webp'},
+                ],
+              }),
+            );
+        } else {
+          request.response
+            ..headers.contentType = ContentType('image', 'webp')
+            ..add(webpBytes);
+        }
+        await request.response.close();
+      });
+
+      final image = await ImageGenerationService(
+        baseUrl: baseUrl,
+        apiKey: 'sk-test',
+        model: 'dall-e-3',
+      ).generate('remote webp');
+
+      expect(image.mimeType, 'image/webp');
+      expect(image.extension, 'webp');
+    });
+
+    test(
+      'uses the remote image extension when the download MIME is generic',
+      () async {
+        server.listen((request) async {
+          if (request.uri.path == '/v1/images/generations') {
+            request.response
+              ..headers.contentType = ContentType.json
+              ..write(
+                jsonEncode({
+                  'data': [
+                    {'url': '$baseUrl/generated.webp'},
+                  ],
+                }),
+              );
+          } else {
+            request.response
+              ..headers.contentType = ContentType.binary
+              ..add([1, 2, 3]);
+          }
+          await request.response.close();
+        });
+
+        final image = await ImageGenerationService(
+          baseUrl: baseUrl,
+          apiKey: 'sk-test',
+          model: 'dall-e-3',
+        ).generate('generic MIME webp');
+
+        expect(image.bytes, [1, 2, 3]);
+        expect(image.mimeType, 'image/webp');
+        expect(image.extension, 'webp');
+      },
+    );
+
     test('rejects non-http base url', () {
       expect(
         () => normalizeImageGenerationBaseUrl('file:///tmp/x'),
@@ -278,6 +480,62 @@ void main() {
       expect(result.bytes, [0x89, 0x50, 0x4E, 0x47]);
       expect(await seen.future, isNot(contains('image-test-key')));
     });
+
+    test(
+      'generate with a reference image reuses the multipart edit endpoint',
+      () async {
+        final referenceServer = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(() => referenceServer.close(force: true));
+        final seen = Completer<String>();
+        unawaited(
+          referenceServer.forEach((request) async {
+            final body = await utf8.decodeStream(request);
+            expect(request.uri.path, '/v1/images/edits');
+            expect(body, contains('name="image"'));
+            expect(body, contains('filename="reference.png"'));
+            expect(body, contains('name="prompt"'));
+            expect(body, contains('参考图变成水彩'));
+            expect(body, isNot(contains('reference-server-secret')));
+            seen.complete(body);
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(
+              jsonEncode({
+                'data': [
+                  {
+                    'b64_json': base64Encode([5, 6, 7]),
+                  },
+                ],
+              }),
+            );
+            await request.response.close();
+          }),
+        );
+
+        final tempDir = await Directory.systemTemp.createTemp(
+          'image-reference-generation-',
+        );
+        addTearDown(() => tempDir.delete(recursive: true));
+        final image = File('${tempDir.path}/reference.png')
+          ..writeAsBytesSync([0, 1, 2]);
+        final service = ImageGenerationService(
+          baseUrl:
+              'http://${referenceServer.address.host}:${referenceServer.port}/v1',
+          apiKey: 'reference-server-secret',
+          model: 'gpt-image-2',
+        );
+
+        final result = await service.generate(
+          '参考图变成水彩',
+          referenceImagePath: image.path,
+        );
+
+        expect(result.bytes, [5, 6, 7]);
+        expect(await seen.future, isNotEmpty);
+      },
+    );
 
     test('edit rejects missing or empty reference image', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

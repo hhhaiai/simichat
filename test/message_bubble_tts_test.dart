@@ -21,6 +21,12 @@ void main() {
     );
 
     expect(find.byIcon(Icons.volume_up_outlined), findsOneWidget);
+    final speakButton = find.ancestor(
+      of: find.byIcon(Icons.volume_up_outlined),
+      matching: find.byType(IconButton),
+    );
+    expect(tester.getSize(speakButton).width, greaterThanOrEqualTo(44));
+    expect(tester.getSize(speakButton).height, greaterThanOrEqualTo(44));
 
     await tester.tap(find.byIcon(Icons.volume_up_outlined));
     await tester.pump();
@@ -64,6 +70,33 @@ void main() {
 
     expect(find.byIcon(Icons.volume_up_outlined), findsNothing);
   });
+
+  testWidgets(
+    'empty assistant content does not create a blank markdown block',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: MessageBubble(
+              role: 'assistant',
+              content: '',
+              isUser: false,
+              attachments: [
+                MessageAttachmentView(
+                  fileName: 'answer.pdf',
+                  fileType: 'pdf',
+                  fileSize: 512,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('answer.pdf'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('speaking assistant message exposes stop action', (tester) async {
     var stops = 0;

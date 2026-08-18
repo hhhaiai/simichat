@@ -9,7 +9,12 @@ class SessionDao extends DatabaseAccessor<AppDatabase> with _$SessionDaoMixin {
   SessionDao(super.db);
 
   Future<List<Session>> getAllSessions() {
-    return (select(sessions)..orderBy([(t) => OrderingTerm.desc(t.lastMessageAt)]))
+    // 置顶会话优先于最近活跃时间排序，源头保证所有调用方一致。
+    return (select(sessions)
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.isPinned),
+            (t) => OrderingTerm.desc(t.lastMessageAt),
+          ]))
         .get();
   }
 
@@ -63,6 +68,11 @@ class SessionDao extends DatabaseAccessor<AppDatabase> with _$SessionDaoMixin {
   Future<void> moveToFolder(String sessionId, String? folderId) {
     return (update(sessions)..where((t) => t.id.equals(sessionId)))
         .write(SessionsCompanion(folderId: Value(folderId)));
+  }
+
+  Future<void> setPinned(String id, bool isPinned) {
+    return (update(sessions)..where((t) => t.id.equals(id)))
+        .write(SessionsCompanion(isPinned: Value(isPinned)));
   }
 
   Future<void> deleteSession(String id) async {

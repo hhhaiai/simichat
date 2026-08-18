@@ -12,7 +12,29 @@ const _audioExtensions = {
   'opus',
   'amr',
 };
-const _allowedAttachmentTypes = {'image', 'pdf', 'audio', 'document'};
+const _videoExtensions = {
+  'mp4',
+  'm4v',
+  'mov',
+  'webm',
+  'avi',
+  'mkv',
+  '3gp',
+  'ogv',
+};
+const _allowedAttachmentTypes = {'image', 'video', 'pdf', 'audio', 'document'};
+
+/// 可被消息附件层识别的媒体类型。
+///
+/// `document` 保留为兜底类型，因此未知扩展名仍然可以作为普通文件上传，
+/// 不会因为厂商自定义格式而被输入框直接吞掉。
+const kSupportedAttachmentTypes = {
+  'image',
+  'video',
+  'audio',
+  'pdf',
+  'document',
+};
 
 String inferAttachmentType(String? extensionOrName) {
   if (extensionOrName == null || extensionOrName.trim().isEmpty) {
@@ -25,6 +47,7 @@ String inferAttachmentType(String? extensionOrName) {
   }
   if (_imageExtensions.contains(ext)) return 'image';
   if (_audioExtensions.contains(ext)) return 'audio';
+  if (_videoExtensions.contains(ext)) return 'video';
   if (ext == 'pdf') return 'pdf';
   return 'document';
 }

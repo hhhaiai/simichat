@@ -4,6 +4,7 @@ import 'model_capability.dart';
 import 'openai_chat_protocol.dart';
 import 'openai_response_protocol.dart';
 import 'openai_embedding_client.dart';
+import 'rerank_client.dart';
 import 'claude_protocol.dart';
 import 'gemini_protocol.dart';
 import 'ollama_protocol.dart';
@@ -286,6 +287,14 @@ class ModelTester {
         model: model,
       );
     }
+    if (ModelCapability.isRerank(capability)) {
+      return _testRerankModel(
+        protocol: protocol,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      );
+    }
     return _testChatModel(
       protocol: protocol,
       baseUrl: baseUrl,
@@ -314,6 +323,36 @@ class ModelTester {
           .timeout(const Duration(seconds: 30));
       if (result.vectors.isEmpty || result.vectors.first.isEmpty) {
         return 'Embedding 模型未返回向量';
+      }
+      return null;
+    } on TimeoutException {
+      return '测试超时（30秒），请检查网络或模型状态';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  static Future<String?> _testRerankModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
+    if (protocol != 'openai_chat' && protocol != 'openai_response') {
+      return '当前协议暂不支持 Rerank 测试';
+    }
+    try {
+      final result = await const RerankClient()
+          .rerank(
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+            model: model,
+            query: 'ping',
+            documents: const ['pong', 'ping pong'],
+          )
+          .timeout(const Duration(seconds: 30));
+      if (result.results.isEmpty) {
+        return 'Rerank 模型未返回结果';
       }
       return null;
     } on TimeoutException {

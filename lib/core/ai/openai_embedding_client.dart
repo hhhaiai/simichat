@@ -50,8 +50,7 @@ class OpenAiEmbeddingClient {
   }
 
   static String buildEmbeddingsUrl(String baseUrl) {
-    final normalized = normalizeOpenAiBaseUrl(baseUrl);
-    return '$normalized/v1/embeddings';
+    return resolveOpenAiEndpoint(baseUrl, 'embeddings');
   }
 
   static EmbeddingResponse parseEmbeddingResponse(

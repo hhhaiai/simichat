@@ -1,10 +1,12 @@
-import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 
 import 'package:ai_chat_app/core/archive/structured_data_backup.dart';
 import 'package:ai_chat_app/core/media/speech_provider_preset.dart';
 import 'package:ai_chat_app/core/media/reference_audio_store.dart';
 import 'package:ai_chat_app/core/media/text_to_speech_service.dart';
+import 'package:ai_chat_app/core/media/xai_custom_voice_adapter.dart';
 import 'package:ai_chat_app/shared/providers/text_to_speech_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +14,179 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test(
+    'xAI custom voice creation decrypts the stored key and persists only the returned voice_id',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final requestSeen = Completer<({String authorization, String body})>();
+      unawaited(
+        server.forEach((request) async {
+          final bytes = await request.fold<List<int>>(
+            <int>[],
+            (buffer, chunk) => buffer..addAll(chunk),
+          );
+          requestSeen.complete((
+            authorization: request.headers.value('authorization') ?? '',
+            body: latin1.decode(bytes),
+          ));
+          request.response
+            ..statusCode = HttpStatus.created
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({'voice_id': 'xy12ab34'}));
+          await request.response.close();
+        }),
+      );
+
+      final temp = await Directory.systemTemp.createTemp(
+        'simichat_xai_provider_voice_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) await temp.delete(recursive: true);
+      });
+      final reference = File('${temp.path}/reference.wav');
+      await reference.writeAsBytes([0x52, 0x49, 0x46, 0x46, 1, 2]);
+
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(textToSpeechConfigProvider.notifier);
+      await notifier.ready;
+      final baseUrl = 'http://${server.address.host}:${server.port}';
+      await notifier.saveXai(
+        enabled: true,
+        baseUrl: baseUrl,
+        voice: 'eve',
+        apiKey: 'xai-decrypted-key',
+      );
+
+      final result = await notifier.createAndSaveXaiCustomVoice(
+        enabled: true,
+        baseUrl: baseUrl,
+        request: XaiCustomVoiceRequest(
+          audioPath: reference.path,
+          fileName: 'reference.wav',
+          name: 'Provider test voice',
+          description: 'Created through provider',
+          language: 'en',
+        ),
+        // Blank means the notifier must decrypt the key already in state.
+        apiKey: '',
+      );
+
+      expect(result.voiceId, 'xy12ab34');
+      expect(container.read(textToSpeechConfigProvider).voice, 'xy12ab34');
+      expect(
+        container.read(textToSpeechConfigProvider).referenceAudioPath,
+        isNull,
+      );
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          kTextToSpeechVoiceStorageKey,
+        ),
+        'xy12ab34',
+      );
+      final seen = await requestSeen.future;
+      expect(seen.authorization, 'Bearer xai-decrypted-key');
+      expect(seen.body, contains('Provider test voice'));
+      expect(seen.body, contains('Created through provider'));
+      expect(seen.body, isNot(contains(reference.path)));
+    },
+  );
+
+  test(
+    'xAI custom voice failure never persists a pseudo voice_id and redacts local paths',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      unawaited(
+        server.forEach((request) async {
+          await request.drain<void>();
+          request.response
+            ..statusCode = HttpStatus.created
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'voice_id': 'not-valid',
+                'error': 'Bearer raw-secret /Users/private/reference.wav',
+              }),
+            );
+          await request.response.close();
+        }),
+      );
+
+      final temp = await Directory.systemTemp.createTemp(
+        'simichat_xai_provider_invalid_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) await temp.delete(recursive: true);
+      });
+      final reference = File('${temp.path}/reference.wav');
+      await reference.writeAsBytes([1, 2, 3]);
+
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(textToSpeechConfigProvider.notifier);
+      await notifier.ready;
+      final baseUrl = 'http://${server.address.host}:${server.port}';
+      await notifier.saveXai(
+        enabled: true,
+        baseUrl: baseUrl,
+        voice: 'eve',
+        apiKey: 'xai-secret',
+      );
+
+      await expectLater(
+        notifier.createAndSaveXaiCustomVoice(
+          enabled: true,
+          baseUrl: baseUrl,
+          request: XaiCustomVoiceRequest(audioPath: reference.path),
+        ),
+        throwsA(
+          isA<XaiCustomVoiceException>()
+              .having((error) => error.message, 'message', contains('voice_id'))
+              .having(
+                (error) => error.message,
+                'message does not contain path',
+                isNot(contains(reference.path)),
+              )
+              .having(
+                (error) => error.message,
+                'message does not contain token',
+                isNot(contains('xai-secret')),
+              ),
+        ),
+      );
+      expect(container.read(textToSpeechConfigProvider).voice, 'eve');
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          kTextToSpeechVoiceStorageKey,
+        ),
+        'eve',
+      );
+    },
+  );
+
+  test('xAI TTS status exposes the custom voice permission boundary', () async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(textToSpeechConfigProvider.notifier);
+    await notifier.ready;
+
+    await notifier.saveXai(
+      enabled: true,
+      voice: 'xy12ab34',
+      apiKey: 'xai-status-key',
+    );
+
+    final config = container.read(textToSpeechConfigProvider);
+    expect(config.statusLabel, contains('/v1/tts'));
+    expect(config.statusLabel, contains('xy12ab34'));
+    expect(config.statusLabel, contains('Enterprise API 权限'));
+  });
+
   test('TTS config persists encrypted key and builds engine/service', () async {
     SharedPreferences.setMockInitialValues({});
     final container = ProviderContainer();
@@ -253,6 +428,32 @@ void main() {
       ),
     );
   });
+
+  test(
+    'custom OpenAI-compatible voice design stays configurable but not ready',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(textToSpeechConfigProvider.notifier);
+      await notifier.ready;
+
+      await notifier.saveOpenAiCompatible(
+        enabled: true,
+        baseUrl: 'https://custom.example.test/v1',
+        model: 'mimo-v2.5-tts-voicedesign',
+        voice: 'alloy',
+        apiKey: 'custom-tts-key',
+        style: '温柔自然的年轻女声',
+      );
+
+      final config = container.read(textToSpeechConfigProvider);
+      expect(config.style, '温柔自然的年轻女声');
+      expect(config.isConfigured, isFalse);
+      expect(config.statusLabel, contains('未声明'));
+      expect(container.read(textToSpeechEngineProvider), isNull);
+    },
+  );
 
   test(
     'voice clone config archives, reloads, replaces and clears private wav',

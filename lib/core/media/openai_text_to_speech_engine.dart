@@ -163,8 +163,14 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
   final String? referenceAudioPath;
 
   @override
-  Future<List<int>> synthesize(TextToSpeechInput input) async {
-    final normalizedBaseUrl = normalizeTextToSpeechBaseUrl(baseUrl);
+  Future<List<int>> synthesize(
+    TextToSpeechInput input, {
+    CancelToken? cancelToken,
+  }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const TextToSpeechException('TTS 请求已取消');
+    }
+    normalizeTextToSpeechBaseUrl(baseUrl);
     final normalizedModel = normalizeTextToSpeechModel(model);
     final normalizedVoice = normalizeTextToSpeechVoice(input.voice);
     final normalizedText = normalizeTextToSpeechInput(input.text);
@@ -183,7 +189,7 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
     final dio = createDio();
     try {
       final response = await dio.post<List<int>>(
-        '$normalizedBaseUrl/v1/audio/speech',
+        resolveOpenAiEndpoint(baseUrl, 'audio/speech'),
         options: Options(
           headers: {
             'Authorization': 'Bearer $token',
@@ -203,8 +209,15 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
             referenceAudioPath: referenceAudioPath,
           ),
         ),
+        cancelToken: cancelToken,
       );
+      if (cancelToken?.isCancelled == true) {
+        throw const TextToSpeechException('TTS 请求已取消');
+      }
       final bytes = response.data ?? const <int>[];
+      if (bytes.isEmpty) {
+        throw const TextToSpeechException('TTS 响应为空，无法播放');
+      }
       if (bytes.length > kTextToSpeechMaxAudioBytes) {
         throw const TextToSpeechException('TTS 音频过大，已拒绝保存');
       }

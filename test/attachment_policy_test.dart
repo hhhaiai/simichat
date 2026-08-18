@@ -3,10 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('attachment policy', () {
-    test('infers image, audio, pdf, and document attachment types', () {
+    test('infers image, audio, video, pdf, and document attachment types', () {
       expect(inferAttachmentType('photo.PNG'), 'image');
       expect(inferAttachmentType('voice.M4A'), 'audio');
       expect(inferAttachmentType('recording.wav'), 'audio');
+      expect(inferAttachmentType('movie.MP4'), 'video');
+      expect(inferAttachmentType('clip.webm'), 'video');
       expect(inferAttachmentType('report.pdf'), 'pdf');
       expect(inferAttachmentType('notes.md'), 'document');
       expect(inferAttachmentType(null), 'document');
@@ -50,6 +52,16 @@ void main() {
       );
 
       expect(error, isNull);
+
+      expect(
+        validateAttachmentMetadata(
+          fileName: 'movie.mp4',
+          fileType: 'video',
+          fileSize: 1024,
+          currentCount: 0,
+        ),
+        isNull,
+      );
     });
   });
 }

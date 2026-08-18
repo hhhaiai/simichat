@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:ai_chat_app/core/media/audio_player.dart';
 import 'package:ai_chat_app/core/media/text_to_speech_service.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -38,7 +39,10 @@ void main() {
 
 class _StaticTextToSpeechEngine implements TextToSpeechEngine {
   @override
-  Future<List<int>> synthesize(TextToSpeechInput input) async => [1, 2, 3];
+  Future<List<int>> synthesize(
+    TextToSpeechInput input, {
+    CancelToken? cancelToken,
+  }) async => [1, 2, 3];
 }
 
 class _CountingAudioPlayer implements AudioPlayerPlatform {

@@ -8,6 +8,15 @@ final allModelsProvider = FutureProvider<List<ChannelModelWithChannel>>((ref) {
   return ref.watch(channelDaoProvider).getChatModels();
 });
 
+/// All models belonging to enabled channels, including media-only and
+/// embedding rows.  The chat selector must continue to use
+/// [allModelsProvider]; settings pages that configure a non-chat route use
+/// this unfiltered catalog instead.
+final allConfiguredModelsProvider =
+    FutureProvider<List<ChannelModelWithChannel>>((ref) {
+      return ref.watch(channelDaoProvider).getAllModels();
+    });
+
 /// 所有渠道列表
 final channelsProvider = FutureProvider<List<ModelChannel>>((ref) {
   return ref.watch(channelDaoProvider).getAllChannels();
@@ -25,6 +34,7 @@ final selectedModelIdProvider = StateProvider<String?>((ref) => null);
 /// 刷新模型列表
 void refreshModels(WidgetRef ref) {
   ref.invalidate(allModelsProvider);
+  ref.invalidate(allConfiguredModelsProvider);
   ref.invalidate(channelsProvider);
 }
 

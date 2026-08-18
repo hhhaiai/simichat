@@ -15,6 +15,7 @@ import 'dao/prompt_dao.dart';
 import 'dao/mcp_dao.dart';
 import 'dao/skill_dao.dart';
 import 'dao/persona_audit_log_dao.dart';
+import 'dao/media_job_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -32,6 +33,7 @@ part 'app_database.g.dart';
     McpServers,
     Skills,
     PersonaAuditLogs,
+    MediaJobs,
   ],
   daos: [
     SessionDao,
@@ -44,6 +46,7 @@ part 'app_database.g.dart';
     McpDao,
     SkillDao,
     PersonaAuditLogDao,
+    MediaJobDao,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -51,7 +54,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -98,6 +101,36 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 8) {
         await m.createTable(personaAuditLogs);
+      }
+      if (from < 9) {
+        await m.createTable(mediaJobs);
+      }
+      // schema 9 已经可能存在 media_jobs；从该版本升级时只添加 leaseId。
+      // 从更早版本创建新表时，createTable(mediaJobs) 已经包含该列，不能重复添加。
+      if (from >= 9 && from < 10) {
+        await m.addColumn(mediaJobs, mediaJobs.leaseId);
+      }
+      // schema 9/10 已经可能存在 media_jobs；从更早版本新建表时，
+      // createTable(mediaJobs) 已经包含下面这些列，不能重复添加。
+      if (from >= 9 && from < 11) {
+        await m.addColumn(mediaJobs, mediaJobs.channelModelId);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryUserMessageId);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryAssistantMessageId);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryAttachmentId);
+        await m.addColumn(mediaJobs, mediaJobs.deliverySourceAttachmentId);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryPhase);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryUserContent);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryAssistantContent);
+        await m.addColumn(mediaJobs, mediaJobs.deliveryFileType);
+        await m.addColumn(mediaJobs, mediaJobs.deliverySourcePath);
+        await m.addColumn(mediaJobs, mediaJobs.deliverySourceFileName);
+        await m.addColumn(mediaJobs, mediaJobs.deliverySourceFileType);
+      }
+      if (from < 12) {
+        await m.addColumn(channelModels, channelModels.capabilities);
+      }
+      if (from < 13) {
+        await m.addColumn(sessions, sessions.isPinned);
       }
     },
   );

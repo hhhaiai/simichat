@@ -5,6 +5,7 @@ import 'package:ai_chat_app/features/settings/settings_page.dart';
 import 'package:ai_chat_app/shared/providers/audio_transcription_provider.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
 import 'package:ai_chat_app/shared/providers/text_to_speech_provider.dart';
+import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -185,6 +186,44 @@ void main() {
     expect(find.text('whisper-large-v3-turbo'), findsOneWidget);
   });
 
+  testWidgets(
+    'STT dialog makes xAI/Grok model and language boundary explicit',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: SettingsPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('语音输入'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('语音输入'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('OpenAI 官方').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('xAI Voice').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('厂商：xAI / Grok Voice REST'), findsOneWidget);
+      expect(find.widgetWithText(TextField, '模型'), findsNothing);
+      expect(
+        find.textContaining('模型字段不是 xAI Voice REST 的请求参数'),
+        findsOneWidget,
+      );
+      expect(find.text('语言（xAI BCP-47 / auto）'), findsOneWidget);
+    },
+  );
+
   testWidgets('settings page reflects persisted OpenAI compatible tts config', (
     tester,
   ) async {
@@ -225,12 +264,92 @@ void main() {
     expect(find.textContaining('TTS API Key 加密保存在本机'), findsOneWidget);
     expect(find.textContaining('tts-ui-key'), findsNothing);
   });
+
+  testWidgets('TTS dialog makes xAI custom voice boundary explicit', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('语音播报'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('语音播报'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('OpenAI 官方').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('xAI Voice').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('厂商：xAI / Grok Voice REST'), findsOneWidget);
+    expect(find.widgetWithText(TextField, '模型'), findsNothing);
+    expect(
+      find.widgetWithText(TextField, 'voice_id（内置或已创建 custom voice）'),
+      findsOneWidget,
+    );
+    expect(find.text('选择参考音频'), findsOneWidget);
+    expect(find.text('创建并保存 voice_id'), findsOneWidget);
+    expect(find.text('name（可选）'), findsOneWidget);
+    expect(find.text('description（可选）'), findsOneWidget);
+    expect(find.text('官方 metadata（可选）'), findsOneWidget);
+    expect(find.textContaining('Enterprise 权限'), findsOneWidget);
+    expect(find.text('声音风格描述'), findsNothing);
+  });
+
+  testWidgets(
+    'settings page shows persisted xAI custom voice permission status',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        kTextToSpeechEnabledStorageKey: true,
+        kTextToSpeechProviderStorageKey: kTextToSpeechProviderXai,
+        kTextToSpeechBaseUrlStorageKey: 'https://api.x.ai',
+        kTextToSpeechModelStorageKey: '',
+        kTextToSpeechVoiceStorageKey: 'xy12ab34',
+        kTextToSpeechApiKeyStorageKey: KeyEncryptor.encrypt('xai-ui-key'),
+      });
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: SettingsPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('语音播报'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('xAI TTS 已配置'), findsOneWidget);
+      expect(find.textContaining('xy12ab34'), findsOneWidget);
+      expect(find.textContaining('团队/Enterprise API 权限'), findsOneWidget);
+    },
+  );
   simiRouterTtsAndAsrUiTests();
 }
 
 class _FakeSpeechEngine implements SpeechToTextEngine {
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async => 'text';
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async => 'text';
 }
 
 class _VoiceInputSimiRouterHelper {

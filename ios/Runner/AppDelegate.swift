@@ -13,6 +13,9 @@ import workmanager_apple
   private var nativeSpeechToTextChannel: FlutterMethodChannel?
   private var deepLinkChannel: FlutterMethodChannel?
   private var backgroundRefreshStatusChannel: FlutterMethodChannel?
+  private var realtimePcmAudio: RealtimePcmAudio?
+  private var realtimePcmAudioMethodChannel: FlutterMethodChannel?
+  private var realtimePcmAudioEventChannel: FlutterEventChannel?
   private var nodeRuntime: SimiChatNodeRuntime?
   private var pendingInitialDeepLink: String?
   private var audioRecorder: AVAudioRecorder?
@@ -55,6 +58,7 @@ import workmanager_apple
     registerDataExportShareChannel(messenger: messenger)
     registerVoiceRecorderChannel(messenger: messenger)
     registerAudioPlayerChannel(messenger: messenger)
+    registerRealtimePcmAudioChannel(messenger: messenger)
     registerNativeSpeechToTextChannel(messenger: messenger)
     registerDeepLinkChannel(messenger: messenger)
     registerBackgroundRefreshStatusChannel(messenger: messenger)
@@ -209,6 +213,27 @@ import workmanager_apple
     }
     audioPlayerChannel = channel
     registerAudioSessionInterruptionObserver()
+  }
+
+  private func registerRealtimePcmAudioChannel(messenger: FlutterBinaryMessenger) {
+    let audio = RealtimePcmAudio()
+    realtimePcmAudio = audio
+
+    let methodChannel = FlutterMethodChannel(
+      name: RealtimePcmAudio.methodChannelName,
+      binaryMessenger: messenger
+    )
+    methodChannel.setMethodCallHandler { [weak audio] call, result in
+      audio?.handle(call: call, result: result)
+    }
+    realtimePcmAudioMethodChannel = methodChannel
+
+    let eventChannel = FlutterEventChannel(
+      name: RealtimePcmAudio.eventChannelName,
+      binaryMessenger: messenger
+    )
+    eventChannel.setStreamHandler(audio)
+    realtimePcmAudioEventChannel = eventChannel
   }
 
   private func registerNativeSpeechToTextChannel(messenger: FlutterBinaryMessenger) {

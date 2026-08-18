@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/media/voice_recorder.dart';
+import 'package:ai_chat_app/core/media/attachment_export_service.dart';
 import 'package:ai_chat_app/shared/widgets/chat_input_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,11 +12,15 @@ void main() {
     tester,
   ) async {
     final audioFile = _createAudioFile();
+    final draftRoot = Directory.systemTemp.createTempSync(
+      'simichat_voice_draft_test_',
+    );
     addTearDown(() {
       if (audioFile.existsSync()) audioFile.deleteSync();
       final parent = audioFile.parent;
       if (parent.existsSync()) parent.deleteSync();
     });
+    addTearDown(() => draftRoot.delete(recursive: true));
     final controller = TextEditingController();
     final focusNode = FocusNode();
     final hasText = ValueNotifier(false);
@@ -30,6 +36,7 @@ void main() {
         durationMs: 1200,
       ),
     );
+    final attachmentAdded = Completer<void>();
     List<PendingAttachment>? sentAttachments;
 
     await tester.pumpWidget(
@@ -42,6 +49,13 @@ void main() {
             hasTextNotifier: hasText,
             showVoiceInput: true,
             voiceRecorder: recorder,
+            draftArchive: AttachmentDraftArchive(rootDirectory: draftRoot),
+            onDraftChanged: (draft) {
+              if (draft.attachments.isNotEmpty &&
+                  !attachmentAdded.isCompleted) {
+                attachmentAdded.complete();
+              }
+            },
             onSend: (text, attachments) async {
               sentAttachments = attachments;
               return true;
@@ -56,7 +70,17 @@ void main() {
     expect(recorder.started, isTrue);
     expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('voice-record-button')));
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('voice-record-button')));
+      await tester.pump();
+    });
+    for (var i = 0; i < 20 && !attachmentAdded.isCompleted; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+    expect(attachmentAdded.isCompleted, isTrue);
     await tester.pump();
     expect(recorder.stopped, isTrue);
     expect(find.text('voice.m4a'), findsOneWidget);
@@ -66,7 +90,8 @@ void main() {
     await tester.pump();
     expect(sentAttachments, hasLength(1));
     expect(sentAttachments!.single.type, 'audio');
-    expect(sentAttachments!.single.path, audioFile.path);
+    expect(sentAttachments!.single.path, isNot(audioFile.path));
+    expect(sentAttachments!.single.path, contains('composer_drafts'));
     expect(sentAttachments!.single.name, 'voice.m4a');
     expect(find.text('voice.m4a'), findsNothing);
   });

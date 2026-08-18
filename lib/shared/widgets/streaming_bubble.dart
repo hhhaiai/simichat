@@ -9,7 +9,12 @@ class StreamingBubble extends StatelessWidget {
   final String thinking;
   final String? modelName;
 
-  const StreamingBubble({super.key, required this.content, this.thinking = '', this.modelName});
+  const StreamingBubble({
+    super.key,
+    required this.content,
+    this.thinking = '',
+    this.modelName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -106,40 +111,40 @@ class _StreamingThinkingBlockState extends State<_StreamingThinkingBlock> {
           children: [
             InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.psychology_alt_outlined,
-                    size: 15,
-                    color: scheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '思考过程',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.psychology_alt_outlined,
+                      size: 15,
                       color: scheme.primary,
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ],
+                    const SizedBox(width: 6),
+                    Text(
+                      '思考过程',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 16,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ],
+                ),
               ),
             ),
             if (_expanded) ...[
               const SizedBox(height: 6),
               SelectableText(
                 widget.thinking,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
             ],
           ],

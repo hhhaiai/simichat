@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import '../../ai/model_capability.dart';
 import '../app_database.dart';
@@ -53,23 +55,29 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
               modelChannels.id.equalsExp(channelModels.channelId),
             ),
           ])
-          ..where(
-            modelChannels.isEnabled.equals(true) &
-                channelModels.capability.isIn([
-                  ModelCapability.chat,
-                  ModelCapability.vision,
-                  ModelCapability.reasoner,
-                ]),
-          )
+          ..where(modelChannels.isEnabled.equals(true))
           ..orderBy([OrderingTerm.asc(modelChannels.name)]);
 
     final results = await query.get();
-    return results.map((row) {
+    final models = results.map((row) {
       return ChannelModelWithChannel(
         channelModel: row.readTable(channelModels),
         channel: row.readTable(modelChannels),
       );
     }).toList();
+
+    // 导入或旧版数据中的能力元数据可能已过时（例如把图片生成模型持久化为
+    // `chat`）。同时基于实际模型名和存储能力应用严格选择器谓词，避免明确的
+    // 媒体 / Embedding 专用模型进入聊天选择器，同时保留 Chat、Vision、Reasoner。
+    return models
+        .where(
+          (model) => ModelCapability.isChatSelectableModel(
+            modelId: model.channelModel.modelName,
+            capability: model.channelModel.capability,
+            capabilities: model.capabilities,
+          ),
+        )
+        .toList();
   }
 
   Future<int> createChannel({
@@ -134,13 +142,20 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
     required String channelId,
     required String modelName,
     String capability = ModelCapability.chat,
+    Iterable<String> capabilities = const <String>[],
   }) {
+    final normalizedCapability = ModelCapability.normalize(capability);
+    final normalizedCapabilities = <String>{
+      normalizedCapability,
+      ...capabilities.map(ModelCapability.normalize),
+    }.toList()..sort();
     return into(channelModels).insert(
       ChannelModelsCompanion.insert(
         id: id,
         channelId: channelId,
         modelName: modelName,
-        capability: Value(ModelCapability.normalize(capability)),
+        capability: Value(normalizedCapability),
+        capabilities: Value(jsonEncode(normalizedCapabilities)),
       ),
     );
   }
@@ -191,5 +206,29 @@ class ChannelModelWithChannel {
     required this.channel,
   });
 
+  Set<String> get capabilities => decodeModelCapabilities(
+    channelModel.capability,
+    channelModel.capabilities,
+  );
+
   String get displayLabel => '${channel.name} / ${channelModel.modelName}';
+}
+
+Set<String> decodeModelCapabilities(String? primary, String? encoded) {
+  final result = <String>{ModelCapability.normalize(primary)};
+  final raw = encoded?.trim();
+  if (raw == null || raw.isEmpty) return result;
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is Iterable) {
+      result.addAll(
+        decoded
+            .map((value) => ModelCapability.normalize(value?.toString()))
+            .where(ModelCapability.all.contains),
+      );
+    }
+  } catch (_) {
+    // Corrupt or pre-migration metadata must not hide the primary capability.
+  }
+  return result;
 }

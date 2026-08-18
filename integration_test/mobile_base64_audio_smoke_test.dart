@@ -10,6 +10,7 @@ import 'package:ai_chat_app/main.dart';
 import 'package:ai_chat_app/shared/providers/audio_transcription_provider.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
 import 'package:drift/native.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -156,7 +157,10 @@ class _FakeSpeechToTextEngine implements SpeechToTextEngine {
   final inputs = <AudioTranscriptionInput>[];
 
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
     inputs.add(input);
     return transcript;
   }

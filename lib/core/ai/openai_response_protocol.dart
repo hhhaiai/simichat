@@ -1,11 +1,20 @@
 import 'dart:convert';
 import 'package:dio/dio.dart' show CancelToken;
-import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
 import 'sse_helper.dart';
 
 class OpenAiResponseProtocol implements AiProtocol {
+  // Responses has a first-class `input_file` part for PDFs. Ordinary text
+  // documents deliberately stay on the bounded UTF-8 extraction path in the
+  // chat provider; advertising them here would send the same document twice
+  // (once as extracted text and once as a file part) and would make support
+  // depend on a provider-specific interpretation of arbitrary MIME types.
+  static const _nativeAttachmentTypes = {'image', 'pdf'};
+
+  @override
+  Set<String> get nativeAttachmentTypes => _nativeAttachmentTypes;
+
   static List<AiChunk> extractChunksFromEventData(
     String eventData, {
     bool allowCompletedFallback = true,
@@ -57,6 +66,11 @@ class OpenAiResponseProtocol implements AiProtocol {
       return chunks;
     }
 
+    if (type == 'response.output_text.done') {
+      addChunk(content: json['text'] as String?);
+      return chunks;
+    }
+
     if (type == 'response.output_item.done') {
       final item = (json['item'] as Map?)?.cast<String, dynamic>();
       if (item != null) {
@@ -88,8 +102,7 @@ class OpenAiResponseProtocol implements AiProtocol {
     CancelToken? cancelToken,
     bool jsonResponse = false,
   }) async* {
-    final normalized = normalizeOpenAiBaseUrl(baseUrl);
-    final url = '$normalized/v1/responses';
+    final url = resolveOpenAiEndpoint(baseUrl, 'responses');
 
     final inputList = <Map<String, dynamic>>[];
     if (systemPrompt != null) {
@@ -97,27 +110,42 @@ class OpenAiResponseProtocol implements AiProtocol {
     }
     for (final m in messages) {
       if (m.attachments != null && m.attachments!.isNotEmpty) {
+        for (final attachment in m.attachments!) {
+          if (!nativeAttachmentTypes.contains(attachment.type)) {
+            throwUnsupportedAttachment('openai_response', attachment.type);
+          }
+        }
         final loaded = await loadAttachments(m.attachments!);
         final content = <Map<String, dynamic>>[];
         if (m.content.isNotEmpty) {
           content.add({'type': 'input_text', 'text': m.content});
         }
         for (final att in loaded) {
-          if (att.type == 'image') {
+          final attachmentType = att.type.trim().toLowerCase();
+          if (attachmentType == 'image' &&
+              nativeAttachmentTypes.contains('image')) {
             content.add({
               'type': 'input_image',
               'image_url': 'data:${att.mimeType};base64,${att.base64}',
             });
-          } else if (att.type == 'audio' && att.base64.isNotEmpty) {
+          } else if (attachmentType == 'pdf' &&
+              nativeAttachmentTypes.contains('pdf')) {
+            if (att.base64.isEmpty || att.fileName?.trim().isEmpty != false) {
+              throw AttachmentLoadException(
+                attachmentType: attachmentType,
+                kind: AttachmentLoadFailureKind.empty,
+                message: '附件内容为空，未发送；已保留输入和附件。',
+              );
+            }
             content.add({
-              'type': 'input_text',
-              'text': buildAudioAttachmentText(att),
+              'type': 'input_file',
+              'file_data': 'data:${att.mimeType};base64,${att.base64}',
+              'filename': att.fileName,
             });
+          } else if (attachmentType == 'audio') {
+            throwUnsupportedAudioAttachment('openai_response');
           } else {
-            content.add({
-              'type': 'input_text',
-              'text': _unsupportedAttachmentText(att.type),
-            });
+            throwUnsupportedAttachment('openai_response', attachmentType);
           }
         }
         inputList.add({'role': m.role, 'content': content});
@@ -137,70 +165,144 @@ class OpenAiResponseProtocol implements AiProtocol {
 
     var sawContentDelta = false;
     var sawThinkingDelta = false;
+    var emittedCompletedFallback = false;
+
+    List<AiChunk> fallbackChunksWithoutSeenDeltas(String data) {
+      return extractChunksFromEventData(data, allowCompletedFallback: true)
+          .where((chunk) {
+            final hasContent = chunk.content?.isNotEmpty == true;
+            final hasThinking = chunk.thinking?.isNotEmpty == true;
+            return (hasContent && !sawContentDelta) ||
+                (hasThinking && !sawThinkingDelta);
+          })
+          .toList(growable: false);
+    }
 
     await for (final event in parseSseStream(byteStream)) {
-      try {
-        final previewChunks = extractChunksFromEventData(
-          event.data,
-          allowCompletedFallback: false,
-        );
-        for (final chunk in previewChunks) {
-          if (chunk.content != null && chunk.content!.isNotEmpty) {
-            sawContentDelta = true;
-          }
-          if (chunk.thinking != null && chunk.thinking!.isNotEmpty) {
-            sawThinkingDelta = true;
-          }
-          yield chunk;
+      final json = _decodeEvent(event.data);
+      _throwForTerminalEvent(json, eventType: event.eventType);
+      final previewChunks = extractChunksFromEventData(
+        event.data,
+        allowCompletedFallback: false,
+      );
+      for (final chunk in previewChunks) {
+        if (chunk.content != null && chunk.content!.isNotEmpty) {
+          sawContentDelta = true;
         }
+        if (chunk.thinking != null && chunk.thinking!.isNotEmpty) {
+          sawThinkingDelta = true;
+        }
+        yield chunk;
+      }
 
-        final json = jsonDecode(event.data) as Map<String, dynamic>;
-        final type = json['type'] as String?;
-        if (type == 'response.completed') {
-          if (!sawContentDelta || !sawThinkingDelta) {
-            final fallbackChunks = extractChunksFromEventData(
-              event.data,
-              allowCompletedFallback: true,
-            );
-            for (final chunk in fallbackChunks) {
-              if (chunk.content != null &&
-                  chunk.content!.isNotEmpty &&
-                  sawContentDelta) {
-                continue;
-              }
-              if (chunk.thinking != null &&
-                  chunk.thinking!.isNotEmpty &&
-                  sawThinkingDelta) {
-                continue;
-              }
-              yield chunk;
-            }
-          }
-          return;
-        } else if ((type == 'response.output_item.done' ||
-                type == 'response.content_part.done') &&
-            !sawContentDelta &&
-            !sawThinkingDelta) {
-          final fallbackChunks = extractChunksFromEventData(
-            event.data,
-            allowCompletedFallback: true,
-          );
+      final type = json['type'] as String?;
+      if (type == 'response.completed') {
+        if (!emittedCompletedFallback) {
+          final fallbackChunks = fallbackChunksWithoutSeenDeltas(event.data);
           for (final chunk in fallbackChunks) {
             yield chunk;
           }
+          emittedCompletedFallback = true;
         }
-      } catch (e) {
-        debugPrint(
-          '[OpenAI Response] SSE parse error: $e\nLine: ${event.data}',
-        );
+        return;
+      }
+      if ((type == 'response.output_item.done' ||
+              type == 'response.content_part.done' ||
+              type == 'response.output_text.done') &&
+          !emittedCompletedFallback) {
+        final fallbackChunks = fallbackChunksWithoutSeenDeltas(event.data);
+        for (final chunk in fallbackChunks) {
+          yield chunk;
+        }
+        emittedCompletedFallback = fallbackChunks.isNotEmpty;
       }
     }
   }
-}
 
-String _unsupportedAttachmentText(String type) {
-  if (type == 'audio') {
-    return '[附件: audio] 当前 OpenAI Responses 模型不支持读取该音频文件，请先转写后发送。';
+  static Map<String, dynamic> _decodeEvent(String data) {
+    try {
+      final decoded = jsonDecode(data);
+      if (decoded is! Map) throw const FormatException('not an object');
+      return decoded.cast<String, dynamic>();
+    } catch (_) {
+      throw ProtocolStreamException(
+        'OpenAI Responses 流事件格式无效',
+        protocol: 'openai_response',
+        kind: ProtocolStreamErrorKind.malformed,
+        code: 'invalid_event',
+      );
+    }
   }
-  return '[附件: $type] 当前协议不支持直接上传该类型附件。';
+
+  static void _throwForTerminalEvent(
+    Map<String, dynamic> json, {
+    String? eventType,
+  }) {
+    final type = (json['type'] ?? eventType)?.toString().toLowerCase() ?? '';
+    final error =
+        json['error'] ??
+        (json['response'] is Map ? (json['response'] as Map)['error'] : null);
+    if (error != null || type == 'error' || type == 'response.error') {
+      throw ProtocolStreamException(
+        _remoteErrorMessage(error ?? json),
+        protocol: 'openai_response',
+        kind: ProtocolStreamErrorKind.failed,
+        code: _remoteErrorCode(error ?? json),
+      );
+    }
+    if (type == 'response.refusal.delta' || type == 'response.refusal.done') {
+      throw ProtocolStreamException(
+        'OpenAI Responses 响应被安全策略拒绝',
+        protocol: 'openai_response',
+        kind: ProtocolStreamErrorKind.safety,
+        code: type,
+      );
+    }
+    if (type == 'response.failed' || type == 'response.incomplete') {
+      throw ProtocolStreamException(
+        type == 'response.incomplete'
+            ? 'OpenAI Responses 响应未完整结束'
+            : 'OpenAI Responses 上游生成失败',
+        protocol: 'openai_response',
+        kind: type == 'response.incomplete'
+            ? ProtocolStreamErrorKind.incomplete
+            : ProtocolStreamErrorKind.failed,
+        code: type,
+      );
+    }
+    final response = json['response'];
+    if (response is! Map) return;
+    final status = response['status']?.toString().toLowerCase();
+    if (status == 'failed' || status == 'incomplete') {
+      throw ProtocolStreamException(
+        status == 'incomplete'
+            ? 'OpenAI Responses 响应未完整结束'
+            : 'OpenAI Responses 上游生成失败',
+        protocol: 'openai_response',
+        kind: status == 'incomplete'
+            ? ProtocolStreamErrorKind.incomplete
+            : ProtocolStreamErrorKind.failed,
+        code: status,
+      );
+    }
+  }
+
+  static String _remoteErrorMessage(dynamic value) {
+    if (value is Map) {
+      final message = value['message'] ?? value['detail'] ?? value['error'];
+      if (message is String && message.trim().isNotEmpty) return message;
+    }
+    if (value is String && value.trim().isNotEmpty) return value;
+    return 'OpenAI Responses 上游返回错误';
+  }
+
+  static String? _remoteErrorCode(dynamic value) {
+    if (value is Map) {
+      final code = value['code'] ?? value['type'] ?? value['status'];
+      if (code != null && code.toString().trim().isNotEmpty) {
+        return code.toString();
+      }
+    }
+    return null;
+  }
 }

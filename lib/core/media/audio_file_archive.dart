@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../storage/atomic_file_writer.dart';
+
 class ArchivedAudioFile {
   final String localPath;
   final int fileSize;
@@ -52,7 +54,7 @@ class AudioFileArchive {
     final sourcePathNormalized = p.normalize(source.absolute.path);
     final destinationPathNormalized = p.normalize(destination.absolute.path);
     if (sourcePathNormalized != destinationPathNormalized) {
-      await source.copy(destination.path);
+      await copyFileAtomically(source, destination);
     }
 
     return ArchivedAudioFile(

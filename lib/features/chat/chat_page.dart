@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/ai/universal_media_service.dart';
 import '../../core/ai/model_capability.dart';
 import '../../core/ai/model_switch_record.dart';
 import '../../core/media/audio_player.dart';
 import '../../core/media/audio_transcript_archive.dart';
+import '../../core/media/attachment_export_service.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/channel_provider.dart';
@@ -16,11 +19,26 @@ import '../../shared/providers/database_provider.dart';
 import '../../shared/providers/prompt_provider.dart';
 import '../../shared/providers/session_provider.dart';
 import '../../shared/providers/text_to_speech_provider.dart';
+import '../../shared/providers/universal_media_provider.dart';
 import '../../shared/widgets/message_bubble.dart';
+import '../../shared/widgets/image_viewer.dart';
 import '../../shared/widgets/streaming_bubble.dart';
+import '../../shared/widgets/realtime_voice_panel.dart';
 import 'image_edit_dialog.dart';
 import '../../shared/widgets/chat_input_bar.dart'
-    show ChatInputBar, PendingAttachment;
+    show ChatComposerDraft, ChatInputBar, PendingAttachment;
+
+class _MediaRetryDraft {
+  const _MediaRetryDraft({
+    required this.kind,
+    required this.prompt,
+    required this.attachments,
+  });
+
+  final UniversalMediaKind kind;
+  final String prompt;
+  final List<PendingAttachment> attachments;
+}
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
@@ -35,12 +53,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final _focusNode = FocusNode();
   final _hasTextNotifier = ValueNotifier<bool>(false);
 
-  /// 深度思考开关（会话内临时状态）：开启后发送走 reasoner 模型。
+  /// 深度思考开关（会话内草稿状态）：开启后发送走 reasoner 模型。
   final _deepThinkEnabled = ValueNotifier<bool>(false);
 
-  // 输入草稿缓存：按 sessionId 保存未发送文本
-  static final Map<String, String> _draftCache = {};
+  // 输入草稿缓存：按 sessionId 保存文本、附件和深度思考状态。
+  static final Map<String, ChatComposerDraft> _draftCache = {};
   static const _maxDraftCacheSize = 50;
+  String? _draftSessionId;
 
   // 滚动监听：距底部超过一屏时显示 FAB
   bool _showScrollFab = false;
@@ -50,11 +69,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // 会话内临时模型覆盖
   String? _pendingModelId;
   bool _isSubmitting = false;
+  // Composer 动作可能在会话切换后才返回。generation 用来区分“仍在运行”
+  // 和用户已经 Stop 的旧动作；sessionId 则用来阻止旧动作清理当前会话的
+  // composer。持久化层仍然使用动作开始时捕获的 sessionId。
+  int _composerOperationGeneration = 0;
+  int? _activeComposerOperationGeneration;
+  String? _activeComposerOperationSessionId;
+  // 失败 / 取消的媒体任务按 session 保存原始提示词和实际参考附件。
+  // 不把凭据或媒体 bytes 放入这里；重试只复用用户仍持有的 draft 路径。
+  final Map<String, _MediaRetryDraft> _mediaRetryDrafts = {};
   String? _speakingMessageId;
   String? _speakingAudioPath;
+  String? _playingAttachmentPath;
   String? _lastTerminalSpeechAudioPath;
+  String? _lastTerminalPlaybackPath;
   bool _isPreparingSpeech = false;
   int _speechRequestId = 0;
+  int _attachmentPlaybackRequestId = 0;
   String? _blockedSendWhileOfflineSessionId;
   StreamSubscription<AudioPlaybackEvent>? _audioPlaybackSubscription;
 
@@ -63,6 +94,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     super.initState();
     _inputController.addListener(_onTextChanged);
     _scrollController.addListener(_onScrollChanged);
+    // ref.listen 不会回放已存在的初始值；首次 build 可能已经有活动会话，
+    // 此时也必须恢复该会话的附件 / 文本 / 深度思考草稿，而不是只在 A→B
+    // 切换时恢复。
+    _restoreComposerDraft(ref.read(activeSessionIdProvider));
     _audioPlaybackSubscription = ref
         .read(audioPlayerProvider)
         .events
@@ -85,17 +120,39 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   void _handleAudioPlaybackEvent(AudioPlaybackEvent event) {
     if (!mounted) return;
     final path = event.path;
-    if (path == null) return;
     switch (event.type) {
       case AudioPlaybackEventType.completed:
       case AudioPlaybackEventType.stopped:
       case AudioPlaybackEventType.error:
+        // Native error callbacks can omit path. The audio channel is shared
+        // by TTS and message attachments, so a pathless terminal event must
+        // still invalidate both UI states and any pending preparation.
+        if (path == null) {
+          _speechRequestId++;
+          _attachmentPlaybackRequestId++;
+          setState(() {
+            _speakingMessageId = null;
+            _speakingAudioPath = null;
+            _isPreparingSpeech = false;
+            _playingAttachmentPath = null;
+          });
+          return;
+        }
         _lastTerminalSpeechAudioPath = path;
-        if (_speakingAudioPath != path) return;
+        _lastTerminalPlaybackPath = path;
+        var changed = false;
+        if (_playingAttachmentPath == path) {
+          changed = true;
+        }
+        if (_speakingAudioPath == path) changed = true;
+        if (!changed) return;
         setState(() {
-          _speakingMessageId = null;
-          _speakingAudioPath = null;
-          _isPreparingSpeech = false;
+          if (_playingAttachmentPath == path) _playingAttachmentPath = null;
+          if (_speakingAudioPath == path) {
+            _speakingMessageId = null;
+            _speakingAudioPath = null;
+            _isPreparingSpeech = false;
+          }
         });
     }
   }
@@ -105,20 +162,249 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (_hasTextNotifier.value != hasText) {
       _hasTextNotifier.value = hasText;
     }
-    // 缓存当前草稿
+    // 缓存当前 session 的文本；切换会话时由 listener 先更新
+    // [_draftSessionId]，避免把恢复动作写回旧会话。
     final currentId = ref.read(activeSessionIdProvider);
-    if (currentId != null) {
-      _draftCache[currentId] = _inputController.text;
-      // 限制缓存大小，移除最旧的条目
-      if (_draftCache.length > _maxDraftCacheSize) {
-        final keysToRemove = _draftCache.keys
-            .take(_draftCache.length - _maxDraftCacheSize)
-            .toList();
-        for (final key in keysToRemove) {
-          _draftCache.remove(key);
-        }
+    if (currentId != null && currentId == _draftSessionId) {
+      _saveDraft(currentId, text: _inputController.text);
+    }
+  }
+
+  bool _isCurrentOperationSession(String? operationSessionId) {
+    return mounted && ref.read(activeSessionIdProvider) == operationSessionId;
+  }
+
+  int _beginComposerOperation(String? operationSessionId) {
+    final generation = ++_composerOperationGeneration;
+    _activeComposerOperationGeneration = generation;
+    _activeComposerOperationSessionId = operationSessionId;
+    return generation;
+  }
+
+  bool _isComposerOperationLive(int generation) {
+    return _activeComposerOperationGeneration == generation;
+  }
+
+  void _adoptComposerOperationSession(int generation, String? sessionId) {
+    if (_activeComposerOperationGeneration != generation) return;
+    _activeComposerOperationSessionId = sessionId;
+  }
+
+  void _setSubmitting(bool value) {
+    if (!mounted) {
+      _isSubmitting = value;
+      return;
+    }
+    if (_isSubmitting == value) return;
+    setState(() => _isSubmitting = value);
+  }
+
+  void _finishComposerOperation(int generation) {
+    if (_activeComposerOperationGeneration != generation) return;
+    _activeComposerOperationGeneration = null;
+    _activeComposerOperationSessionId = null;
+    _setSubmitting(false);
+  }
+
+  /// 使准备、归档、STT 或网络请求阶段的旧动作失效。旧 future 可以继续
+  /// 完成并把消息写入它捕获的会话，但它不能再清理当前 composer。
+  void _cancelActiveComposerOperation() {
+    if (_activeComposerOperationGeneration == null) return;
+    ++_composerOperationGeneration;
+    _activeComposerOperationGeneration = null;
+    _activeComposerOperationSessionId = null;
+    _setSubmitting(false);
+  }
+
+  void _cancelComposerOperationForSession(String? sessionId) {
+    if (_activeComposerOperationGeneration == null) return;
+    if (_activeComposerOperationSessionId != sessionId) return;
+    _cancelActiveComposerOperation();
+  }
+
+  void _saveDraft(
+    String sessionId, {
+    String? text,
+    List<PendingAttachment>? attachments,
+    bool? deepThink,
+  }) {
+    final previous = _draftCache[sessionId] ?? const ChatComposerDraft();
+    _draftCache[sessionId] = previous.copyWith(
+      text: text,
+      attachments: attachments,
+      deepThink: deepThink,
+    );
+    if (_draftCache.length > _maxDraftCacheSize) {
+      final keysToRemove = _draftCache.keys
+          .take(_draftCache.length - _maxDraftCacheSize)
+          .toList();
+      for (final key in keysToRemove) {
+        _draftCache.remove(key);
       }
     }
+  }
+
+  /// 清理已经成功持久化的旧会话草稿，但不触碰当前 controller / notifier。
+  /// 这条路径只在操作返回成功且 UI 已经切到另一个会话时使用；当前会话
+  /// 的正常清理仍必须经过 activeSessionId 检查并调用 [_saveDraft]。
+  void _clearStoredDraftAfterSuccessfulOperation(String? sessionId) {
+    if (sessionId == null) return;
+    final draft = _draftCache[sessionId];
+    if (draft == null) return;
+    _draftCache[sessionId] = draft.copyWith(text: '', attachments: const []);
+  }
+
+  void _handleComposerDraftChanged(ChatComposerDraft draft) {
+    final sessionId = _draftSessionId ?? ref.read(activeSessionIdProvider);
+    if (sessionId == null ||
+        !_isCurrentOperationSession(sessionId) ||
+        _draftSessionId != sessionId) {
+      return;
+    }
+    _saveDraft(
+      sessionId,
+      text: draft.text,
+      attachments: List<PendingAttachment>.from(draft.attachments),
+      deepThink: draft.deepThink,
+    );
+  }
+
+  void _restoreComposerDraft(String? sessionId) {
+    final draft = sessionId == null ? null : _draftCache[sessionId];
+    _draftSessionId = sessionId;
+    _inputController.text = draft?.text ?? '';
+    _hasTextNotifier.value = _inputController.text.trim().isNotEmpty;
+    _deepThinkEnabled.value = draft?.deepThink ?? false;
+    _pendingModelId = null;
+  }
+
+  UniversalMediaCapability _resolveComposerMediaCapability({
+    required UniversalMediaKind kind,
+    required String? activeSessionId,
+    required AsyncValue<ChannelModelWithChannel?>? activeModel,
+    required AsyncValue<List<ChannelModelWithChannel>> models,
+    required AsyncValue<void> configReady,
+    required UniversalMediaConfig config,
+    required String? selectedModelId,
+  }) {
+    if (configReady.isLoading) {
+      return const UniversalMediaCapability(
+        status: UniversalMediaCapabilityStatus.checking,
+        message: '正在检测当前模型和媒体配置…',
+      );
+    }
+    if (configReady.hasError) {
+      return UniversalMediaCapability(
+        status: UniversalMediaCapabilityStatus.unavailable,
+        message: '媒体配置读取失败，请到设置 → 图片生成中检查配置',
+      );
+    }
+
+    ChannelModelWithChannel? modelInfo;
+    if (activeSessionId != null) {
+      final current = activeModel;
+      if (current == null || current.isLoading) {
+        return const UniversalMediaCapability(
+          status: UniversalMediaCapabilityStatus.checking,
+          message: '正在检测当前模型和媒体配置…',
+        );
+      }
+      if (current.hasError) {
+        return UniversalMediaCapability(
+          status: UniversalMediaCapabilityStatus.unavailable,
+          message: '当前模型能力检测失败，请重新选择模型后重试',
+        );
+      }
+      modelInfo = current.valueOrNull;
+    } else {
+      if (models.isLoading) {
+        return const UniversalMediaCapability(
+          status: UniversalMediaCapabilityStatus.checking,
+          message: '正在检测当前模型和媒体配置…',
+        );
+      }
+      if (models.hasError) {
+        return const UniversalMediaCapability(
+          status: UniversalMediaCapabilityStatus.unavailable,
+          message: '模型列表加载失败，请到设置中检查模型渠道',
+        );
+      }
+      final availableModels = models.valueOrNull ?? const [];
+      modelInfo = availableModels
+          .where((model) => model.channelModel.id == selectedModelId)
+          .firstOrNull;
+      modelInfo ??= availableModels.firstOrNull;
+    }
+
+    if (modelInfo == null) {
+      return UniversalMediaCapability(
+        status: UniversalMediaCapabilityStatus.notConfigured,
+        message:
+            '请先添加并选择模型渠道后再生成${kind == UniversalMediaKind.video ? '视频' : '音乐'}',
+      );
+    }
+    return resolveUniversalMediaCapability(
+      kind: kind,
+      protocol: modelInfo.channel.protocol,
+      baseUrl: modelInfo.channel.baseUrl,
+      apiKeyConfigured: modelInfo.channel.apiKeyEncrypted.trim().isNotEmpty,
+      modelName: modelInfo.channelModel.modelName,
+      modelCapability: modelInfo.channelModel.capability,
+      mediaModel: kind == UniversalMediaKind.video
+          ? config.videoModel
+          : config.musicModel,
+      mediaEndpoint: kind == UniversalMediaKind.video
+          ? config.videoEndpoint
+          : config.musicEndpoint,
+    );
+  }
+
+  /// Composer 只暴露当前 TTS 配置真正能走到的声音模式；其它入口保留在
+  /// 菜单中并展示原因，避免把设置页的 provider / 模式声明误当成云端能力。
+  bool _canUseComposerVoiceCloneReference(TextToSpeechConfig config) {
+    return config.enabled &&
+        config.isSimiRouter &&
+        config.requestedMode?.name == 'voiceClone' &&
+        config.baseUrl.trim().isNotEmpty &&
+        config.model.trim().isNotEmpty &&
+        config.voice.trim().isNotEmpty &&
+        config.hasApiKey;
+  }
+
+  String? _voiceActionDisabledReason(TextToSpeechConfig config, String action) {
+    if (!config.isConfigured) {
+      if (action == 'voiceClone' &&
+          _canUseComposerVoiceCloneReference(config)) {
+        // The Composer can supply a one-shot audio reference even when the
+        // settings page has no archived reference yet. The menu itself will
+        // remain disabled until that audio attachment is present.
+        return null;
+      }
+      return '请先在设置 → 语音与多模态中启用并配置 TTS（${config.statusLabel}）';
+    }
+
+    if (action == 'voiceClone' && !config.isSimiRouter) {
+      return '当前 TTS provider 未接入参考音频声音克隆';
+    }
+    if (action == 'voiceDesign' && !config.isSimiRouter) {
+      return '当前 TTS provider 未接入声音设计';
+    }
+
+    final configuredMode = config.requestedMode?.name ?? 'standard';
+    if (configuredMode != action) {
+      final modeLabel = switch (configuredMode) {
+        'voiceClone' => '声音克隆',
+        'voiceDesign' => '声音设计',
+        _ => '普通声音合成',
+      };
+      final actionLabel = switch (action) {
+        'voiceClone' => '声音克隆',
+        'voiceDesign' => '声音设计',
+        _ => '普通声音合成',
+      };
+      return '当前 TTS 模式为$modeLabel，请先在设置中切换为$actionLabel';
+    }
+    return null;
   }
 
   void _onScrollChanged() {
@@ -178,26 +464,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<String?> _ensureModelBeforeSend(String? activeSessionId) async {
+    final operationSessionId = activeSessionId;
+    // 读取模型列表可能跨越会话切换；先固定本次动作看到的模型，避免把
+    // B 会话后来选中的模型带回 A 的发送请求。
+    final requestedModelId =
+        _pendingModelId ?? ref.read(selectedModelIdProvider);
     final models = await ref.read(allModelsProvider.future);
-    final currentModelId = _pendingModelId ?? ref.read(selectedModelIdProvider);
+    if (!_isCurrentOperationSession(operationSessionId)) return null;
 
-    if (currentModelId != null &&
-        models.any((m) => m.channelModel.id == currentModelId)) {
-      return currentModelId;
+    if (requestedModelId != null &&
+        models.any((m) => m.channelModel.id == requestedModelId)) {
+      return requestedModelId;
     }
 
     if (!mounted) return null;
 
     if (models.isEmpty) {
       final goSettings = await _showNoModelsDialog();
-      if (goSettings == true && mounted) {
+      if (goSettings == true &&
+          mounted &&
+          _isCurrentOperationSession(operationSessionId)) {
         await Navigator.pushNamed(context, '/settings');
       }
       return null;
     }
 
     final selectedModelId = await _showModelSelectionDialog(models);
-    if (selectedModelId == null) return null;
+    if (selectedModelId == null ||
+        !_isCurrentOperationSession(operationSessionId)) {
+      return null;
+    }
 
     ref.read(selectedModelIdProvider.notifier).state = selectedModelId;
     if (activeSessionId != null) {
@@ -205,10 +501,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           .read(sessionDaoProvider)
           .updateDefaultModel(activeSessionId, selectedModelId);
     }
-    if (mounted) {
-      setState(() => _pendingModelId = selectedModelId);
-    } else {
-      _pendingModelId = selectedModelId;
+    if (_isCurrentOperationSession(operationSessionId)) {
+      if (mounted) {
+        setState(() => _pendingModelId = selectedModelId);
+      } else {
+        _pendingModelId = selectedModelId;
+      }
     }
     return selectedModelId;
   }
@@ -295,17 +593,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     String content,
     List<PendingAttachment> attachments,
   ) async {
-    if (_isSubmitting) return false;
-
     var activeSessionId = ref.read(activeSessionIdProvider);
+    final operationSessionId = activeSessionId;
 
     if (activeSessionId != null) {
       final streamState = ref.read(streamStateProvider(activeSessionId));
       if (streamState.isStreaming) {
-        cancelStreaming(ref, activeSessionId);
+        await _handleStopStreaming();
         return true;
       }
     }
+
+    if (_isSubmitting) return false;
 
     if (content.isEmpty && attachments.isEmpty) return false;
 
@@ -322,14 +621,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       return false;
     }
 
-    if (mounted) {
-      setState(() => _isSubmitting = true);
-    } else {
-      _isSubmitting = true;
-    }
+    final operationGeneration = _beginComposerOperation(operationSessionId);
+    _setSubmitting(true);
+    final deepThinkEnabled = _deepThinkEnabled.value;
 
     try {
       final selectedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (!_isComposerOperationLive(operationGeneration)) return false;
       if (selectedModelId == null) return false;
       var requestModelId = selectedModelId;
 
@@ -343,31 +641,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         final visionModelId = await _findVisionModelInCurrentChannel(
           selectedModelId,
         );
+        if (!_isComposerOperationLive(operationGeneration)) return false;
         if (visionModelId == null) {
-          _showSnackBar('当前渠道没有支持识图的 Vision 模型，已保留图片和输入');
+          if (_isCurrentOperationSession(operationSessionId)) {
+            _showSnackBar('当前渠道没有支持识图的 Vision 模型，已保留图片和输入');
+          }
           return false;
         }
         requestModelId = visionModelId;
-        if (_deepThinkEnabled.value) {
+        if (deepThinkEnabled &&
+            _isCurrentOperationSession(operationSessionId)) {
           _showSnackBar('图片消息将使用 Vision 模型，深度思考本次不切换');
         }
-      } else if (_deepThinkEnabled.value) {
+      } else if (deepThinkEnabled) {
         // 深度思考开启：纯文本消息优先切换到当前渠道的 reasoner 模型。
         final reasonerModelId = await _findReasonerModelInCurrentChannel(
           selectedModelId,
         );
+        if (!_isComposerOperationLive(operationGeneration)) return false;
         if (reasonerModelId == null) {
-          _showSnackBar('当前渠道没有深度思考（reasoner）模型，已保留输入');
+          if (_isCurrentOperationSession(operationSessionId)) {
+            _showSnackBar('当前渠道没有深度思考（reasoner）模型，已保留输入');
+          }
           return false;
         }
         requestModelId = reasonerModelId;
       }
 
-      activeSessionId ??= await createNewSession(
-        ref,
-        defaultModelId: selectedModelId,
-      );
-      if (!mounted) return false;
+      if (activeSessionId == null) {
+        // 空 composer 在模型选择期间如果已经被用户切到某个会话，不能
+        // 把那个会话覆盖成新会话；当前输入由新会话动作直接放弃并保留。
+        if (ref.read(activeSessionIdProvider) != null) return false;
+        activeSessionId = await createNewSession(
+          ref,
+          defaultModelId: selectedModelId,
+        );
+        if (!_isComposerOperationLive(operationGeneration)) return false;
+        _adoptComposerOperationSession(operationGeneration, activeSessionId);
+      }
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
 
       final sent = await sendMessage(
         ref: ref,
@@ -376,42 +690,102 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         overrideModelId: requestModelId,
         attachments: attachments,
       );
-      if (!mounted) return false;
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
       if (!sent) {
-        _draftCache[activeSessionId] = content;
+        if (_isCurrentOperationSession(activeSessionId)) {
+          _saveDraft(activeSessionId, text: content);
+          _inputController.text = content;
+          _inputController.selection = TextSelection.fromPosition(
+            TextPosition(offset: content.length),
+          );
+          _hasTextNotifier.value = content.trim().isNotEmpty;
+        }
+        return false;
+      }
+      // ChatInputBar 会在 onSend 返回成功后按实际传入的 attachment IDs
+      // 移除草稿；页面这里只清空文本，避免误删并发期间产生的其它附件。
+      if (_isCurrentOperationSession(activeSessionId)) {
+        _saveDraft(activeSessionId, text: '');
+        _blockedSendWhileOfflineSessionId = null;
+        _inputController.clear();
+        _hasTextNotifier.value = false;
+        if (mounted) setState(() => _pendingModelId = null);
+        _focusNode.requestFocus();
+        _scheduleScrollToBottom();
+      } else {
+        _clearStoredDraftAfterSuccessfulOperation(activeSessionId);
+      }
+      return true;
+    } catch (e) {
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      if (_isCurrentOperationSession(activeSessionId)) {
         _inputController.text = content;
         _inputController.selection = TextSelection.fromPosition(
           TextPosition(offset: content.length),
         );
         _hasTextNotifier.value = content.trim().isNotEmpty;
-        return false;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('发送失败: $e')));
       }
-      _draftCache.remove(activeSessionId);
-      _blockedSendWhileOfflineSessionId = null;
-      _inputController.clear();
-      _hasTextNotifier.value = false;
-      setState(() => _pendingModelId = null);
-      _focusNode.requestFocus();
-      _scheduleScrollToBottom();
-      return true;
-    } catch (e) {
-      if (!mounted) return false;
-      _inputController.text = content;
-      _inputController.selection = TextSelection.fromPosition(
-        TextPosition(offset: content.length),
-      );
-      _hasTextNotifier.value = content.trim().isNotEmpty;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('发送失败: $e')));
       return false;
     } finally {
-      if (mounted) {
-        setState(() => _isSubmitting = false);
-      } else {
-        _isSubmitting = false;
-      }
+      _finishComposerOperation(operationGeneration);
     }
+  }
+
+  Future<void> _handleStopStreaming() async {
+    final visibleSessionId = ref.read(activeSessionIdProvider);
+    final visibleMediaTask = visibleSessionId == null
+        ? null
+        : ref.read(universalMediaTaskProvider(visibleSessionId));
+    if (visibleSessionId != null && visibleMediaTask?.isBusy == true) {
+      // 媒体任务的 Stop 不经过 _isSubmitting，也不复用聊天 SSE 的
+      // cancelStreaming；服务端取消和本地 cancelled 状态都由 operationId
+      // 对齐，避免误取消另一会话的流。
+      _cancelComposerOperationForSession(visibleSessionId);
+      await ref
+          .read(universalMediaJobProvider.notifier)
+          .cancelActive(visibleMediaTask!.operationId);
+      if (visibleMediaTask.phase != UniversalMediaTaskPhase.saving) {
+        ref
+            .read(universalMediaTaskProvider(visibleSessionId).notifier)
+            .markCancelled();
+      }
+      return;
+    }
+
+    final visibleStreamState = visibleSessionId == null
+        ? const StreamState()
+        : ref.read(streamStateProvider(visibleSessionId));
+    if (visibleSessionId != null && visibleStreamState.isStreaming) {
+      _cancelComposerOperationForSession(visibleSessionId);
+      // cancelStreaming 同时取消当前 SSE subscription、Dio CancelToken 和
+      // STT/请求准备阶段的 operation generation。
+      cancelStreaming(ref, visibleSessionId);
+      return;
+    }
+
+    // 准备阶段还没有 stream/media state 时，Stop 仍然要使本地动作失效。
+    // 如果动作属于另一个已经切走的会话，则取消那个会话的 generation，
+    // 但绝不把当前 B 的 composer 当成 A 的清理目标。
+    if (_isSubmitting && _activeComposerOperationGeneration != null) {
+      final operationSessionId = _activeComposerOperationSessionId;
+      _cancelActiveComposerOperation();
+      if (operationSessionId != null) {
+        cancelStreaming(ref, operationSessionId);
+      }
+      return;
+    }
+
+    if (visibleSessionId == null) return;
+    // cancelStreaming 同时取消当前 SSE subscription、Dio CancelToken 和
+    // STT/请求准备阶段的 operation generation；这里不经过 _isSubmitting。
+    cancelStreaming(ref, visibleSessionId);
   }
 
   /// 替身回复：为最近一条用户消息以镜像人格生成回复。
@@ -424,32 +798,42 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       return false;
     }
     if (_isSubmitting) return false;
-    if (mounted) setState(() => _isSubmitting = true);
+    final operationGeneration = _beginComposerOperation(activeSessionId);
+    _setSubmitting(true);
     try {
       final error = await generatePersonaReply(
         ref: ref,
         sessionId: activeSessionId,
       );
-      if (!mounted) return false;
-      if (error != null) {
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(SnackBar(content: Text(error)));
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
         return false;
       }
-      _scheduleScrollToBottom();
+      if (error != null) {
+        if (_isCurrentOperationSession(activeSessionId)) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(SnackBar(content: Text(error)));
+        }
+        return false;
+      }
+      if (_isCurrentOperationSession(activeSessionId)) {
+        _scheduleScrollToBottom();
+      }
       return true;
     } finally {
-      if (mounted) {
-        setState(() => _isSubmitting = false);
-      } else {
-        _isSubmitting = false;
-      }
+      _finishComposerOperation(operationGeneration);
     }
   }
 
   /// 图片生成：把输入框文本作为提示词调用图片生成，成功后清空输入。
   Future<bool> _handleGenerateImage(String content) async {
+    return _handleGenerateImageWithAttachments(content, const []);
+  }
+
+  Future<bool> _handleGenerateImageWithAttachments(
+    String content,
+    List<PendingAttachment> referenceAttachments,
+  ) async {
     if (_isSubmitting) return false;
     if (!ref.read(isOnlineProvider)) {
       ScaffoldMessenger.of(context)
@@ -464,59 +848,285 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
 
     var activeSessionId = ref.read(activeSessionIdProvider);
-    if (mounted) setState(() => _isSubmitting = true);
+    final operationSessionId = activeSessionId;
+    final operationGeneration = _beginComposerOperation(operationSessionId);
+    _setSubmitting(true);
 
     try {
       final resolvedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (!_isComposerOperationLive(operationGeneration)) return false;
       if (resolvedModelId == null) return false;
 
-      activeSessionId ??= await createNewSession(
-        ref,
-        defaultModelId: resolvedModelId,
-      );
-      if (!mounted) return false;
+      if (activeSessionId == null) {
+        if (ref.read(activeSessionIdProvider) != null) return false;
+        activeSessionId = await createNewSession(
+          ref,
+          defaultModelId: resolvedModelId,
+        );
+        if (!_isComposerOperationLive(operationGeneration)) return false;
+        _adoptComposerOperationSession(operationGeneration, activeSessionId);
+      }
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
 
       await ref
           .read(sessionDaoProvider)
           .updateDefaultModel(activeSessionId, resolvedModelId);
+      if (!_isComposerOperationLive(operationGeneration)) return false;
 
       final error = await generateImage(
         ref: ref,
         sessionId: activeSessionId,
         prompt: content,
+        referenceAttachments: referenceAttachments,
       );
-      if (!mounted) return false;
-      if (error != null) {
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(SnackBar(content: Text(error)));
-        _draftCache[activeSessionId] = content;
-        _inputController.text = content;
-        _inputController.selection = TextSelection.fromPosition(
-          TextPosition(offset: content.length),
-        );
-        _hasTextNotifier.value = true;
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
         return false;
       }
-      _draftCache.remove(activeSessionId);
-      _hasTextNotifier.value = false;
-      setState(() => _pendingModelId = null);
-      _focusNode.requestFocus();
-      _scheduleScrollToBottom();
+      if (error != null) {
+        if (_isCurrentOperationSession(activeSessionId)) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(SnackBar(content: Text(error)));
+          _saveDraft(activeSessionId, text: content);
+          _inputController.text = content;
+          _inputController.selection = TextSelection.fromPosition(
+            TextPosition(offset: content.length),
+          );
+          _hasTextNotifier.value = true;
+        }
+        return false;
+      }
+      if (_isCurrentOperationSession(activeSessionId)) {
+        _saveDraft(activeSessionId, text: '');
+        _hasTextNotifier.value = false;
+        if (mounted) setState(() => _pendingModelId = null);
+        _focusNode.requestFocus();
+        _scheduleScrollToBottom();
+      } else {
+        _clearStoredDraftAfterSuccessfulOperation(activeSessionId);
+      }
       return true;
     } catch (e) {
-      if (!mounted) return false;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('图片生成失败: $e')));
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      if (_isCurrentOperationSession(activeSessionId)) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('图片生成失败: $e')));
+      }
       return false;
     } finally {
-      if (mounted) {
-        setState(() => _isSubmitting = false);
-      } else {
-        _isSubmitting = false;
-      }
+      _finishComposerOperation(operationGeneration);
     }
+  }
+
+  Future<bool> _runMediaAction(
+    String content,
+    Future<String?> Function(String sessionId) action, {
+    UniversalMediaKind? mediaKind,
+    List<PendingAttachment> mediaAttachments = const [],
+  }) async {
+    if (_isSubmitting) return false;
+    if (!ref.read(isOnlineProvider)) {
+      _showSnackBar('当前网络不可用，请联网后重试');
+      return false;
+    }
+
+    var activeSessionId = ref.read(activeSessionIdProvider);
+    final operationSessionId = activeSessionId;
+    final operationGeneration = _beginComposerOperation(operationSessionId);
+    _setSubmitting(true);
+    try {
+      final resolvedModelId = await _ensureModelBeforeSend(activeSessionId);
+      if (!_isComposerOperationLive(operationGeneration)) return false;
+      if (resolvedModelId == null) return false;
+      if (activeSessionId == null) {
+        if (ref.read(activeSessionIdProvider) != null) return false;
+        activeSessionId = await createNewSession(
+          ref,
+          defaultModelId: resolvedModelId,
+        );
+        if (!_isComposerOperationLive(operationGeneration)) return false;
+        _adoptComposerOperationSession(operationGeneration, activeSessionId);
+      }
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      await ref
+          .read(sessionDaoProvider)
+          .updateDefaultModel(activeSessionId, resolvedModelId);
+      if (!_isComposerOperationLive(operationGeneration)) return false;
+
+      if (mediaKind != null) {
+        _mediaRetryDrafts[activeSessionId] = _MediaRetryDraft(
+          kind: mediaKind,
+          prompt: content,
+          attachments: List<PendingAttachment>.unmodifiable(mediaAttachments),
+        );
+      }
+
+      final error = await action(activeSessionId);
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      if (error != null) {
+        if (_isCurrentOperationSession(activeSessionId)) {
+          _showSnackBar(error);
+          _restoreComposerText(content, activeSessionId);
+        }
+        return false;
+      }
+      if (mediaKind != null) _mediaRetryDrafts.remove(activeSessionId);
+      if (_isCurrentOperationSession(activeSessionId)) {
+        _saveDraft(activeSessionId, text: '');
+        if (mounted) setState(() => _pendingModelId = null);
+        _focusNode.requestFocus();
+        _scheduleScrollToBottom();
+      } else {
+        _clearStoredDraftAfterSuccessfulOperation(activeSessionId);
+      }
+      return true;
+    } catch (_) {
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      if (_isCurrentOperationSession(activeSessionId)) {
+        _showSnackBar('媒体生成失败，请稍后重试');
+        _restoreComposerText(content, activeSessionId);
+      }
+      return false;
+    } finally {
+      _finishComposerOperation(operationGeneration);
+    }
+  }
+
+  void _restoreComposerText(String content, String? sessionId) {
+    if (!_isCurrentOperationSession(sessionId)) return;
+    if (sessionId != null) _saveDraft(sessionId, text: content);
+    _inputController.text = content;
+    _inputController.selection = TextSelection.fromPosition(
+      TextPosition(offset: content.length),
+    );
+    _hasTextNotifier.value = content.trim().isNotEmpty;
+  }
+
+  Future<bool> _handleGenerateVideo(
+    String content,
+    List<PendingAttachment> attachments,
+  ) {
+    return _runMediaAction(
+      content,
+      (sessionId) => generateVideo(
+        ref: ref,
+        sessionId: sessionId,
+        prompt: content,
+        referenceAttachments: attachments,
+      ),
+      mediaKind: UniversalMediaKind.video,
+      mediaAttachments: attachments,
+    );
+  }
+
+  Future<bool> _handleGenerateMusic(String content) {
+    return _runMediaAction(
+      content,
+      (sessionId) =>
+          generateMusic(ref: ref, sessionId: sessionId, prompt: content),
+      mediaKind: UniversalMediaKind.music,
+    );
+  }
+
+  Future<Set<String>?> _handleRetryMediaTask() async {
+    final sessionId = ref.read(activeSessionIdProvider);
+    if (sessionId == null || _isSubmitting) return null;
+    final draft = _mediaRetryDrafts[sessionId];
+    if (draft == null) return null;
+    if (!ref.read(isOnlineProvider)) {
+      _showSnackBar('当前网络不可用，请联网后重试');
+      return null;
+    }
+
+    final succeeded = await _runMediaAction(
+      draft.prompt,
+      (retrySessionId) => switch (draft.kind) {
+        UniversalMediaKind.video => generateVideo(
+          ref: ref,
+          sessionId: retrySessionId,
+          prompt: draft.prompt,
+          referenceAttachments: draft.attachments,
+        ),
+        UniversalMediaKind.music => generateMusic(
+          ref: ref,
+          sessionId: retrySessionId,
+          prompt: draft.prompt,
+        ),
+        UniversalMediaKind.image => Future<String?>.value('不支持重试图片媒体任务'),
+      },
+      mediaKind: draft.kind,
+      mediaAttachments: draft.attachments,
+    );
+    if (!succeeded || !_isCurrentOperationSession(sessionId)) return null;
+    return draft.attachments.map((attachment) => attachment.stableId).toSet();
+  }
+
+  Future<bool> _handleSynthesizeSpeech(String content) {
+    return _runMediaAction(
+      content,
+      (sessionId) => synthesizeSpeechMessage(
+        ref: ref,
+        sessionId: sessionId,
+        text: content,
+      ),
+    );
+  }
+
+  String? _firstVoiceCloneReferencePath(List<PendingAttachment> attachments) {
+    for (final attachment in attachments) {
+      if (attachment.type != 'audio') continue;
+      final path = attachment.path.trim();
+      if (path.isNotEmpty) return path;
+    }
+    return null;
+  }
+
+  Future<bool> _handleCloneVoice(
+    String content,
+    List<PendingAttachment> referenceAttachments,
+  ) {
+    final config = ref.read(textToSpeechConfigProvider);
+    // ChatInputBar 在生产页面明确声明复用设置中的归档参考音频，因此
+    // 正常菜单动作会传空列表；保留“有附件则优先使用第一条 audio”的
+    // callback 边界，供 Composer 直连 / 测试以及未来关闭该声明时复用。
+    final referenceAudioPath =
+        _firstVoiceCloneReferencePath(referenceAttachments) ??
+        config.referenceAudioPath;
+    return _runMediaAction(
+      content,
+      (sessionId) => synthesizeSpeechMessage(
+        ref: ref,
+        sessionId: sessionId,
+        text: content,
+        referenceAudioPath: referenceAudioPath,
+      ),
+    );
+  }
+
+  Future<bool> _handleDesignVoice(String content) {
+    final config = ref.read(textToSpeechConfigProvider);
+    return _runMediaAction(
+      content,
+      (sessionId) => synthesizeSpeechMessage(
+        ref: ref,
+        sessionId: sessionId,
+        text: content,
+        // 声音设计的 style 来自设置中已校验的描述；它是本次请求参数，
+        // 不在 Composer 动作中改写或持久化 TTS 配置。
+        style: config.style,
+      ),
+    );
   }
 
   /// 编辑图片：打开编辑对话框 → 调 /v1/images/edits → 结果插入会话。
@@ -528,7 +1138,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     if (_isSubmitting) return false;
 
-    setState(() => _isSubmitting = true);
+    final operationGeneration = _beginComposerOperation(activeSessionId);
+    _setSubmitting(true);
     try {
       final submitted = await showImageEditDialog(
         context,
@@ -542,17 +1153,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           );
         },
       );
-      if (submitted) _scheduleScrollToBottom();
+      if (!mounted || !_isComposerOperationLive(operationGeneration)) {
+        return false;
+      }
+      if (submitted && _isCurrentOperationSession(activeSessionId)) {
+        _scheduleScrollToBottom();
+      }
       return submitted;
     } catch (_) {
-      _showSnackBar('图片编辑失败，请稍后重试');
+      if (_isComposerOperationLive(operationGeneration) &&
+          _isCurrentOperationSession(activeSessionId)) {
+        _showSnackBar('图片编辑失败，请稍后重试');
+      }
       return false;
     } finally {
-      if (mounted) {
-        setState(() => _isSubmitting = false);
-      } else {
-        _isSubmitting = false;
-      }
+      _finishComposerOperation(operationGeneration);
     }
   }
 
@@ -561,6 +1176,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openRealtimeVoicePanel() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => const RealtimeVoicePanel(),
+    );
   }
 
   /// 在当前渠道中查找深度思考（reasoner）模型，返回其 channel_model_id。
@@ -599,6 +1225,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (ModelCapability.supportsVisionModel(
       capability: current.channelModel.capability,
       modelId: current.channelModel.modelName,
+      capabilities: current.capabilities,
+      protocol: current.channel.protocol,
     )) {
       return current.channelModel.id;
     }
@@ -608,6 +1236,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (ModelCapability.supportsVisionModel(
         capability: model.capability,
         modelId: model.modelName,
+        capabilities: decodeModelCapabilities(
+          model.capability,
+          model.capabilities,
+        ),
+        protocol: current.channel.protocol,
       )) {
         return model.id;
       }
@@ -636,9 +1269,35 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
   }
 
-  /// 重试最后一条 user 消息（从 DB 读取，不依赖内存状态）
-  void _handleRetry() {
-    retryLastUserMessage(ref);
+  /// 从被点击的 assistant 消息定位对应 user turn；没有具体 ID 时保留
+  /// error bar / AppBar 的“重试最后一条”兼容路径。
+  void _handleRetry([String? assistantMessageId]) {
+    final sessionId = ref.read(activeSessionIdProvider);
+    if (sessionId == null) return;
+    if (assistantMessageId == null) {
+      retryLastUserMessage(ref, sessionId: sessionId);
+      return;
+    }
+    unawaited(_retryMessageForSession(sessionId, assistantMessageId));
+  }
+
+  Future<void> _retryMessageForSession(
+    String operationSessionId,
+    String assistantMessageId,
+  ) async {
+    final submitted = await retryMessage(
+      ref: ref,
+      sessionId: operationSessionId,
+      assistantMessageId: assistantMessageId,
+    );
+    // retry 的消息结果可以继续落在 operationSessionId；这里没有任何
+    // composer 清理，只有当前仍是该会话时才滚动当前页面。
+    if (!mounted ||
+        !submitted ||
+        !_isCurrentOperationSession(operationSessionId)) {
+      return;
+    }
+    _scheduleScrollToBottom();
   }
 
   /// 从指定消息位置复制会话
@@ -652,7 +1311,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         sourceSessionId: activeSessionId,
         upToMessageId: messageId,
       );
-      if (mounted) {
+      if (mounted && _isCurrentOperationSession(activeSessionId)) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('已复制会话'),
@@ -661,7 +1320,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && _isCurrentOperationSession(activeSessionId)) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('复制失败: $e')));
@@ -702,6 +1361,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       return;
     }
 
+    final operationSessionId = ref.read(activeSessionIdProvider);
     final requestId = ++_speechRequestId;
     setState(() {
       _speakingMessageId = messageId;
@@ -711,8 +1371,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
     try {
       await service.stop();
+      if (!mounted || !_isCurrentOperationSession(operationSessionId)) return;
       final result = await service.speak(text: text, voice: config.voice);
-      if (!mounted || requestId != _speechRequestId) return;
+      if (!mounted ||
+          requestId != _speechRequestId ||
+          !_isCurrentOperationSession(operationSessionId)) {
+        return;
+      }
       final sizeKb = (result.fileSize / 1024).clamp(0, double.infinity);
       final audioPath = result.audioFile.path;
       if (_lastTerminalSpeechAudioPath == audioPath) {
@@ -736,16 +1401,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
     } catch (error) {
       if (!mounted) return;
-      if (requestId == _speechRequestId) {
+      if (requestId == _speechRequestId &&
+          _isCurrentOperationSession(operationSessionId)) {
         setState(() {
           _speakingMessageId = null;
           _speakingAudioPath = null;
           _isPreparingSpeech = false;
         });
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('语音播报失败：$error')));
+      if (_isCurrentOperationSession(operationSessionId)) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('语音播报失败：$error')));
+      }
     }
   }
 
@@ -773,9 +1441,91 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _handlePlayAttachmentAudio(String path) async {
+    final operationSessionId = ref.read(activeSessionIdProvider);
+    final requestId = ++_attachmentPlaybackRequestId;
+    if (_playingAttachmentPath == path) {
+      try {
+        await ref.read(audioPlayerProvider).stop();
+      } catch (_) {}
+      if (mounted && _isCurrentOperationSession(operationSessionId)) {
+        setState(() => _playingAttachmentPath = null);
+      }
+      return;
+    }
+    try {
+      final player = ref.read(audioPlayerProvider);
+      await player.stop();
+      if (!mounted ||
+          requestId != _attachmentPlaybackRequestId ||
+          !_isCurrentOperationSession(operationSessionId)) {
+        return;
+      }
+      // Mark the path before entering the platform call. Very short audio can
+      // emit completed/stopped synchronously from playFile().
+      _lastTerminalPlaybackPath = null;
+      setState(() => _playingAttachmentPath = path);
+      await player.playFile(path);
+      if (!mounted ||
+          requestId != _attachmentPlaybackRequestId ||
+          !_isCurrentOperationSession(operationSessionId)) {
+        return;
+      }
+      // If the platform emitted a terminal event before playFile returned,
+      // do not reintroduce a stale “playing” state after the await.
+      if (_lastTerminalPlaybackPath == path) {
+        if (_playingAttachmentPath == path) {
+          setState(() => _playingAttachmentPath = null);
+        }
+        return;
+      }
+    } catch (error) {
+      if (mounted &&
+          requestId == _attachmentPlaybackRequestId &&
+          _isCurrentOperationSession(operationSessionId)) {
+        setState(() => _playingAttachmentPath = null);
+        _showSnackBar('音频播放失败：$error');
+      }
+    }
+  }
+
+  void _handleOpenAttachmentImage(String path) {
+    final file = File(path);
+    if (!file.existsSync()) {
+      _showSnackBar('图片文件不存在或已被移动');
+      return;
+    }
+    showImageViewer(context, imageProvider: FileImage(file));
+  }
+
+  Future<void> _handleDownloadAttachment({
+    required String path,
+    required String fileName,
+  }) async {
+    final operationSessionId = ref.read(activeSessionIdProvider);
+    try {
+      final saved = await AttachmentExportService().export(
+        localPath: path,
+        fileName: fileName,
+      );
+      if (!mounted ||
+          saved == null ||
+          !_isCurrentOperationSession(operationSessionId)) {
+        return;
+      }
+      // 不展示用户设备的完整路径；文件名足以确认保存结果。
+      _showSnackBar('已保存附件：$fileName');
+    } catch (_) {
+      if (mounted && _isCurrentOperationSession(operationSessionId)) {
+        _showSnackBar('保存附件失败，请重试');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final activeSessionId = ref.watch(activeSessionIdProvider);
+    final ttsConfig = ref.watch(textToSpeechConfigProvider);
 
     ref.listen<bool>(isOnlineProvider, (previous, next) {
       if (previous != false || !next) return;
@@ -785,10 +1535,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // 会话切换时恢复草稿（listener 在 build 外执行，不会干扰 IME）
     ref.listen(activeSessionIdProvider, (prev, next) {
       if (prev != next) {
-        final draft = next != null ? _draftCache[next] : null;
-        _inputController.text = draft ?? '';
-        _hasTextNotifier.value = (_inputController.text.trim().isNotEmpty);
-        _pendingModelId = null;
+        _restoreComposerDraft(next);
         if (ref.read(isOnlineProvider)) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || ref.read(activeSessionIdProvider) != next) return;
@@ -805,13 +1552,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       }
     });
 
+    // Media capability is resolved from the actual session-bound model when a
+    // session exists. The fallback list is only used by the empty composer;
+    // it must not silently replace another session's model.
+    final mediaConfigReady = ref.watch(universalMediaConfigReadyProvider);
+    final mediaConfig = ref.watch(universalMediaConfigProvider);
+    final modelsAsync = ref.watch(allModelsProvider);
+    final selectedModelId = ref.watch(selectedModelIdProvider);
+    final activeModel = activeSessionId == null
+        ? null
+        : ref.watch(chatSessionModelProvider(activeSessionId));
+    final videoCapability = _resolveComposerMediaCapability(
+      kind: UniversalMediaKind.video,
+      activeSessionId: activeSessionId,
+      activeModel: activeModel,
+      models: modelsAsync,
+      configReady: mediaConfigReady,
+      config: mediaConfig,
+      selectedModelId: selectedModelId,
+    );
+    final musicCapability = _resolveComposerMediaCapability(
+      kind: UniversalMediaKind.music,
+      activeSessionId: activeSessionId,
+      activeModel: activeModel,
+      models: modelsAsync,
+      configReady: mediaConfigReady,
+      config: mediaConfig,
+      selectedModelId: selectedModelId,
+    );
+
     if (activeSessionId == null) {
-      return _buildEmptyState();
+      return _buildEmptyState(
+        videoCapability: videoCapability,
+        musicCapability: musicCapability,
+        ttsConfig: ttsConfig,
+      );
     }
 
     final messagesAsync = ref.watch(messagesProvider(activeSessionId));
     final streamState = ref.watch(streamStateProvider(activeSessionId));
     final isOnline = ref.watch(isOnlineProvider);
+    final mediaTask = ref.watch(universalMediaTaskProvider(activeSessionId));
 
     return Stack(
       children: [
@@ -855,7 +1636,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           if (index < messages.length) {
                             final msg = messages[index];
                             if (msg.messageType == kModelSwitchMessageType) {
-                              return ModelSwitchNotice(content: msg.content);
+                              return ModelSwitchNotice(
+                                key: ValueKey('message-${msg.id}'),
+                                content: msg.content,
+                              );
                             }
                             final isUser = msg.role == 'user';
                             final attachments = ref
@@ -876,6 +1660,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                             .valueOrNull
                                       : null;
                                   return MessageAttachmentView(
+                                    attachmentId: attachment.id,
                                     fileName: attachment.fileName,
                                     fileType: attachment.fileType,
                                     fileSize: attachment.fileSize,
@@ -890,6 +1675,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                             fileName: attachment.fileName,
                                           )
                                         : null,
+                                    onPlayAudio:
+                                        attachment.fileType == 'audio' &&
+                                            attachment.localPath.isNotEmpty
+                                        ? () => _handlePlayAttachmentAudio(
+                                            attachment.localPath,
+                                          )
+                                        : null,
+                                    onOpenImage:
+                                        attachment.fileType == 'image' &&
+                                            attachment.localPath.isNotEmpty
+                                        ? () => _handleOpenAttachmentImage(
+                                            attachment.localPath,
+                                          )
+                                        : null,
+                                    onDownload: attachment.localPath.isNotEmpty
+                                        ? () => _handleDownloadAttachment(
+                                            path: attachment.localPath,
+                                            fileName: attachment.fileName,
+                                          )
+                                        : null,
+                                    isPlayingAudio:
+                                        attachment.localPath ==
+                                        _playingAttachmentPath,
                                     onEditImage: attachment.fileType == 'image'
                                         ? () => _handleEditImage(
                                             attachment.localPath,
@@ -916,6 +1724,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               },
                             );
                             return MessageBubble(
+                              key: ValueKey('message-${msg.id}'),
+                              messageId: msg.id,
                               role: msg.role,
                               content: msg.content,
                               thinkingContent: msg.thinkingContent,
@@ -923,7 +1733,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               responseMs: msg.responseMs,
                               isUser: isUser,
                               modelName: modelName,
-                              onRetry: isUser ? null : _handleRetry,
+                              onRetryMessage: isUser ? null : _handleRetry,
                               onSpeak: isUser
                                   ? null
                                   : () => _handleSpeak(msg.id, msg.content),
@@ -960,6 +1770,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             },
                           );
                           return RepaintBoundary(
+                            key: ValueKey('streaming-message-$activeSessionId'),
                             child: StreamingBubble(
                               content: streamState.currentContent,
                               thinking: streamState.currentThinking,
@@ -1000,16 +1811,51 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
             // 输入栏
             ChatInputBar(
+              sessionId: activeSessionId,
               controller: _inputController,
               focusNode: _focusNode,
               isStreaming: streamState.isStreaming,
               isSubmitting: _isSubmitting,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
+              onStop: _handleStopStreaming,
+              onDraftChanged: _handleComposerDraftChanged,
+              initialAttachments:
+                  _draftCache[activeSessionId]?.attachments ?? const [],
               onGenerateImage: _handleGenerateImage,
+              onGenerateImageWithAttachments:
+                  _handleGenerateImageWithAttachments,
+              onGenerateVideo: _handleGenerateVideo,
+              videoActionDisabledReason: videoCapability.isAvailable
+                  ? null
+                  : videoCapability.message,
+              onSynthesizeSpeech: _handleSynthesizeSpeech,
+              onCloneVoice: _handleCloneVoice,
+              onDesignVoice: _handleDesignVoice,
+              speechActionDisabledReason: _voiceActionDisabledReason(
+                ttsConfig,
+                'standard',
+              ),
+              cloneVoiceActionDisabledReason: _voiceActionDisabledReason(
+                ttsConfig,
+                'voiceClone',
+              ),
+              designVoiceActionDisabledReason: _voiceActionDisabledReason(
+                ttsConfig,
+                'voiceDesign',
+              ),
+              useConfiguredVoiceCloneReferenceAudio:
+                  ttsConfig.hasUsableReferenceAudio,
+              onGenerateMusic: _handleGenerateMusic,
+              musicActionDisabledReason: musicCapability.isAvailable
+                  ? null
+                  : musicCapability.message,
+              mediaTask: mediaTask,
+              onRetryMedia: _handleRetryMediaTask,
               onEditImage: _handleEditImage,
               deepThinkNotifier: _deepThinkEnabled,
               onPersonaReply: _handlePersonaReply,
+              onRealtimeVoice: _openRealtimeVoicePanel,
               modelSelector: null,
             ),
           ],
@@ -1122,7 +1968,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState({
+    required UniversalMediaCapability videoCapability,
+    required UniversalMediaCapability musicCapability,
+    required TextToSpeechConfig ttsConfig,
+  }) {
     final scheme = Theme.of(context).colorScheme;
 
     return Column(
@@ -1164,16 +2014,46 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ),
         ),
         ChatInputBar(
+          sessionId: null,
           controller: _inputController,
           focusNode: _focusNode,
           isStreaming: false,
           isSubmitting: _isSubmitting,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
+          onStop: _handleStopStreaming,
+          onDraftChanged: _handleComposerDraftChanged,
           onGenerateImage: _handleGenerateImage,
+          onGenerateImageWithAttachments: _handleGenerateImageWithAttachments,
+          onGenerateVideo: _handleGenerateVideo,
+          videoActionDisabledReason: videoCapability.isAvailable
+              ? null
+              : videoCapability.message,
+          onSynthesizeSpeech: _handleSynthesizeSpeech,
+          onCloneVoice: _handleCloneVoice,
+          onDesignVoice: _handleDesignVoice,
+          speechActionDisabledReason: _voiceActionDisabledReason(
+            ttsConfig,
+            'standard',
+          ),
+          cloneVoiceActionDisabledReason: _voiceActionDisabledReason(
+            ttsConfig,
+            'voiceClone',
+          ),
+          designVoiceActionDisabledReason: _voiceActionDisabledReason(
+            ttsConfig,
+            'voiceDesign',
+          ),
+          useConfiguredVoiceCloneReferenceAudio:
+              ttsConfig.hasUsableReferenceAudio,
+          onGenerateMusic: _handleGenerateMusic,
+          musicActionDisabledReason: musicCapability.isAvailable
+              ? null
+              : musicCapability.message,
           onEditImage: _handleEditImage,
           deepThinkNotifier: _deepThinkEnabled,
           onPersonaReply: _handlePersonaReply,
+          onRealtimeVoice: _openRealtimeVoicePanel,
           modelSelector: null,
         ),
       ],

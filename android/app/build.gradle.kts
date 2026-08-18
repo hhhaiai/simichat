@@ -26,9 +26,6 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "top.simitalk.aichat"
-        providers.gradleProperty("simichatApplicationId").orNull?.let {
-            applicationId = it
-        }
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -51,6 +48,35 @@ android {
         }
     }
 
+    // 真机 integration runner 不得替换已安装的正式应用。
+    // 所有 Android 真机 smoke 都使用显式 flavor，避免依赖无 flavor variant。
+    flavorDimensions += "smoke"
+    productFlavors {
+        create("production") {
+            dimension = "smoke"
+            applicationId = "top.simitalk.aichat"
+            providers.gradleProperty("simichatApplicationId").orNull?.let {
+                applicationId = it
+            }
+        }
+        create("modelswitch") {
+            dimension = "smoke"
+            applicationId = "top.simitalk.aichat.modelswitch"
+        }
+        create("realtimepcm") {
+            dimension = "smoke"
+            applicationId = "top.simitalk.aichat.realtimepcm"
+        }
+    }
+
+    applicationVariants.all {
+        if (flavorName == "production" && buildType.name == "release") {
+            check(applicationId == "top.simitalk.aichat") {
+                "productionRelease must keep applicationId=top.simitalk.aichat"
+            }
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -60,6 +86,9 @@ android {
 
     buildTypes {
         release {
+            // The production APK must carry release application flags even while
+            // this repository still uses the debug keystore for local installs.
+            isDebuggable = false
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")

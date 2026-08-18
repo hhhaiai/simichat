@@ -128,6 +128,22 @@ class _SidebarState extends ConsumerState<Sidebar> {
             ),
           ),
 
+          // 新建对话（ChatGPT 风格：搜索/工具行下方全宽入口）
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                onPressed: () async {
+                  await createNewSession(ref);
+                  if (context.mounted) Navigator.of(context).maybePop();
+                },
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('新建对话'),
+              ),
+            ),
+          ),
+
           _buildWorkspaceStatusSection(),
 
           // 文件夹列表（可展开）
@@ -309,14 +325,21 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 )
                 .toList();
 
-            // 按日期分组（仅限无文件夹的会话）
+            // 置顶会话独立分组，置于日期分组之上；
+            // 文件夹内会话不参与置顶（文件夹本身已是用户分组）。
+            final pinned = unfolderedSessions.where((s) => s.isPinned).toList();
+            final unpinned = unfolderedSessions
+                .where((s) => !s.isPinned)
+                .toList();
+
+            // 按日期分组（仅限无文件夹且未置顶的会话）
             final now = DateTime.now();
             final today = <Session>[];
             final yesterday = <Session>[];
             final thisWeek = <Session>[];
             final older = <Session>[];
 
-            for (final s in unfolderedSessions) {
+            for (final s in unpinned) {
               final dt = DateTime.fromMillisecondsSinceEpoch(s.lastMessageAt);
               final diff = now.difference(dt).inDays;
               if (diff == 0) {
@@ -333,6 +356,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
             return ListView(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               children: [
+                // 置顶分组
+                if (pinned.isNotEmpty) ...[
+                  _buildDateHeader('已置顶'),
+                  for (final s in pinned) _buildSessionTile(s),
+                ],
                 // 日期分组（无文件夹的会话）
                 if (today.isNotEmpty) ...[
                   _buildDateHeader('今天'),
@@ -393,11 +421,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
                 ),
               ),
             ]
-          : folderSessions.map((s) => _buildSessionTile(s)).toList(),
+          : folderSessions.map((s) => _buildSessionTile(s, inFolder: true)).toList(),
     );
   }
 
-  Widget _buildSessionTile(Session session) {
+  Widget _buildSessionTile(Session session, {bool inFolder = false}) {
     final activeId = ref.watch(activeSessionIdProvider);
     final isActive = activeId == session.id;
     final dt = DateTime.fromMillisecondsSinceEpoch(session.lastMessageAt);
@@ -424,6 +452,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('重命名')),
           PopupMenuItem(value: 'moveToFolder', child: const Text('移动到文件夹')),
+          if (!inFolder)
+            PopupMenuItem(
+              value: session.isPinned ? 'unpin' : 'pin',
+              child: Text(session.isPinned ? '取消置顶' : '置顶'),
+            ),
           const PopupMenuItem(
             value: 'delete',
             child: Text('删除', style: TextStyle(color: Colors.red)),
@@ -450,6 +483,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
         break;
       case 'moveToFolder':
         await _showMoveToFolderDialog(session);
+        break;
+      case 'pin':
+      case 'unpin':
+        await sessionDao.setPinned(session.id, action == 'pin');
+        refreshSessions(ref);
         break;
       case 'delete':
         final confirmed = await _showDeleteConfirmDialog(

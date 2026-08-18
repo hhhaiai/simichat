@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart' show CancelToken;
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
@@ -12,6 +11,9 @@ const ollamaIdleTimeout = Duration(minutes: 5);
 
 class OllamaProtocol implements AiProtocol {
   @override
+  Set<String> get nativeAttachmentTypes => const {'image'};
+
+  @override
   Stream<AiChunk> sendStream({
     required String baseUrl,
     required String apiKey,
@@ -21,8 +23,7 @@ class OllamaProtocol implements AiProtocol {
     CancelToken? cancelToken,
     bool jsonResponse = false,
   }) async* {
-    final normalized = normalizeUrl(baseUrl);
-    final url = '$normalized/api/chat';
+    final url = resolveOllamaEndpoint(baseUrl, 'api/chat');
 
     final msgList = <Map<String, dynamic>>[];
     if (systemPrompt != null) {
@@ -30,11 +31,18 @@ class OllamaProtocol implements AiProtocol {
     }
     for (final m in messages) {
       if (m.attachments != null && m.attachments!.isNotEmpty) {
+        for (final attachment in m.attachments!) {
+          if (!nativeAttachmentTypes.contains(attachment.type)) {
+            throwUnsupportedAttachment('ollama', attachment.type);
+          }
+        }
         final loaded = await loadAttachments(m.attachments!);
         final images = <String>[];
         for (final att in loaded) {
-          if (att.type == 'image') {
+          if (att.type == 'image' && nativeAttachmentTypes.contains('image')) {
             images.add(att.base64);
+          } else {
+            throwUnsupportedAttachment('ollama', att.type);
           }
         }
         final msg = <String, dynamic>{'role': m.role, 'content': m.content};
@@ -82,10 +90,13 @@ class OllamaProtocol implements AiProtocol {
         final errorBody = await response.stream.bytesToString().timeout(
           ollamaConnectTimeout,
         );
-        final compactError = errorBody.length > 1024
-            ? '${errorBody.substring(0, 1024)}...'
-            : errorBody;
-        throw Exception('Ollama error ${response.statusCode}: $compactError');
+        throw ProtocolStreamException(
+          _safeRemoteError(errorBody, statusCode: response.statusCode),
+          protocol: 'ollama',
+          kind: ProtocolStreamErrorKind.remote,
+          code: 'http_${response.statusCode}',
+          statusCode: response.statusCode,
+        );
       }
 
       // Ollama returns newline-delimited JSON (not SSE)
@@ -97,35 +108,82 @@ class OllamaProtocol implements AiProtocol {
       await for (final line in stream) {
         if (cancelToken?.isCancelled ?? false) return;
         if (line.trim().isEmpty) continue;
+        final Map<String, dynamic> json;
         try {
-          final json = jsonDecode(line) as Map<String, dynamic>;
-          final done = json['done'] as bool? ?? false;
-          final message = json['message'] as Map<String, dynamic>?;
-          if (message != null) {
-            final content = message['content']?.toString();
-            final thinking = message['thinking']?.toString();
-            if ((content != null && content.isNotEmpty) ||
-                (thinking != null && thinking.isNotEmpty)) {
-              yield AiChunk(
-                content: content?.isNotEmpty == true ? content : null,
-                thinking: thinking?.isNotEmpty == true ? thinking : null,
-              );
-            }
-          }
-          if (done) return;
-        } catch (e) {
-          // 不打印原始响应，避免把用户内容或模型输出写入日志。
-          debugPrint('[Ollama] Ignored malformed NDJSON chunk: $e');
+          final decoded = jsonDecode(line);
+          if (decoded is! Map) throw const FormatException('not an object');
+          json = decoded.cast<String, dynamic>();
+        } catch (_) {
+          throw ProtocolStreamException(
+            'Ollama NDJSON 流事件格式无效',
+            protocol: 'ollama',
+            kind: ProtocolStreamErrorKind.malformed,
+            code: 'invalid_ndjson',
+          );
         }
+
+        final error = json['error'];
+        if (error != null) {
+          throw ProtocolStreamException(
+            _safeRemoteError(error),
+            protocol: 'ollama',
+            kind: ProtocolStreamErrorKind.failed,
+            code: 'upstream_error',
+          );
+        }
+        final doneReason = json['done_reason']?.toString().toLowerCase();
+        if (doneReason == 'length' || doneReason == 'max_tokens') {
+          throw ProtocolStreamException(
+            'Ollama 响应未完整结束',
+            protocol: 'ollama',
+            kind: ProtocolStreamErrorKind.incomplete,
+            code: doneReason,
+          );
+        }
+        if (doneReason == 'error' || doneReason == 'failed') {
+          throw ProtocolStreamException(
+            'Ollama 上游生成失败',
+            protocol: 'ollama',
+            kind: ProtocolStreamErrorKind.failed,
+            code: doneReason,
+          );
+        }
+
+        final done = json['done'] as bool? ?? false;
+        final message = json['message'];
+        if (message is Map) {
+          final content = message['content']?.toString();
+          final thinking = message['thinking']?.toString();
+          if ((content != null && content.isNotEmpty) ||
+              (thinking != null && thinking.isNotEmpty)) {
+            yield AiChunk(
+              content: content?.isNotEmpty == true ? content : null,
+              thinking: thinking?.isNotEmpty == true ? thinking : null,
+            );
+          }
+        }
+        if (done) return;
       }
+    } on ProtocolStreamException {
+      if (cancelToken?.isCancelled ?? false) return;
+      rethrow;
     } catch (e) {
       if (cancelToken?.isCancelled ?? false) {
         return;
       }
       if (e is TimeoutException) {
-        throw Exception('Ollama 响应超时，请检查服务是否已启动或模型是否正在加载');
+        throw ProtocolStreamException(
+          'Ollama 响应超时，请检查服务是否已启动或模型是否正在加载',
+          protocol: 'ollama',
+          kind: ProtocolStreamErrorKind.transport,
+          code: 'timeout',
+        );
       }
-      rethrow;
+      throw ProtocolStreamException(
+        e.toString(),
+        protocol: 'ollama',
+        kind: ProtocolStreamErrorKind.transport,
+      );
     } finally {
       client.close();
     }
@@ -136,8 +194,7 @@ class OllamaProtocol implements AiProtocol {
     String baseUrl, {
     String apiKey = '',
   }) async {
-    final normalized = normalizeUrl(baseUrl);
-    final url = '$normalized/api/tags';
+    final url = resolveOllamaEndpoint(baseUrl, 'api/tags');
     final client = http.Client();
     try {
       final headers = <String, String>{};
@@ -149,11 +206,12 @@ class OllamaProtocol implements AiProtocol {
           .get(Uri.parse(url), headers: headers)
           .timeout(ollamaConnectTimeout);
       if (response.statusCode != 200) {
-        final compactError = response.body.length > 1024
-            ? '${response.body.substring(0, 1024)}...'
-            : response.body;
-        throw Exception(
-          'Ollama tags error ${response.statusCode}: $compactError',
+        throw ProtocolStreamException(
+          _safeRemoteError(response.body, statusCode: response.statusCode),
+          protocol: 'ollama',
+          kind: ProtocolStreamErrorKind.remote,
+          code: 'http_${response.statusCode}',
+          statusCode: response.statusCode,
         );
       }
       final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -170,5 +228,25 @@ class OllamaProtocol implements AiProtocol {
     } finally {
       client.close();
     }
+  }
+
+  static String _safeRemoteError(dynamic value, {int? statusCode}) {
+    if (statusCode == 401) return 'Ollama API Key 无效';
+    if (statusCode == 403) return 'Ollama 访问被拒绝';
+    if (statusCode == 404) return 'Ollama 接口不存在，请检查 Base URL';
+    if (statusCode != null && statusCode >= 500) {
+      return 'Ollama 服务暂时不可用';
+    }
+    if (value is Map) {
+      final message = value['error'] ?? value['message'] ?? value['detail'];
+      if (message is String && message.trim().isNotEmpty) return message;
+    }
+    if (value is String) {
+      try {
+        final decoded = jsonDecode(value);
+        if (decoded is Map) return _safeRemoteError(decoded);
+      } catch (_) {}
+    }
+    return 'Ollama 上游返回错误';
   }
 }

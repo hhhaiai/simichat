@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -21,7 +22,13 @@ class NativeSpeechToTextEngine implements SpeechToTextEngine {
   final bool enforceIosPlatform;
 
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const AudioTranscriptionException('系统语音识别请求已取消');
+    }
     if (enforceIosPlatform && !Platform.isIOS) {
       throw const AudioTranscriptionException('系统语音识别仅支持 iOS');
     }
@@ -40,6 +47,9 @@ class NativeSpeechToTextEngine implements SpeechToTextEngine {
         'path': path,
         'localeIdentifier': localeIdentifier,
       });
+      if (cancelToken?.isCancelled == true) {
+        throw const AudioTranscriptionException('系统语音识别请求已取消');
+      }
       return _extractText(result).trim();
     } on PlatformException catch (error) {
       throw AudioTranscriptionException(_safePlatformError(error));

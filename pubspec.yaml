@@ -61,12 +61,14 @@ dependencies:
   cached_network_image: ^3.4.1
   photo_view: ^0.15.0
   gal: ^2.3.0
+  video_player: ^2.9.2
 
   # WebDAV PROPFIND 响应解析（云备份）
   xml: ^6.6.1
   flutter_localizations:
     sdk: flutter
   workmanager: 0.8.0
+  desktop_drop: ^0.7.1
 
 dev_dependencies:
   flutter_test:

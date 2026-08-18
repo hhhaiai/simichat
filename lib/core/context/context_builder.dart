@@ -26,9 +26,52 @@ class ContextBuilder {
     String? memoryPrompt,
     String? skillsPrompt,
     String? mcpToolsPrompt,
+    String? upToMessageId,
+    String? targetMessageContent,
+    List<Attachment>? targetMessageAttachments,
   }) async {
-    final summaries = await _messageDao.getSummaries(sessionId);
-    final originals = await _messageDao.getUnsummarizedOriginals(sessionId);
+    var summaries = await _messageDao.getSummaries(sessionId);
+    var originals = await _messageDao.getUnsummarizedOriginals(sessionId);
+
+    // Regenerate must replay only the conversation prefix ending at the
+    // target user turn. The normal call path does not pass this boundary and
+    // therefore retains the historical context behavior.
+    if (upToMessageId != null && upToMessageId.trim().isNotEmpty) {
+      final allMessages = await _messageDao.getMessagesBySession(sessionId);
+      final targetIndex = allMessages.indexWhere(
+        (message) => message.id == upToMessageId,
+      );
+      if (targetIndex >= 0) {
+        final visibleIds = allMessages
+            .take(targetIndex + 1)
+            .map((message) => message.id)
+            .toSet();
+        final target = allMessages[targetIndex];
+
+        originals = originals
+            .where((message) => visibleIds.contains(message.id))
+            .toList();
+        // A target can already be marked summarized. It still has to be
+        // replayed as the current user turn; the summary covers older
+        // history, while this original message is the actual request.
+        if (target.messageType == 'original' &&
+            target.role == 'user' &&
+            !originals.any((message) => message.id == target.id)) {
+          originals = [...originals, target];
+        }
+
+        summaries = summaries.where((summary) {
+          final endId = summary.summaryEndId;
+          if (endId != null && endId.isNotEmpty) {
+            final endIndex = allMessages.indexWhere(
+              (message) => message.id == endId,
+            );
+            return endIndex >= 0 && endIndex <= targetIndex;
+          }
+          return summary.createdAt <= target.createdAt;
+        }).toList();
+      }
+    }
 
     var systemPrompt = _buildSystemPrompt(
       customSystemPrompt: customSystemPrompt,
@@ -60,7 +103,22 @@ class ContextBuilder {
               : originals.sublist(originals.length - recentK));
 
     for (final m in recent) {
-      messages.add(AiMessage(role: m.role, content: m.content));
+      final isTargetUser =
+          upToMessageId != null && m.id == upToMessageId && m.role == 'user';
+      messages.add(
+        AiMessage(
+          role: m.role,
+          content: isTargetUser && targetMessageContent != null
+              ? targetMessageContent
+              : m.content,
+          attachments:
+              isTargetUser &&
+                  targetMessageAttachments != null &&
+                  targetMessageAttachments.isNotEmpty
+              ? targetMessageAttachments
+              : null,
+        ),
+      );
     }
 
     if (maxInputTokens != null) {

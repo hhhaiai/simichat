@@ -142,6 +142,8 @@ void main() {
         expect(xai!.protocol, 'openai_chat');
         expect(xai.openAiCompatible, true);
         expect(xai.baseUrl, 'https://api.x.ai/v1');
+        expect(xai.docsUrl, 'https://docs.x.ai/overview');
+        expect(xai.recommendedModels, contains('grok-4.6'));
         expect(xai.recommendedModels, contains('grok-4.3'));
 
         expect(perplexity, isNotNull);
@@ -202,6 +204,44 @@ void main() {
       expect(modelProtocolRequiresApiKey('openai_chat'), isTrue);
       expect(modelProtocolRequiresApiKey('claude'), isTrue);
       expect(modelProtocolRequiresApiKey('gemini'), isTrue);
+    });
+
+    test(
+      'major provider aliases resolve without changing protocol identity',
+      () {
+        expect(findModelProviderPreset('Grok')?.id, 'xai');
+        expect(findModelProviderPreset('Anthropic')?.id, 'anthropic');
+        expect(findModelProviderPreset(' Google ')?.id, 'gemini');
+        expect(findModelProviderPreset('Ollama')?.id, 'ollama');
+        expect(modelProtocolRequiresApiKey('  OLLAMA  '), isFalse);
+
+        final xai = findModelProviderPreset('xai')!;
+        expect(xai.protocol, 'openai_chat');
+        expect(xai.description.toLowerCase(), isNot(contains('realtime')));
+        expect(xai.description.toLowerCase(), isNot(contains('video')));
+        expect(xai.description.toLowerCase(), isNot(contains('voice')));
+      },
+    );
+
+    test('preset metadata contains no credential-shaped values', () {
+      final credentialPattern = RegExp(
+        r'(bearer\s+|sk-[a-z0-9_-]{6,}|AIza[a-z0-9_-]{10,}|api[_-]?key\s*[=:])',
+        caseSensitive: false,
+      );
+      for (final preset in kModelProviderPresets) {
+        final values = <String>[
+          preset.baseUrl,
+          preset.description,
+          preset.docsUrl,
+          ...preset.recommendedModels,
+          if (preset.signUpUrl != null) preset.signUpUrl!,
+        ];
+        expect(
+          values.any(credentialPattern.hasMatch),
+          isFalse,
+          reason: '预设 ${preset.id} 不应携带 API Key 或 Bearer 值',
+        );
+      }
     });
   });
 }

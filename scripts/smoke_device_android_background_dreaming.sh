@@ -13,7 +13,9 @@ SMOKE_REAL_MODEL="${SMOKE_REAL_MODEL:-0}"
 SMOKE_MODEL_CONFIG_FILE="${SMOKE_MODEL_CONFIG_FILE:-}"
 SMOKE_MODEL_NAME="none"
 SMOKE_MODEL_CONFIG_FILE_NAME="android_background_dreaming_model_smoke.json"
-APK_PATH="${APK_PATH:-build/app/outputs/flutter-apk/app-debug.apk}"
+SMOKE_FLAVOR="production"
+EXPECTED_APK_NAME="app-${SMOKE_FLAVOR}-debug.apk"
+APK_PATH="${APK_PATH:-build/app/outputs/flutter-apk/${EXPECTED_APK_NAME}}"
 LOG_PATH="${LOG_PATH:-/tmp/simichat-android-background-dreaming-$(date +%Y%m%d%H%M%S).log}"
 PREFS_PATH="${PREFS_PATH:-/tmp/simichat-android-background-dreaming-prefs-$(date +%Y%m%d%H%M%S).xml}"
 TRIGGER_MODE="${TRIGGER_MODE:-force}"
@@ -22,6 +24,11 @@ BACKGROUND_PROCESS_MODE="${BACKGROUND_PROCESS_MODE:-keep}"
 PROCESS_KILL_SETTLE_SECONDS="${PROCESS_KILL_SETTLE_SECONDS:-0}"
 BACKGROUND_DETACH_AFTER_SCHEDULE="${BACKGROUND_DETACH_AFTER_SCHEDULE:-0}"
 BACKGROUND_STATE_PATH="${BACKGROUND_STATE_PATH:-/tmp/simichat-android-background-dreaming.state}"
+
+if [[ "$(basename "$APK_PATH")" != "$EXPECTED_APK_NAME" ]]; then
+  echo "APK_PATH must point to $EXPECTED_APK_NAME: $APK_PATH" >&2
+  exit 2
+fi
 
 remote_model_config_mode() {
   local path="$1"
@@ -277,6 +284,7 @@ PY
 ORG_GRADLE_PROJECT_simichatApplicationId="$SMOKE_PACKAGE" \
   "$FLUTTER_BIN" --no-version-check build apk \
     --debug \
+    --flavor "$SMOKE_FLAVOR" \
     --target-platform android-arm64 \
     --dart-define=SIMICHAT_ANDROID_BACKGROUND_DREAMING_SMOKE=true \
     --dart-define=SIMICHAT_ANDROID_BACKGROUND_DREAMING_SMOKE_DELAY_SECONDS="$SMOKE_INITIAL_DELAY_SECONDS" \

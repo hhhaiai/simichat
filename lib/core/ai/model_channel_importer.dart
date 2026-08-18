@@ -15,10 +15,12 @@ const supportedImportProtocols = {
 class ImportedChannelModel {
   final String name;
   final String capability;
+  final Set<String> capabilities;
 
   const ImportedChannelModel({
     required this.name,
     this.capability = ModelCapability.chat,
+    this.capabilities = const <String>{},
   });
 }
 
@@ -182,9 +184,23 @@ class ModelChannelImportParser {
         capability: ModelCapability.normalize(
           _readString(map, ['capability', 'type']),
         ),
+        capabilities: _readCapabilities(map['capabilities']),
       );
     }
     throw const ModelChannelImportParseException('模型必须是字符串或对象');
+  }
+
+  static Set<String> _readCapabilities(Object? raw) {
+    final values = <String>{};
+    if (raw is String) {
+      values.addAll(raw.split(RegExp(r'[,|]')));
+    } else if (raw is Iterable) {
+      values.addAll(raw.map((value) => value.toString()));
+    }
+    return values
+        .map(ModelCapability.normalize)
+        .where(ModelCapability.all.contains)
+        .toSet();
   }
 
   static String _requiredString(

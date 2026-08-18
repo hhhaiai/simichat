@@ -50,8 +50,14 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
   final String language;
 
   @override
-  Future<String> transcribe(AudioTranscriptionInput input) async {
-    final normalizedBaseUrl = normalizeSpeechToTextBaseUrl(baseUrl);
+  Future<String> transcribe(
+    AudioTranscriptionInput input, {
+    CancelToken? cancelToken,
+  }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const AudioTranscriptionException('STT 请求已取消');
+    }
+    normalizeSpeechToTextBaseUrl(baseUrl);
     final normalizedModel = normalizeSpeechToTextModel(model);
     final token = apiKey.trim();
     if (token.isEmpty) {
@@ -71,7 +77,7 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
       throw const AudioTranscriptionException('语音文件超过 25 MB，无法转写');
     }
 
-    final url = '$normalizedBaseUrl/v1/audio/transcriptions';
+    final url = resolveOpenAiEndpoint(baseUrl, 'audio/transcriptions');
     final dio = createDio();
     try {
       final response = await dio.post<dynamic>(
@@ -94,7 +100,11 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
               language.trim().toLowerCase() != 'auto')
             'language': language.trim().toLowerCase(),
         }),
+        cancelToken: cancelToken,
       );
+      if (cancelToken?.isCancelled == true) {
+        throw const AudioTranscriptionException('STT 请求已取消');
+      }
       return _extractTranscriptText(response.data).trim();
     } on AudioTranscriptionException {
       rethrow;

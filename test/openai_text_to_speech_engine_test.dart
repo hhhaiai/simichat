@@ -143,6 +143,31 @@ void main() {
         ),
       );
     });
+
+    test('resolves TTS through a configured /api/v3 prefix', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      unawaited(
+        server.forEach((request) async {
+          expect(request.uri.path, '/api/v3/audio/speech');
+          await request.drain<void>();
+          request.response
+            ..headers.contentType = ContentType('audio', 'mpeg')
+            ..add([1, 2, 3]);
+          await request.response.close();
+        }),
+      );
+
+      final engine = OpenAiCompatibleTextToSpeechEngine(
+        baseUrl: 'http://${server.address.host}:${server.port}/api/v3',
+        apiKey: 'tts-test-key',
+      );
+      final bytes = await engine.synthesize(
+        const TextToSpeechInput(text: 'prefix tts', voice: 'alloy'),
+      );
+
+      expect(bytes, [1, 2, 3]);
+    });
   });
 
   // ---- SimiRouter mimo TTS 三种模式 ----

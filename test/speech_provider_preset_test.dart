@@ -1,4 +1,5 @@
 import 'package:ai_chat_app/core/media/speech_provider_preset.dart';
+import 'package:ai_chat_app/core/media/xai_speech_provider_profile.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -12,7 +13,7 @@ void main() {
     );
     expect(
       ttsPresets.map((preset) => preset.id),
-      containsAll(['openai', 'custom_openai_compatible']),
+      containsAll(['openai', 'dwchainless', 'custom_openai_compatible']),
     );
 
     final openAi = findSpeechProviderPreset('openai')!;
@@ -27,6 +28,60 @@ void main() {
     expect(groq.supportsTts, false);
     expect(groq.baseUrl, 'https://api.groq.com/openai');
     expect(groq.sttModel, 'whisper-large-v3-turbo');
+
+    final xai = findSpeechProviderPreset('xai')!;
+    expect(xai.supportsVoiceDesign, isFalse);
+    expect(xai.supportsVoiceClone, isFalse);
+
+    final simiRouter = findSpeechProviderPreset('dwchainless')!;
+    expect(simiRouter.supportsVoiceDesign, isTrue);
+    expect(simiRouter.supportsVoiceClone, isTrue);
+  });
+
+  test('presets expose explicit synthesis, clone, and design boundaries', () {
+    final openAi = findSpeechProviderPreset('openai')!;
+    expect(openAi.capabilities.supportsStt, isTrue);
+    expect(openAi.capabilities.supportsTts, isTrue);
+    expect(openAi.capabilities.voiceClone, isEmpty);
+    expect(openAi.capabilities.voiceDesign, isEmpty);
+
+    final groq = findSpeechProviderPreset('groq')!;
+    expect(groq.capabilities.supportsStt, isTrue);
+    expect(groq.capabilities.supportsTts, isFalse);
+    expect(groq.capabilities.voiceClone, isEmpty);
+    expect(groq.capabilities.voiceDesign, isEmpty);
+
+    final simiRouter = findSpeechProviderPreset('dwchainless')!;
+    expect(simiRouter.capabilities.supportsStt, isTrue);
+    expect(simiRouter.capabilities.supportsTts, isTrue);
+    expect(
+      simiRouter.capabilities.voiceClone,
+      contains(SpeechVoiceCloneSupport.referenceAudioInline),
+    );
+    expect(
+      simiRouter.capabilities.voiceDesign,
+      contains(SpeechVoiceDesignSupport.stylePrompt),
+    );
+
+    final xai = findSpeechProviderPreset(kXaiSpeechProviderId)!;
+    expect(xai.capabilities.supportsStt, isTrue);
+    expect(xai.capabilities.supportsTts, isTrue);
+    expect(
+      xai.capabilities.voiceClone,
+      contains(SpeechVoiceCloneSupport.externalVoiceId),
+    );
+    expect(
+      xai.capabilities.voiceClone,
+      contains(SpeechVoiceCloneSupport.multipartUpload),
+    );
+    expect(xai.capabilities.voiceDesign, isEmpty);
+    expect(xai.description, contains('custom voice ID'));
+
+    final custom = findSpeechProviderPreset('custom_openai_compatible')!;
+    expect(custom.capabilities.supportsStt, isTrue);
+    expect(custom.capabilities.supportsTts, isTrue);
+    expect(custom.capabilities.voiceClone, isEmpty);
+    expect(custom.capabilities.voiceDesign, isEmpty);
   });
 
   test('speech provider preset inference normalizes /v1 suffix', () {

@@ -7,6 +7,116 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'retry resolver anchors the clicked assistant to its preceding user turn',
+    () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      const sessionId = 'session-retry-specific';
+      await db.sessionDao.createSession(id: sessionId);
+      await db.messageDao.insertMessage(
+        id: 'retry-user-a',
+        sessionId: sessionId,
+        role: 'user',
+        content: '第一轮问题',
+      );
+      await db.messageDao.insertMessage(
+        id: 'retry-assistant-a',
+        sessionId: sessionId,
+        role: 'assistant',
+        content: '第一轮回答',
+      );
+      await db.messageDao.insertMessage(
+        id: 'retry-user-b',
+        sessionId: sessionId,
+        role: 'user',
+        content: '第二轮问题',
+      );
+      await db.messageDao.insertMessage(
+        id: 'retry-assistant-b',
+        sessionId: sessionId,
+        role: 'assistant',
+        content: '第二轮回答',
+      );
+
+      final messages = await db.messageDao.getMessagesBySession(sessionId);
+      expect(
+        resolveRetryUserMessageIdForTesting(messages, 'retry-assistant-a'),
+        'retry-user-a',
+      );
+      expect(
+        resolveRetryUserMessageIdForTesting(messages, 'retry-assistant-b'),
+        'retry-user-b',
+      );
+      expect(
+        resolveRetryUserMessageIdForTesting(messages, 'retry-user-b'),
+        isNull,
+      );
+      expect(
+        resolveRetryUserMessageIdForTesting(messages, 'missing-assistant'),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'retry model helpers preserve assistant model ids and fallback safely',
+    () {
+      final messages = [
+        _message(
+          id: 'retry-model-user-a',
+          role: 'user',
+          content: '第一轮问题',
+          createdAt: 1,
+        ),
+        _message(
+          id: 'retry-model-assistant-a',
+          role: 'assistant',
+          content: '第一轮回答',
+          channelModelId: 'model-a',
+          createdAt: 2,
+        ),
+        _message(
+          id: 'retry-model-assistant-a-regenerated',
+          role: 'assistant',
+          content: '第一轮重新回答',
+          channelModelId: ' model-b ',
+          createdAt: 3,
+        ),
+        _message(
+          id: 'retry-model-user-b',
+          role: 'user',
+          content: '第二轮问题',
+          createdAt: 4,
+        ),
+      ];
+
+      expect(
+        resolveRetryModelIdForTesting(messages, 'retry-model-assistant-a'),
+        'model-a',
+      );
+      expect(
+        resolveRetryModelIdForUserMessageForTesting(
+          messages,
+          'retry-model-user-a',
+        ),
+        'model-b',
+      );
+      expect(
+        resolveRetryModelIdForUserMessageForTesting(
+          messages,
+          'retry-model-user-b',
+        ),
+        isNull,
+      );
+      expect(
+        resolveRetryModelIdForTesting(messages, 'missing-assistant'),
+        isNull,
+      );
+    },
+  );
+
   testWidgets('retry loads last user message even before messages provider', (
     tester,
   ) async {
@@ -52,4 +162,24 @@ void main() {
     expect(container.read(streamStateProvider(sessionId)).error, '请先选择一个模型');
     expect(tester.takeException(), isNull);
   });
+}
+
+Message _message({
+  required String id,
+  required String role,
+  required String content,
+  required int createdAt,
+  String? channelModelId,
+}) {
+  return Message(
+    id: id,
+    sessionId: 'retry-model-session',
+    role: role,
+    content: content,
+    messageType: 'original',
+    isSummarized: false,
+    channelModelId: channelModelId,
+    tokens: 0,
+    createdAt: createdAt,
+  );
 }

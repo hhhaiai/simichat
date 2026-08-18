@@ -12,6 +12,7 @@ import 'package:ai_chat_app/shared/providers/session_provider.dart';
 import 'package:ai_chat_app/shared/widgets/chat_input_bar.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -193,6 +194,32 @@ Future<_ChatFixture> _pumpChat(
 
   final db = AppDatabase.forTesting(NativeDatabase.memory());
   final tempDir = Directory.systemTemp.createTempSync('simichat_vision_guard_');
+  final appDirectory = Directory.systemTemp.createTempSync(
+    'simichat_vision_app_data_',
+  );
+  const pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    pathProviderChannel,
+    (call) async {
+      switch (call.method) {
+        case 'getApplicationDocumentsDirectory':
+        case 'getApplicationSupportDirectory':
+        case 'getTemporaryDirectory':
+          return appDirectory.path;
+        default:
+          return null;
+      }
+    },
+  );
+  addTearDown(() {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pathProviderChannel,
+      null,
+    );
+    if (appDirectory.existsSync()) {
+      appDirectory.deleteSync(recursive: true);
+    }
+  });
   await db.channelDao.createChannel(
     id: 'vision-channel',
     name: 'Vision Test',

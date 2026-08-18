@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'package:dio/dio.dart' show CancelToken;
-import 'package:flutter/foundation.dart';
 import 'ai_protocol.dart';
 import 'attachment_helper.dart';
 import 'sse_helper.dart';
 
 class GeminiProtocol implements AiProtocol {
+  @override
+  Set<String> get nativeAttachmentTypes => const {'image', 'audio'};
+
   @override
   Stream<AiChunk> sendStream({
     required String baseUrl,
@@ -16,9 +18,11 @@ class GeminiProtocol implements AiProtocol {
     CancelToken? cancelToken,
     bool jsonResponse = false,
   }) async* {
-    final normalized = normalizeUrl(baseUrl);
-    final url =
-        '$normalized/v1beta/models/$model:streamGenerateContent?alt=sse';
+    final encodedModel = Uri.encodeComponent(model.trim());
+    final url = resolveGeminiEndpoint(
+      baseUrl,
+      'models/$encodedModel:streamGenerateContent?alt=sse',
+    );
 
     final contents = <Map<String, dynamic>>[];
     for (final m in messages) {
@@ -28,15 +32,21 @@ class GeminiProtocol implements AiProtocol {
         parts.add({'text': m.content});
       }
       if (m.attachments != null && m.attachments!.isNotEmpty) {
+        for (final attachment in m.attachments!) {
+          if (!nativeAttachmentTypes.contains(attachment.type)) {
+            throwUnsupportedAttachment('gemini', attachment.type);
+          }
+        }
         final loaded = await loadAttachments(m.attachments!);
         for (final att in loaded) {
           if ((att.type == 'image' || att.type == 'audio') &&
+              nativeAttachmentTypes.contains(att.type) &&
               att.base64.isNotEmpty) {
             parts.add({
               'inlineData': {'mimeType': att.mimeType, 'data': att.base64},
             });
           } else {
-            parts.add({'text': _unsupportedAttachmentText(att.type)});
+            throwUnsupportedAttachment('gemini', att.type);
           }
         }
       }
@@ -65,35 +75,133 @@ class GeminiProtocol implements AiProtocol {
     );
 
     await for (final event in parseSseStream(byteStream)) {
-      try {
-        final json = jsonDecode(event.data) as Map<String, dynamic>;
-        final candidates = json['candidates'] as List?;
-        if (candidates != null && candidates.isNotEmpty) {
-          final content = candidates[0]['content'] as Map<String, dynamic>?;
-          final parts = content?['parts'] as List?;
-          if (parts != null) {
-            for (final part in parts) {
-              final text = part['text'] as String?;
-              if (text == null) continue;
-              final isThought = part['thought'] == true;
-              if (isThought) {
-                yield AiChunk(thinking: text);
-              } else {
-                yield AiChunk(content: text);
-              }
+      final json = _decodeEvent(event.data);
+      _throwForTerminalEvent(json, eventType: event.eventType);
+      final candidates = json['candidates'] as List?;
+      if (candidates != null && candidates.isNotEmpty) {
+        final candidate = candidates.first;
+        if (candidate is! Map) continue;
+        final content = candidate['content'];
+        final parts = content is Map ? content['parts'] as List? : null;
+        if (parts != null) {
+          for (final part in parts) {
+            if (part is! Map) continue;
+            final text = part['text'] as String?;
+            if (text == null) continue;
+            final isThought = part['thought'] == true;
+            if (isThought) {
+              yield AiChunk(thinking: text);
+            } else {
+              yield AiChunk(content: text);
             }
           }
         }
-      } catch (e) {
-        debugPrint('[Gemini] SSE parse error: $e\nLine: ${event.data}');
       }
     }
   }
-}
 
-String _unsupportedAttachmentText(String type) {
-  if (type == 'audio') {
-    return '[附件: audio] 当前 Gemini 模型不支持直接音频输入，请先转写后发送，或切换到支持音频输入的 Gemini 模型。';
+  static Map<String, dynamic> _decodeEvent(String data) {
+    try {
+      final decoded = jsonDecode(data);
+      if (decoded is! Map) throw const FormatException('not an object');
+      return decoded.cast<String, dynamic>();
+    } catch (_) {
+      throw ProtocolStreamException(
+        'Gemini 流事件格式无效',
+        protocol: 'gemini',
+        kind: ProtocolStreamErrorKind.malformed,
+        code: 'invalid_event',
+      );
+    }
   }
-  return '[附件: $type] 当前协议不支持直接上传该类型附件。';
+
+  static void _throwForTerminalEvent(
+    Map<String, dynamic> json, {
+    String? eventType,
+  }) {
+    final error = json['error'];
+    if (error != null) {
+      throw ProtocolStreamException(
+        _remoteErrorMessage(error),
+        protocol: 'gemini',
+        kind: ProtocolStreamErrorKind.failed,
+        code: _remoteErrorCode(error),
+      );
+    }
+    final feedback = json['promptFeedback'];
+    if (feedback is Map) {
+      final reason = feedback['blockReason']?.toString();
+      if (reason != null &&
+          reason.isNotEmpty &&
+          reason != 'BLOCK_REASON_UNSPECIFIED') {
+        throw ProtocolStreamException(
+          'Gemini 请求被安全策略拦截',
+          protocol: 'gemini',
+          kind: ProtocolStreamErrorKind.safety,
+          code: reason,
+        );
+      }
+    }
+    final eventName = eventType?.toLowerCase();
+    if (eventName == 'error' || eventName == 'failed') {
+      throw ProtocolStreamException(
+        _remoteErrorMessage(json),
+        protocol: 'gemini',
+        kind: ProtocolStreamErrorKind.failed,
+        code: _remoteErrorCode(json) ?? eventName,
+      );
+    }
+    final candidates = json['candidates'];
+    if (candidates is! List) return;
+    for (final candidate in candidates) {
+      if (candidate is! Map) continue;
+      final reason = candidate['finishReason']?.toString().toUpperCase();
+      switch (reason) {
+        case 'SAFETY':
+        case 'BLOCKLIST':
+        case 'PROHIBITED_CONTENT':
+        case 'SPII':
+        case 'RECITATION':
+          throw ProtocolStreamException(
+            'Gemini 响应被安全策略拦截',
+            protocol: 'gemini',
+            kind: ProtocolStreamErrorKind.safety,
+            code: reason,
+          );
+        case 'MAX_TOKENS':
+          throw ProtocolStreamException(
+            'Gemini 响应未完整结束',
+            protocol: 'gemini',
+            kind: ProtocolStreamErrorKind.incomplete,
+            code: reason,
+          );
+        case 'OTHER':
+          throw ProtocolStreamException(
+            'Gemini 上游生成失败',
+            protocol: 'gemini',
+            kind: ProtocolStreamErrorKind.failed,
+            code: reason,
+          );
+      }
+    }
+  }
+
+  static String _remoteErrorMessage(dynamic value) {
+    if (value is Map) {
+      final message = value['message'] ?? value['status'] ?? value['detail'];
+      if (message is String && message.trim().isNotEmpty) return message;
+    }
+    if (value is String && value.trim().isNotEmpty) return value;
+    return 'Gemini 上游返回错误';
+  }
+
+  static String? _remoteErrorCode(dynamic value) {
+    if (value is Map) {
+      final code = value['status'] ?? value['code'];
+      if (code != null && code.toString().trim().isNotEmpty) {
+        return code.toString();
+      }
+    }
+    return null;
+  }
 }
