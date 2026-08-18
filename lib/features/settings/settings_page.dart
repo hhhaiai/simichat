@@ -5939,17 +5939,37 @@ class SettingsPage extends ConsumerWidget {
 
   Widget _buildImageGenerationTile(BuildContext context, WidgetRef ref) {
     final config = ref.watch(imageGenerationConfigProvider);
-    return ListTile(
-      leading: const Icon(Icons.auto_awesome_outlined),
-      title: const Text('图片生成配置'),
-      subtitle: Text(
-        '模型：${config.model}\n在聊天输入框输入描述后，点“✨”按钮生成图片',
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-      ),
-      isThreeLine: true,
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => _showImageGenerationDialog(context, ref),
+    return Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.auto_awesome_outlined),
+          title: const Text('图片生成配置'),
+          subtitle: Text(
+            '模型：${config.model} · 尺寸：${config.size}\n在聊天输入框输入描述后，点“✨”按钮生成图片',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          isThreeLine: true,
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _showImageGenerationDialog(context, ref),
+        ),
+        SwitchListTile(
+          key: const ValueKey('image-auto-cdn-switch'),
+          dense: true,
+          secondary: const Icon(Icons.cloud_upload_outlined),
+          title: const Text('生成后自动上传图床', style: TextStyle(fontSize: 13)),
+          subtitle: const Text(
+            '上传到百度 CDN，图片消息附上可复制的外链',
+            style: TextStyle(fontSize: 11),
+          ),
+          value: config.autoUploadToCdn,
+          onChanged: (value) {
+            ref
+                .read(imageGenerationConfigProvider.notifier)
+                .setAutoUploadToCdn(value);
+          },
+        ),
+      ],
     );
   }
 
