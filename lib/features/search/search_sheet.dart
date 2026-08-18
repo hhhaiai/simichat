@@ -202,46 +202,109 @@ class _SearchSheetState extends ConsumerState<_SearchSheet> {
     );
   }
 
+  /// 紧凑结果卡片：小图标 + 类型徽标 + 单行摘要，取代整行长条目。
   Widget _buildResultTile(_SearchResult result, ColorScheme scheme) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      leading: Icon(
-        _iconForMatchType(result.matchType),
-        size: 20,
-        color: scheme.primary,
-      ),
-      title: Text(
-        result.title,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        result.subtitle,
-        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: result.matchCount != null && result.matchCount! > 1
-          ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: scheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(8),
+    final typeLabel = switch (result.matchType) {
+      _MatchType.title => '标题',
+      _MatchType.message => '消息',
+      _MatchType.memory => '记忆',
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: scheme.surfaceContainerLow.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            ref.read(activeSessionIdProvider.notifier).state = result.sessionId;
+            Navigator.pop(context);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.6),
               ),
-              child: Text(
-                '${result.matchCount}',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: scheme.onSecondaryContainer,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  _iconForMatchType(result.matchType),
+                  size: 16,
+                  color: scheme.primary,
                 ),
-              ),
-            )
-          : null,
-      onTap: () {
-        ref.read(activeSessionIdProvider.notifier).state = result.sessionId;
-        Navigator.pop(context);
-      },
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        result.title,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        result.subtitle,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.secondaryContainer.withValues(
+                          alpha: 0.7,
+                        ),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        typeLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: scheme.onSecondaryContainer,
+                        ),
+                      ),
+                    ),
+                    if (result.matchCount != null && result.matchCount! > 1) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '${result.matchCount} 处',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 

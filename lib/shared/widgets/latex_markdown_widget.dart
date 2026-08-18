@@ -7,6 +7,8 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'code_block_widget.dart';
 import 'drawio_widget.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import 'html_artifact_card.dart';
 import 'mermaid_widget.dart';
 import 'image_viewer.dart';
@@ -151,8 +153,27 @@ class LatexMarkdownWidget extends StatelessWidget {
         extensionSet: md.ExtensionSet.gitHubWeb,
         softLineBreak: true,
         sizedImageBuilder: imageBuilder,
+        onTapLink: (text, href, title) {
+          _openMarkdownLink(context, href);
+        },
       ),
     );
+  }
+
+  /// Markdown 行内链接：HTTPS 地址用系统浏览器打开，非法 / 内部地址忽略。
+  Future<void> _openMarkdownLink(BuildContext context, String? href) async {
+    if (href == null || href.isEmpty) return;
+    final uri = Uri.tryParse(href);
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty) {
+      return;
+    }
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      // 系统无浏览器时静默失败，不打断阅读。
+    }
   }
 
   Widget _buildCheckbox(bool checked) {
