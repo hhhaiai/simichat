@@ -13,6 +13,7 @@ import '../../core/media/audio_transcript_archive.dart';
 import '../../core/media/attachment_export_service.dart';
 import '../../core/media/baidu_cdn_image_uploader.dart';
 import '../../core/database/dao/channel_dao.dart';
+import '../../shared/providers/audio_transcription_provider.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/image_generation_provider.dart';
 import '../../shared/providers/image_generation_tasks_provider.dart';
@@ -1992,6 +1993,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               onGenerateImageWithAttachments:
                   _handleGenerateImageWithAttachments,
               onGenerateVideo: _handleGenerateVideo,
+              onSpeechLanguageSelected: (language) {
+                ref.read(sttLanguageOverrideProvider.notifier).set(language);
+              },
               videoActionDisabledReason: videoCapability.isAvailable
                   ? null
                   : videoCapability.message,
@@ -2192,6 +2196,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           onGenerateImage: _handleGenerateImage,
           onGenerateImageWithAttachments: _handleGenerateImageWithAttachments,
           onGenerateVideo: _handleGenerateVideo,
+          onSpeechLanguageSelected: (language) {
+            ref.read(sttLanguageOverrideProvider.notifier).set(language);
+          },
           videoActionDisabledReason: videoCapability.isAvailable
               ? null
               : videoCapability.message,

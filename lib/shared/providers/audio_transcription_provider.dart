@@ -243,20 +243,42 @@ final speechToTextEngineProvider = Provider<SpeechToTextEngine?>((ref) {
   try {
     final apiKey = KeyEncryptor.decrypt(config.apiKeyEncrypted!);
     if (apiKey.trim().isEmpty) return null;
+    // 单次语言覆盖优先：录音按钮长按选择只影响接下来的转录，不改设置。
+    final language =
+        ref.watch(sttLanguageOverrideProvider) ?? config.language;
     if (config.isXai) {
       return XaiSpeechToTextEngine(
         baseUrl: config.baseUrl,
         apiKey: apiKey,
-        language: config.language,
+        language: language,
       );
     }
     return OpenAiCompatibleSpeechToTextEngine(
       baseUrl: config.baseUrl,
       apiKey: apiKey,
       model: config.model,
-      language: config.language,
+      language: language,
     );
   } catch (_) {
     return null;
   }
 });
+
+/// 单次识别语言覆盖（auto / zh / en）。录音按钮长按选择后生效一次，
+/// 发送转录后自动清除；为空表示沿用设置中的语言。
+final sttLanguageOverrideProvider =
+    StateNotifierProvider<SttLanguageOverrideNotifier, String?>((ref) {
+      return SttLanguageOverrideNotifier();
+    });
+
+class SttLanguageOverrideNotifier extends StateNotifier<String?> {
+  SttLanguageOverrideNotifier() : super(null);
+
+  void set(String? language) {
+    state = language;
+  }
+
+  void clear() {
+    state = null;
+  }
+}

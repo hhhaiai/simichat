@@ -109,6 +109,9 @@ class ChatInputBar extends StatefulWidget {
     Map<String, dynamic> extra,
   )?
   onGenerateVideo;
+
+  /// 语音识别语言单次选择（麦克风长按）：auto / zh / en。
+  final void Function(String language)? onSpeechLanguageSelected;
   final Future<bool> Function(String text)? onSynthesizeSpeech;
 
   /// 声音克隆回调。默认要求 Composer 中存在一个 audio 附件，并把第一条
@@ -184,6 +187,7 @@ class ChatInputBar extends StatefulWidget {
     this.onGenerateImage,
     this.onGenerateImageWithAttachments,
     this.onGenerateVideo,
+    this.onSpeechLanguageSelected,
     this.onSynthesizeSpeech,
     this.onCloneVoice,
     this.onDesignVoice,
@@ -1445,6 +1449,60 @@ class _ChatInputBarState extends State<ChatInputBar>
   VoiceRecorderPlatform get _voiceRecorder =>
       widget.voiceRecorder ?? const MethodChannelVoiceRecorder();
 
+  /// 麦克风长按：为接下来的录音选择识别语言（单次生效，不改设置）。
+  Future<void> _pickSpeechLanguage() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '本次录音识别语言',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            ListTile(
+              key: const ValueKey('stt-language-auto'),
+              dense: true,
+              leading: const Icon(Icons.auto_awesome, size: 18),
+              title: const Text('自动检测', style: TextStyle(fontSize: 13)),
+              onTap: () => Navigator.of(sheetContext).pop('auto'),
+            ),
+            ListTile(
+              key: const ValueKey('stt-language-zh'),
+              dense: true,
+              leading: const Icon(Icons.language, size: 18),
+              title: const Text('中文', style: TextStyle(fontSize: 13)),
+              onTap: () => Navigator.of(sheetContext).pop('zh'),
+            ),
+            ListTile(
+              key: const ValueKey('stt-language-en'),
+              dense: true,
+              leading: const Icon(Icons.translate, size: 18),
+              title: const Text('English', style: TextStyle(fontSize: 13)),
+              onTap: () => Navigator.of(sheetContext).pop('en'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    widget.onSpeechLanguageSelected!(selected);
+    final label = switch (selected) {
+      'zh' => '中文',
+      'en' => 'English',
+      _ => '自动检测',
+    };
+    _showAttachmentError('本次录音识别语言：$label（仅本次生效）');
+  }
+
   Future<void> _toggleVoiceRecording() async {
     if (_isVoiceBusy) return;
     if (_isRecordingVoice) {
@@ -1738,6 +1796,11 @@ class _ChatInputBarState extends State<ChatInputBar>
                                             widget.mediaTask?.isBusy == true
                                         ? null
                                         : _toggleVoiceRecording,
+                                    onLongPress:
+                                        widget.onSpeechLanguageSelected ==
+                                                null
+                                        ? null
+                                        : _pickSpeechLanguage,
                                     icon: Icon(
                                       _isRecordingVoice
                                           ? Icons.stop_circle_outlined

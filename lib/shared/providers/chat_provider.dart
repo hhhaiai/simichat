@@ -828,6 +828,8 @@ SpeechToTextEngine? _resolveSpeechToTextEngineForMessage({
         // 通道模型本身是 ASR 模型（如 SimiRouter 的 mimo-v2.5-asr）时
         // 直接透传，否则保持默认 whisper-1（避免把聊天模型名传给转录接口）。
         model: channelModelIsAsr ? channelModel : kDefaultSpeechToTextModel,
+        language:
+            ref.read(sttLanguageOverrideProvider) ?? 'auto',
       ),
     );
   }
@@ -859,6 +861,8 @@ Future<String?> _transcribeAudioAttachmentsForAi({
       fileSize: attachment.fileSize,
       engineOverride: engine,
     );
+    // 单次语言覆盖只影响本次发送的转录，全部完成后清除。
+    ref.read(sttLanguageOverrideProvider.notifier).clear();
     final normalized = transcript?.trim();
     if (normalized != null && normalized.isNotEmpty) {
       transcripts.add('【${attachment.fileName}】\n$normalized');
