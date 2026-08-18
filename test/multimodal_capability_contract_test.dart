@@ -50,7 +50,7 @@ void main() {
                 imagePrompts.add(text);
                 return true;
               },
-              onGenerateVideo: (text, _) async {
+              onGenerateVideo: (text, _, _) async {
                 videoPrompts.add(text);
                 return true;
               },
@@ -147,6 +147,9 @@ void main() {
       await setPrompt('视频描述');
       await openMenu();
       await tapMenuItem(find.byKey(const ValueKey('generate-video-menu-item')));
+      // 视频生成先弹 per-request 配置弹窗，确认后才会调用回调。
+      expect(find.text('生成视频'), findsWidgets);
+      await tapMenuItem(find.byKey(const ValueKey('confirm-video-generation')));
 
       await setPrompt('请朗读这句话');
       await openMenu();
@@ -185,7 +188,7 @@ void main() {
               hasTextNotifier: hasText,
               showVoiceInput: false,
               onSend: (_, _) async => true,
-              onGenerateVideo: (_, _) async {
+              onGenerateVideo: (_, _, _) async {
                 videoCalled = true;
                 return true;
               },

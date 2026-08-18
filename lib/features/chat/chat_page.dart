@@ -1112,6 +1112,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<bool> _handleGenerateVideo(
     String content,
     List<PendingAttachment> attachments,
+    Map<String, dynamic> extra,
   ) {
     return _runMediaAction(
       content,
@@ -1120,6 +1121,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         sessionId: sessionId,
         prompt: content,
         referenceAttachments: attachments,
+        extra: extra,
       ),
       mediaKind: UniversalMediaKind.video,
       mediaAttachments: attachments,

@@ -102,7 +102,12 @@ class ChatInputBar extends StatefulWidget {
 
   /// 通用媒体动作。它们都采用 ChatGPT Composer 的“工具菜单”交互：
   /// 输入提示词，必要时附带参考文件，再把结果作为 assistant 媒体消息写回。
-  final Future<bool> Function(String text, List<PendingAttachment> attachments)?
+  /// 视频生成 extra 携带用户在弹窗中选择的时长 / 分辨率等请求参数。
+  final Future<bool> Function(
+    String text,
+    List<PendingAttachment> attachments,
+    Map<String, dynamic> extra,
+  )?
   onGenerateVideo;
   final Future<bool> Function(String text)? onSynthesizeSpeech;
 
@@ -1261,10 +1266,16 @@ class _ChatInputBarState extends State<ChatInputBar>
       _showAttachmentError('请先结束当前录音');
       return;
     }
-    final consumedAttachments = _firstImageReferenceAttachments();
+    final imageAttachments = _pendingAttachments
+        .where((attachment) => attachment.type == 'image')
+        .toList();
+    final config = await _showVideoConfigDialog(text, imageAttachments);
+    if (!_isCurrentOperationSession(operationSessionId)) return;
+    if (config == null) return;
+    final consumedAttachments = config.referenceAttachments;
     bool ok;
     try {
-      ok = await callback(text, consumedAttachments);
+      ok = await callback(text, consumedAttachments, config.extra);
     } catch (_) {
       if (mounted && _isCurrentOperationSession(operationSessionId)) {
         _showActionFailure('视频生成');
@@ -2150,6 +2161,201 @@ class _ChatInputBarState extends State<ChatInputBar>
                 ),
         );
       },
+    );
+  }
+}
+
+/// 视频生成弹窗的确认结果。
+class VideoGenerationConfig {
+  const VideoGenerationConfig({
+    required this.referenceAttachments,
+    required this.extra,
+  });
+
+  final List<PendingAttachment> referenceAttachments;
+  final Map<String, dynamic> extra;
+}
+
+/// 视频生成 per-request 弹窗：显式参考图选择 + 时长 / 分辨率可选参数。
+extension on _ChatInputBarState {
+  Future<VideoGenerationConfig?> _showVideoConfigDialog(
+    String prompt,
+    List<PendingAttachment> imageAttachments,
+  ) {
+    var selectedIndex = imageAttachments.isNotEmpty ? 0 : -1;
+    var durationText = '';
+    var resolution = '';
+    return showDialog<VideoGenerationConfig>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final scheme = Theme.of(dialogContext).colorScheme;
+          return AlertDialog(
+            title: const Text('生成视频'),
+            content: SizedBox(
+              width: 360,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      prompt,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (imageAttachments.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        '参考图（可选，默认第一张）',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        height: 72,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: imageAttachments.length,
+                          itemBuilder: (_, index) {
+                            final attachment = imageAttachments[index];
+                            final selected = index == selectedIndex;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: InkWell(
+                                key: ValueKey(
+                                  'video-ref-image-$index',
+                                ),
+                                onTap: () {
+                                  setDialogState(() {
+                                    selectedIndex = selectedIndex == index
+                                        ? -1
+                                        : index;
+                                  });
+                                },
+                                child: Container(
+                                  width: 64,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: selected
+                                          ? scheme.primary
+                                          : scheme.outlineVariant,
+                                      width: selected ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius:
+                                              const BorderRadius.vertical(
+                                                top: Radius.circular(7),
+                                              ),
+                                          child: Image.file(
+                                            File(attachment.path),
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, _, _) =>
+                                                const Icon(Icons.image, size: 24),
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        selected ? '已选' : '可选',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: selected
+                                              ? scheme.primary
+                                              : scheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    TextField(
+                      key: const ValueKey('video-duration-field'),
+                      controller: TextEditingController(text: durationText),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '时长（秒，可选）',
+                        hintText: '留空使用上游默认',
+                        isDense: true,
+                      ),
+                      onChanged: (value) {
+                        durationText = value.trim();
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('video-resolution-field'),
+                      initialValue: resolution,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: '分辨率（可选）',
+                        isDense: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: '', child: Text('不指定')),
+                        DropdownMenuItem(value: '480p', child: Text('480p')),
+                        DropdownMenuItem(value: '720p', child: Text('720p')),
+                        DropdownMenuItem(value: '1080p', child: Text('1080p')),
+                      ],
+                      onChanged: (value) {
+                        setDialogState(() {
+                          resolution = value ?? '';
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const ValueKey('confirm-video-generation'),
+                onPressed: () {
+                  final extra = <String, dynamic>{};
+                  final seconds = int.tryParse(durationText);
+                  if (seconds != null && seconds > 0) {
+                    extra['seconds'] = seconds;
+                  }
+                  if (resolution.isNotEmpty) {
+                    extra['resolution'] = resolution;
+                  }
+                  Navigator.of(dialogContext).pop(
+                    VideoGenerationConfig(
+                      referenceAttachments: selectedIndex >= 0 &&
+                              selectedIndex < imageAttachments.length
+                          ? [imageAttachments[selectedIndex]]
+                          : const <PendingAttachment>[],
+                      extra: extra,
+                    ),
+                  );
+                },
+                child: const Text('开始生成'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }

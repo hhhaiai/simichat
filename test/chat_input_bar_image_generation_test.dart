@@ -84,7 +84,7 @@ void main() {
               hasTextNotifier: hasText,
               showVoiceInput: false,
               onSend: (_, _) async => true,
-              onGenerateVideo: (_, _) async => true,
+              onGenerateVideo: (_, _, _) async => true,
               onSynthesizeSpeech: (_) async => true,
               onGenerateMusic: (_) async => true,
             ),
@@ -689,7 +689,7 @@ void main() {
             isStreaming: false,
             hasTextNotifier: hasText,
             onSend: (_, _) async => true,
-            onGenerateVideo: (text, attachments) async {
+            onGenerateVideo: (text, attachments, extra) async {
               videoCalled = text == '一段温柔的海边旋律' && attachments.isEmpty;
               return true;
             },
@@ -722,6 +722,10 @@ void main() {
     );
 
     await tester.tap(find.byKey(const ValueKey('generate-video-menu-item')));
+    await tester.pumpAndSettle();
+    // per-request 配置弹窗：确认后回调。
+    expect(find.text('生成视频'), findsWidgets);
+    await tester.tap(find.byKey(const ValueKey('confirm-video-generation')));
     await tester.pumpAndSettle();
     expect(videoCalled, isTrue);
     expect(controller.text, isEmpty);
@@ -776,7 +780,7 @@ void main() {
               initialAttachments: const [retainedAttachment],
               onDraftChanged: (draft) => latestDraft = draft,
               onSend: (_, _) async => true,
-              onGenerateVideo: (text, attachments) async {
+              onGenerateVideo: (text, attachments, extra) async {
                 expect(text, '生成无参考图视频');
                 expect(attachments, isEmpty);
                 return true;
@@ -789,6 +793,8 @@ void main() {
       await tester.tap(find.byTooltip('添加附件'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('generate-video-menu-item')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('confirm-video-generation')));
       await tester.pumpAndSettle();
 
       expect(controller.text, isEmpty);
@@ -1028,7 +1034,7 @@ void main() {
             hasTextNotifier: hasText,
             initialAttachments: [image, other],
             onSend: (_, _) async => true,
-            onGenerateVideo: (text, attachments) async {
+            onGenerateVideo: (text, attachments, extra) async {
               received = attachments;
               return true;
             },
@@ -1040,7 +1046,10 @@ void main() {
     await tester.tap(find.byTooltip('添加附件'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('generate-video-menu-item')));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    // 弹窗默认选中第一张参考图；直接确认即可。
+    await tester.tap(find.byKey(const ValueKey('confirm-video-generation')));
+    await tester.pumpAndSettle();
 
     expect(received, hasLength(1));
     expect(received!.single.stableId, image.stableId);
@@ -1073,7 +1082,7 @@ void main() {
               isStreaming: false,
               hasTextNotifier: hasText,
               onSend: (_, _) async => true,
-              onGenerateVideo: (_, _) async => true,
+              onGenerateVideo: (_, _, _) async => true,
               onGenerateMusic: (_) async => true,
               videoActionDisabledReason: '正在检测当前模型和媒体配置…',
               musicActionDisabledReason: '请先在当前渠道配置 API Key 后再生成音乐',

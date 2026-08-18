@@ -200,7 +200,7 @@ void main() {
             onRealtimeVoice: () async {},
             onEditImage: (_) async => true,
             onGenerateImage: (_) async => true,
-            onGenerateVideo: (_, _) async => true,
+            onGenerateVideo: (_, _, _) async => true,
             onSynthesizeSpeech: (_) async => true,
             onCloneVoice: (_, _) async => true,
             onDesignVoice: (_) async => true,
