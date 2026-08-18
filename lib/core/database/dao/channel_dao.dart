@@ -171,6 +171,26 @@ class ChannelDao extends DatabaseAccessor<AppDatabase> with _$ChannelDaoMixin {
     });
   }
 
+  /// 更新已存在模型的能力元数据：获取模型时能力推断可能变化，
+  /// 同步已有行而不是按"能力+名称"插入重复模型。
+  Future<void> updateModelCapability({
+    required String id,
+    required String capability,
+    required Iterable<String> capabilities,
+  }) async {
+    final normalizedCapability = ModelCapability.normalize(capability);
+    final normalizedCapabilities = <String>{
+      normalizedCapability,
+      ...capabilities.map(ModelCapability.normalize),
+    }.toList()..sort();
+    await (update(channelModels)..where((t) => t.id.equals(id))).write(
+      ChannelModelsCompanion(
+        capability: Value(normalizedCapability),
+        capabilities: Value(jsonEncode(normalizedCapabilities)),
+      ),
+    );
+  }
+
   /// 批量删除模型：一次事务内清空引用并删除，避免逐个删除时
   /// 中途失败留下部分已删、部分未删的不可预期状态。
   Future<void> deleteModels(List<String> ids) {

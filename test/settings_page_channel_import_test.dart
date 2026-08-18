@@ -1,5 +1,6 @@
 import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/database/app_database.dart';
+import 'package:ai_chat_app/core/ai/model_fetcher.dart';
 import 'package:ai_chat_app/core/ai/model_tester.dart';
 import 'package:ai_chat_app/features/settings/settings_page.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
@@ -663,4 +664,82 @@ void main() {
       'grok-imagine-video',
     });
   });
+
+
+  testWidgets('fetch models dedupes by name and updates capability', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.channelDao.createChannel(
+      id: 'fetch-channel',
+      name: 'Fetch Channel',
+      baseUrl: 'https://api.example.com/v1',
+      apiKeyEncrypted: KeyEncryptor.encrypt('test-key'),
+      protocol: 'openai_chat',
+    );
+    await db.channelDao.addModel(
+      id: 'mimo-chat-id',
+      channelId: 'fetch-channel',
+      modelName: 'mimo-v2.5-chat',
+      capability: 'chat',
+    );
+    await db.channelDao.addModel(
+      id: 'ghost-id',
+      channelId: 'fetch-channel',
+      modelName: 'ghost-model',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: SettingsPage(
+            modelFetcherRunner:
+                ({required protocol, required baseUrl, required apiKey}) async {
+                  return const [
+                    FetchedModel(
+                      id: 'mimo-v2.5-chat',
+                      capability: 'vision',
+                      capabilities: {'chat', 'vision'},
+                    ),
+                    FetchedModel(id: 'new-model', capability: 'chat'),
+                  ];
+                },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Fetch Channel'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fetch Channel'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('自动获取模型'));
+    await tester.pumpAndSettle();
+
+    // 只有新模型进选择对话框；远端下架的 ghost-model 有提示且不删除。
+    expect(find.text('获取到 1 个模型'), findsOneWidget);
+    expect(find.textContaining('远端已下架 1 个本地模型'), findsOneWidget);
+    expect(find.text('new-model'), findsOneWidget);
+
+    await tester.tap(find.textContaining('添加选中的'));
+    await tester.pumpAndSettle();
+
+    final models = await db.channelDao.getModelsByChannel('fetch-channel');
+    final byName = {for (final m in models) m.modelName: m};
+    // 同一模型名只保留一行，能力从 chat 更新为 vision。
+    expect(models.where((m) => m.modelName == 'mimo-v2.5-chat').length, 1);
+    expect(byName['mimo-v2.5-chat']!.capability, 'vision');
+    expect(byName.containsKey('new-model'), true);
+    expect(byName.containsKey('ghost-model'), true);
+    expect(find.textContaining('已添加 1 个模型'), findsOneWidget);
+  });
+
 }

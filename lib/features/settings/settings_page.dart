@@ -90,6 +90,13 @@ typedef SettingsModelTestRunner =
       required String capability,
     });
 
+typedef SettingsModelFetcherRunner =
+    Future<List<FetchedModel>> Function({
+      required String protocol,
+      required String baseUrl,
+      required String apiKey,
+    });
+
 String _safeTtsDialogError(Object error, {bool customVoice = true}) {
   if (error is XaiCustomVoiceException) return error.message;
   if (error is TextToSpeechException) return error.message;
@@ -205,9 +212,14 @@ String shortObsidianSyncHash(String? value) {
 }
 
 class SettingsPage extends ConsumerWidget {
-  const SettingsPage({super.key, this.modelTestRunner});
+  const SettingsPage({
+    super.key,
+    this.modelTestRunner,
+    this.modelFetcherRunner,
+  });
 
   final SettingsModelTestRunner? modelTestRunner;
+  final SettingsModelFetcherRunner? modelFetcherRunner;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3959,11 +3971,18 @@ class SettingsPage extends ConsumerWidget {
     var loadingDismissed = false;
     try {
       final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
-      final models = await ModelFetcher.fetchModelInfos(
-        protocol: channel.protocol,
-        baseUrl: channel.baseUrl,
-        apiKey: apiKey,
-      );
+      final fetcher = modelFetcherRunner;
+      final models = fetcher != null
+          ? await fetcher(
+              protocol: channel.protocol,
+              baseUrl: channel.baseUrl,
+              apiKey: apiKey,
+            )
+          : await ModelFetcher.fetchModelInfos(
+              protocol: channel.protocol,
+              baseUrl: channel.baseUrl,
+              apiKey: apiKey,
+            );
 
       if (context.mounted) {
         Navigator.pop(context);
@@ -3982,23 +4001,67 @@ class SettingsPage extends ConsumerWidget {
         return;
       }
 
-      // 获取已有的模型列表
-      final existingModels = await ref
-          .read(channelDaoProvider)
-          .getModelsByChannel(channel.id);
-      final existingKeys = existingModels
-          .map((m) => '${m.capability}::${m.modelName}')
-          .toSet();
+      // 获取已有的模型列表：按模型名去重。能力推断变化时更新已有行，
+      // 不再以"能力+名称"为键重复插入同一模型。
+      final channelDao = ref.read(channelDaoProvider);
+      final existingModels = await channelDao.getModelsByChannel(channel.id);
+      final existingByName = {
+        for (final m in existingModels) m.modelName: m,
+      };
+      final remoteIds = models.map((m) => m.id).toSet();
 
       // 过滤出新模型
       final newModels = models
-          .where((m) => !existingKeys.contains('${m.capability}::${m.id}'))
+          .where((m) => !existingByName.containsKey(m.id))
+          .toList();
+
+      // 同步已有模型的能力元数据
+      var updatedCount = 0;
+      for (final fetched in models) {
+        final existing = existingByName[fetched.id];
+        if (existing == null) continue;
+        List<String> existingCapabilities = const [];
+        try {
+          existingCapabilities = (jsonDecode(existing.capabilities) as List)
+              .whereType<String>()
+              .toList();
+        } catch (_) {
+          // 旧行能力 JSON 损坏时按空处理，直接更新为远端推断结果。
+        }
+        final fetchedCapabilities = fetched.capabilities.toList()..sort();
+        existingCapabilities = existingCapabilities..sort();
+        if (existing.capability != fetched.capability ||
+            !listEquals(existingCapabilities, fetchedCapabilities)) {
+          await channelDao.updateModelCapability(
+            id: existing.id,
+            capability: fetched.capability,
+            capabilities: fetched.capabilities,
+          );
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        refreshChannelModels(ref, channel.id);
+        refreshModels(ref);
+      }
+
+      // 远端已不存在的本地模型：提示但不自动删除。
+      final missingNames = existingModels
+          .map((m) => m.modelName)
+          .where((name) => !remoteIds.contains(name))
           .toList();
 
       if (newModels.isEmpty) {
         if (context.mounted) {
+          final message = StringBuffer('所有 ${models.length} 个模型已存在，无需添加');
+          if (updatedCount > 0) {
+            message.write('；已同步 $updatedCount 个模型的能力信息');
+          }
+          if (missingNames.isNotEmpty) {
+            message.write('；远端已无 ${missingNames.length} 个本地模型（未删除）');
+          }
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('所有 ${models.length} 个模型已存在，无需添加')),
+            SnackBar(content: Text(message.toString())),
           );
         }
         return;
@@ -4011,6 +4074,7 @@ class SettingsPage extends ConsumerWidget {
           ref,
           channel.id,
           newModels,
+          missingNames: missingNames,
           preferredModel: channel.protocol == 'ollama' ? 'gemma4' : null,
         );
       }
@@ -4029,6 +4093,7 @@ class SettingsPage extends ConsumerWidget {
     WidgetRef ref,
     String channelId,
     List<FetchedModel> models, {
+    List<String> missingNames = const [],
     String? preferredModel,
   }) {
     final selected = ModelFetcher.defaultSelectedModelIds(
@@ -4044,29 +4109,61 @@ class SettingsPage extends ConsumerWidget {
           content: SizedBox(
             width: double.maxFinite,
             height: 400,
-            child: ListView.builder(
-              itemCount: models.length,
-              itemBuilder: (_, index) {
-                final model = models[index];
-                return CheckboxListTile(
-                  title: Text(model.id, style: const TextStyle(fontSize: 13)),
-                  subtitle: Text(
-                    ModelCapability.label(model.capability),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            child: Column(
+              children: [
+                if (missingNames.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '远端已下架 ${missingNames.length} 个本地模型'
+                      '（${missingNames.take(3).join('、')}'
+                      '${missingNames.length > 3 ? ' 等' : ''}），'
+                      '本次不删除，可稍后用一键测试剔除。',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.orange[800],
+                      ),
+                    ),
                   ),
-                  value: selected.contains(model.id),
-                  dense: true,
-                  onChanged: (checked) {
-                    setDialogState(() {
-                      if (checked == true) {
-                        selected.add(model.id);
-                      } else {
-                        selected.remove(model.id);
-                      }
-                    });
-                  },
-                );
-              },
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: models.length,
+                    itemBuilder: (_, index) {
+                      final model = models[index];
+                      return CheckboxListTile(
+                        title: Text(
+                          model.id,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                        subtitle: Text(
+                          ModelCapability.label(model.capability),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                        value: selected.contains(model.id),
+                        dense: true,
+                        onChanged: (checked) {
+                          setDialogState(() {
+                            if (checked == true) {
+                              selected.add(model.id);
+                            } else {
+                              selected.remove(model.id);
+                            }
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
           actions: [
