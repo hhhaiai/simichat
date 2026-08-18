@@ -199,3 +199,25 @@ String _safeText(String value) {
       .replaceAll(RegExp(r'AIza[0-9A-Za-z_-]{10,}'), 'AIza***')
       .trim();
 }
+
+/// 正在测试中的模型 id 集合：驱动模型行的 spinner 与禁用状态，
+/// 并防止同一模型并发发起多个测试请求。
+final testingModelIdsProvider =
+    StateNotifierProvider<TestingModelIdsNotifier, Set<String>>((ref) {
+      return TestingModelIdsNotifier();
+    });
+
+class TestingModelIdsNotifier extends StateNotifier<Set<String>> {
+  TestingModelIdsNotifier() : super(const <String>{});
+
+  void start(String modelId) {
+    if (state.contains(modelId)) return;
+    state = {...state, modelId};
+  }
+
+  void finish(String modelId) {
+    if (!state.contains(modelId)) return;
+    final updated = Set<String>.from(state)..remove(modelId);
+    state = updated;
+  }
+}

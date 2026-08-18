@@ -3045,6 +3045,7 @@ class SettingsPage extends ConsumerWidget {
   ) {
     final selectedModelId = ref.watch(selectedModelIdProvider);
     final modelTestHistory = ref.watch(modelTestHistoryProvider);
+    final testingModelIds = ref.watch(testingModelIdsProvider);
     final channelLogoAsset = getChannelLogoAsset(
       channel.protocol,
       channel.baseUrl,
@@ -3141,16 +3142,56 @@ class SettingsPage extends ConsumerWidget {
                                   color: Theme.of(context).colorScheme.primary,
                                 ),
                               ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.play_arrow,
-                                size: 18,
-                                color: Colors.green,
-                              ),
-                              tooltip: '测试连接',
-                              onPressed: () =>
-                                  _testModel(context, ref, channel, m),
-                            ),
+                            Consumer(builder: (rowContext, rowRef, _) {
+                              final testing = testingModelIds.contains(m.id);
+                              final history = modelTestHistory[m.id];
+                              return IconButton(
+                                key: ValueKey('test-model-${m.id}'),
+                                style: IconButton.styleFrom(
+                                  minimumSize: const Size.square(40),
+                                ),
+                                tooltip: testing
+                                    ? '测试中…'
+                                    : history == null
+                                    ? '测试连接'
+                                    : history.success
+                                    ? '最近测试成功，点击重新测试'
+                                    : '最近测试失败，点击重新测试',
+                                icon: testing
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : history == null
+                                    ? const Icon(
+                                        Icons.play_circle_outline,
+                                        size: 20,
+                                        color: Colors.green,
+                                      )
+                                    : history.success
+                                    ? const Icon(
+                                        Icons.check_circle,
+                                        size: 20,
+                                        color: Colors.green,
+                                      )
+                                    : const Icon(
+                                        Icons.cancel,
+                                        size: 20,
+                                        color: Colors.red,
+                                      ),
+                                onPressed: testing
+                                    ? null
+                                    : () => _testModel(
+                                        rowContext,
+                                        ref,
+                                        channel,
+                                        m,
+                                      ),
+                              );
+                            }),
                             IconButton(
                               icon: const Icon(
                                 Icons.remove_circle_outline,
@@ -4101,14 +4142,11 @@ class SettingsPage extends ConsumerWidget {
     ModelChannel channel,
     ChannelModel model,
   ) async {
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    scaffoldMessenger.showSnackBar(
-      SnackBar(
-        content: Text('正在测试 ${model.modelName}...'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+    final inFlight = ref.read(testingModelIdsProvider.notifier);
+    if (ref.read(testingModelIdsProvider).contains(model.id)) return;
+    inFlight.start(model.id);
 
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
       final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
       final result = await _runModelTest(
@@ -4118,6 +4156,18 @@ class SettingsPage extends ConsumerWidget {
         model: model.modelName,
         capability: model.capability,
       );
+
+      if (result.skipped) {
+        if (context.mounted) {
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text('⏭️ ${model.modelName}：${result.compactMessage}'),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
 
       await ref
           .read(modelTestHistoryProvider.notifier)
@@ -4170,6 +4220,8 @@ class SettingsPage extends ConsumerWidget {
           ),
         );
       }
+    } finally {
+      inFlight.finish(model.id);
     }
   }
 
