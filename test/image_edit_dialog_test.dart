@@ -37,7 +37,7 @@ void main() {
               onPressed: () => showImageEditDialog(
                 context,
                 imagePath: image.path,
-                onEdit: (prompt) async {
+                onEdit: (prompt, size) async {
                   submittedPrompt = prompt;
                   return error;
                 },
@@ -91,7 +91,7 @@ void main() {
               onPressed: () => showImageEditDialog(
                 context,
                 imagePath: image.path,
-                onEdit: (_) async => null,
+                onEdit: (_, _) async => null,
               ),
               child: const Text('打开编辑'),
             ),
@@ -131,7 +131,7 @@ void main() {
               onPressed: () => showImageEditDialog(
                 context,
                 imagePath: image.path,
-                onEdit: (_) async {
+                onEdit: (_, _) async {
                   if (shouldThrow) throw StateError('internal details');
                   return null;
                 },

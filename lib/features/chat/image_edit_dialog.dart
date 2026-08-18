@@ -10,20 +10,34 @@ import 'package:flutter/material.dart';
 Future<bool> showImageEditDialog(
   BuildContext context, {
   required String imagePath,
-  required Future<String?> Function(String prompt) onEdit,
+  required Future<String?> Function(String prompt, String size) onEdit,
+  List<String> sizeOptions = const <String>['1024x1024'],
+  String initialSize = '1024x1024',
 }) async {
   final submitted = await showDialog<bool>(
     context: context,
-    builder: (ctx) => _ImageEditDialog(imagePath: imagePath, onEdit: onEdit),
+    builder: (ctx) => _ImageEditDialog(
+      imagePath: imagePath,
+      onEdit: onEdit,
+      sizeOptions: sizeOptions,
+      initialSize: initialSize,
+    ),
   );
   return submitted ?? false;
 }
 
 class _ImageEditDialog extends StatefulWidget {
-  const _ImageEditDialog({required this.imagePath, required this.onEdit});
+  const _ImageEditDialog({
+    required this.imagePath,
+    required this.onEdit,
+    required this.sizeOptions,
+    required this.initialSize,
+  });
 
   final String imagePath;
-  final Future<String?> Function(String prompt) onEdit;
+  final Future<String?> Function(String prompt, String size) onEdit;
+  final List<String> sizeOptions;
+  final String initialSize;
 
   @override
   State<_ImageEditDialog> createState() => _ImageEditDialogState();
@@ -31,6 +45,7 @@ class _ImageEditDialog extends StatefulWidget {
 
 class _ImageEditDialogState extends State<_ImageEditDialog> {
   final _promptController = TextEditingController();
+  late String _size = widget.initialSize;
   bool _busy = false;
   String? _errorText;
 
@@ -52,7 +67,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
     });
     String? error;
     try {
-      error = await widget.onEdit(prompt);
+      error = await widget.onEdit(prompt, _size);
     } catch (_) {
       // 业务回调约定返回可读错误，但 DAO / 配置读取等意外异常仍需在
       // 对话框内收口，恢复按钮并保留提示词，不能让用户卡在“编辑中”。
@@ -107,6 +122,23 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                   labelText: '编辑提示词',
                   hintText: '如：改成赛博朋克夜景',
                 ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _size,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: '输出尺寸'),
+                items: [
+                  for (final size in widget.sizeOptions)
+                    DropdownMenuItem(value: size, child: Text(size)),
+                ],
+                onChanged: _busy
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _size = value);
+                        }
+                      },
               ),
               if (_errorText != null) ...[
                 const SizedBox(height: 8),

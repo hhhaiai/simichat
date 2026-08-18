@@ -14,7 +14,16 @@ class ImageViewer extends StatefulWidget {
   final ImageProvider imageProvider;
   final String? imageUrl;
 
-  const ImageViewer({super.key, required this.imageProvider, this.imageUrl});
+  /// 编辑入口：为 null 时不显示编辑按钮。编辑通常以当前图片为参考图
+  /// 进入编辑对话框，结果作为新消息插入会话（ChatGPT 风格）。
+  final VoidCallback? onEditImage;
+
+  const ImageViewer({
+    super.key,
+    required this.imageProvider,
+    this.imageUrl,
+    this.onEditImage,
+  });
 
   @override
   State<ImageViewer> createState() => _ImageViewerState();
@@ -125,6 +134,16 @@ class _ImageViewerState extends State<ImageViewer> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          if (widget.onEditImage != null)
+            IconButton(
+              key: const ValueKey('viewer-edit-image'),
+              icon: const Icon(Icons.auto_fix_high_outlined),
+              tooltip: '编辑图片',
+              onPressed: () {
+                Navigator.of(context).pop();
+                widget.onEditImage!();
+              },
+            ),
           if (_canExportImage)
             IconButton(
               icon: _saving
@@ -169,12 +188,16 @@ void showImageViewer(
   BuildContext context, {
   required ImageProvider imageProvider,
   String? imageUrl,
+  VoidCallback? onEditImage,
 }) {
   Navigator.of(context).push(
     PageRouteBuilder(
       opaque: false,
-      pageBuilder: (_, _, _) =>
-          ImageViewer(imageProvider: imageProvider, imageUrl: imageUrl),
+      pageBuilder: (_, _, _) => ImageViewer(
+        imageProvider: imageProvider,
+        imageUrl: imageUrl,
+        onEditImage: onEditImage,
+      ),
       transitionsBuilder: (_, animation, _, child) =>
           FadeTransition(opacity: animation, child: child),
     ),
