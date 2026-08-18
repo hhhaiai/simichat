@@ -205,6 +205,42 @@ void main() {
       },
     );
   });
+
+  group('extended vision inference', () {
+    test('gpt-5 family models infer vision capability', () {
+      for (final id in ['gpt-5.4', 'gpt-5.5', 'gpt-5.6-terra']) {
+        expect(
+          ModelCapability.inferFromModel(id),
+          ModelCapability.vision,
+          reason: id,
+        );
+      }
+    });
+
+    test(
+      'mimo-v2.5-pro-chat inherits the exact SimiRouter vision contract',
+      () {
+        expect(
+          ModelCapability.supportsVisionModel(
+            capability: 'chat',
+            modelId: 'mimo-v2.5-pro-chat',
+            protocol: 'openai_chat',
+          ),
+          true,
+        );
+        // 带后缀 / 前缀变体仍不继承。
+        expect(
+          ModelCapability.supportsVisionModel(
+            capability: 'chat',
+            modelId: 'mimo-v2.5-pro-chat-v2',
+            protocol: 'openai_chat',
+          ),
+          false,
+        );
+      },
+    );
+  });
+
 }
 
 Future<FileContentExtractionException> _captureExtractionError(

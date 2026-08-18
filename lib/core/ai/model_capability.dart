@@ -50,13 +50,18 @@ abstract final class ModelCapability {
     'qwen2.5-vl',
     'gpt-4o',
     'gpt-4.1',
+    // GPT-5 全系（gpt-5.4 / gpt-5.5 / gpt-5.6-terra 等）支持图片输入。
+    'gpt-5',
     'grok-2-vision',
   ];
 
-  /// SimiRouter exposes this one exact model through OpenAI-compatible chat
+  /// SimiRouter exposes these exact models through OpenAI-compatible chat
   /// protocols. Keep the exception equality-based: TTS/ASR/voice models and
   /// provider-qualified or suffixed ids must not inherit chat Vision.
-  static const _simiRouterMimoChatModelId = 'mimo-v2.5-chat';
+  static const _simiRouterMimoChatModelIds = {
+    'mimo-v2.5-chat',
+    'mimo-v2.5-pro-chat',
+  };
   static const _simiRouterMimoVisionProtocols = {
     'openai_chat',
     'openai_response',
@@ -702,7 +707,7 @@ abstract final class ModelCapability {
         _simiRouterMimoVisionProtocols.contains(
           protocol?.trim().toLowerCase(),
         ) &&
-        _lowerModelId(modelId) == _simiRouterMimoChatModelId;
+        _simiRouterMimoChatModelIds.contains(_lowerModelId(modelId));
   }
 
   static const _ollamaVisionHints = [
