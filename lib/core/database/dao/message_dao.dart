@@ -253,6 +253,15 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     await _deleteMessageSemanticIndexRow(id);
   }
 
+  /// 更新消息正文（图片生成占位 → 失败 / 取消文案）。语义索引以内容
+  /// 哈希为键，正文变化后旧索引行一并清除，避免检索到过期内容。
+  Future<void> updateMessageContent(String id, String content) async {
+    await (update(messages)..where((t) => t.id.equals(id))).write(
+      MessagesCompanion(content: Value(content)),
+    );
+    await _deleteMessageSemanticIndexRow(id);
+  }
+
   Future<List<Message>> searchInSession(String sessionId, String query) {
     return (select(messages)
           ..where(

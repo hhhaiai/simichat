@@ -70,12 +70,20 @@ class ImageGenerationService {
     String prompt, {
     String? referenceImagePath,
     Map<String, dynamic> extra = const <String, dynamic>{},
+    CancelToken? cancelToken,
+    String size = kImageGenerationSize,
   }) async {
     if (referenceImagePath != null && referenceImagePath.trim().isNotEmpty) {
       // “参考图生成”在 OpenAI 兼容生态中通常由 images/edits 承载：
       // 统一走同一条 multipart 链路，既兼容 gpt-image / DALL·E 中转，
       // 也不会把本地参考图路径泄露到 JSON 请求中。
-      return edit(imagePath: referenceImagePath, prompt: prompt, extra: extra);
+      return edit(
+        imagePath: referenceImagePath,
+        prompt: prompt,
+        extra: extra,
+        cancelToken: cancelToken,
+        size: size,
+      );
     }
     final normalizedBaseUrl = normalizeImageGenerationBaseUrl(baseUrl);
     final normalizedModel = model.trim();
@@ -100,7 +108,7 @@ class ImageGenerationService {
         'model': normalizedModel,
         'prompt': trimmedPrompt,
         'n': 1,
-        'size': kImageGenerationSize,
+        'size': size,
         if (!_isGptImageModel(normalizedModel) &&
             !extra.containsKey('response_format') &&
             !extra.containsKey('output_format'))
@@ -114,6 +122,7 @@ class ImageGenerationService {
           responseType: ResponseType.bytes,
         ),
         data: fields,
+        cancelToken: cancelToken,
       );
 
       return await _parseGeneratedImage(
@@ -135,6 +144,8 @@ class ImageGenerationService {
     required String imagePath,
     required String prompt,
     Map<String, dynamic> extra = const <String, dynamic>{},
+    CancelToken? cancelToken,
+    String size = kImageGenerationSize,
   }) async {
     final normalizedBaseUrl = normalizeImageGenerationBaseUrl(baseUrl);
     final normalizedModel = model.trim();
@@ -171,7 +182,7 @@ class ImageGenerationService {
         'model': normalizedModel,
         'prompt': trimmedPrompt,
         'n': 1,
-        'size': kImageGenerationSize,
+        'size': size,
         ...extra,
       };
       final response = await dio.post<List<int>>(
@@ -188,6 +199,7 @@ class ImageGenerationService {
             contentType: _dioMediaType(_mimeTypeForPath(imagePath)),
           ),
         }),
+        cancelToken: cancelToken,
       );
       return await _parseGeneratedImage(
         response.data,

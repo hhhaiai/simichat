@@ -14,6 +14,7 @@ import '../../core/ai/ai_protocol.dart' as ai;
 import '../../core/ai/attachment_helper.dart';
 import '../../core/ai/file_content_extractor.dart';
 import '../../core/ai/image_generation_service.dart';
+import '../../core/ai/image_generation_task.dart';
 import '../../core/ai/universal_media_service.dart';
 import '../../core/ai/model_capability.dart';
 import '../../core/ai/model_switch_record.dart';
@@ -26,6 +27,7 @@ import '../../core/context/model_context_budget.dart';
 import '../../core/context/token_estimator.dart';
 import '../../core/crypto/key_encryptor.dart';
 import '../../core/media/audio_file_archive.dart';
+import '../../core/media/baidu_cdn_image_uploader.dart';
 import '../../core/media/attachment_export_service.dart';
 import '../../core/media/inline_base64_audio.dart';
 import '../../core/media/audio_transcription_service.dart';
@@ -63,6 +65,7 @@ import 'key_point_memory_provider.dart';
 import 'reflection_provider.dart';
 import 'session_provider.dart';
 import 'settings_provider.dart';
+import 'image_generation_tasks_provider.dart';
 import 'text_to_speech_provider.dart';
 
 const _uuid = Uuid();
@@ -1908,11 +1911,22 @@ Future<bool> sendMessage({
 /// 把图片保存到应用私有目录，并将结果作为 assistant 消息（含图片附件）插入会话。
 ///
 /// 返回 null 表示成功，否则返回用户可读的错误信息（不向上抛出到 UI 层）。
+/// 测试注入点：非 null 时图片任务使用该工厂构造服务（fake service
+/// 可以绕过 dio 的网络管线，直接验证占位 / 失败 / 取消的状态流转）。
+@visibleForTesting
+ImageGenerationService Function({
+  required String baseUrl,
+  required String apiKey,
+  required String model,
+})?
+debugImageServiceFactory;
+
 Future<String?> generateImage({
   required WidgetRef ref,
   required String sessionId,
   required String prompt,
   List<PendingAttachment> referenceAttachments = const [],
+  String? size,
 }) async {
   final sessionDao = ref.read(sessionDaoProvider);
   final channelDao = ref.read(channelDaoProvider);
@@ -1933,15 +1947,6 @@ Future<String?> generateImage({
     return '当前渠道不支持 OpenAI 兼容图片生成，请切换到支持 /v1/images/generations 的渠道';
   }
 
-  // 先调用上游；失败时不写用户消息和 token，避免重试产生幽灵消息。
-  final imageConfig = ref.read(imageGenerationConfigProvider);
-  final service = ImageGenerationService(
-    baseUrl: channel.baseUrl,
-    apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
-    model: imageConfig.model,
-  );
-
-  final GeneratedImage generated;
   final referenceImagePath = referenceAttachments
       .where((attachment) => attachment.type == 'image')
       .map((attachment) => attachment.path)
@@ -1950,19 +1955,15 @@ Future<String?> generateImage({
       .where((attachment) => attachment.type == 'image')
       .map((attachment) => attachment.name)
       .firstOrNull;
-  try {
-    generated = await service.generate(
-      trimmedPrompt,
-      referenceImagePath: referenceImagePath,
-    );
-  } catch (e) {
-    return '图片生成失败：$e';
-  }
 
-  return _saveGeneratedImageConversation(
+  return _runImageGenerationTask(
     ref: ref,
     session: session,
     modelId: modelId,
+    channel: channel,
+    prompt: trimmedPrompt,
+    referenceImagePath: referenceImagePath,
+    referenceImageName: referenceImageName,
     userContent: referenceImagePath != null
         ? '参考图生成：$trimmedPrompt'
         : trimmedPrompt,
@@ -1970,6 +1971,116 @@ Future<String?> generateImage({
     filePrefix: referenceImagePath != null
         ? 'reference-generated'
         : 'generated',
+    size: size ?? ref.read(imageGenerationConfigProvider).size,
+  );
+}
+
+/// 图片生成 / 编辑任务执行器：先插入占位消息并注册任务（气泡显示进度，
+/// stop 可取消），上游成功后删除占位并原子写入最终消息对；失败时把
+/// 占位消息改写为失败提示并保留参数供重试。
+Future<String?> _runImageGenerationTask({
+  required WidgetRef ref,
+  required Session session,
+  required String? modelId,
+  required ModelChannel channel,
+  required String prompt,
+  String? referenceImagePath,
+  String? referenceImageName,
+  required String userContent,
+  required String assistantContent,
+  required String filePrefix,
+  bool includeUserMessage = true,
+  String? size,
+}) async {
+  final tasks = ref.read(imageGenerationTasksProvider.notifier);
+  final messageDao = ref.read(messageDaoProvider);
+  final sessionDao = ref.read(sessionDaoProvider);
+  final imageConfig = ref.read(imageGenerationConfigProvider);
+
+  final placeholderId = _uuid.v4();
+  final task = ImageGenerationTask(
+    messageId: placeholderId,
+    sessionId: session.id,
+    prompt: prompt,
+    referenceImagePath: referenceImagePath,
+    referenceImageName: referenceImageName,
+    modelName: imageConfig.model,
+    channelId: channel.id,
+  );
+  try {
+    await messageDao.insertMessage(
+      id: placeholderId,
+      sessionId: session.id,
+      role: 'assistant',
+      content: '正在生成图片…',
+      tokens: 0,
+      channelModelId: modelId,
+    );
+    await sessionDao.updateLastMessageAt(session.id);
+  } catch (e) {
+    return '无法写入生成进度：$e';
+  }
+  final cancelToken = tasks.start(task);
+  ref.invalidate(messagesProvider(session.id));
+
+  final factory = debugImageServiceFactory;
+  final service = factory != null
+      ? factory(
+          baseUrl: channel.baseUrl,
+          apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
+          model: imageConfig.model,
+        )
+      : ImageGenerationService(
+          baseUrl: channel.baseUrl,
+          apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
+          model: imageConfig.model,
+        );
+
+  final GeneratedImage generated;
+  try {
+    generated = await service.generate(
+      prompt,
+      referenceImagePath: referenceImagePath,
+      cancelToken: cancelToken,
+      size: size ?? kImageGenerationSize,
+    );
+  } catch (e) {
+    if (cancelToken.isCancelled) {
+      tasks.finish(placeholderId);
+      await _updatePlaceholderMessage(
+        ref,
+        session.id,
+        placeholderId,
+        content: '图片生成已取消',
+      );
+      return '已取消';
+    }
+    final message = '图片生成失败：$e';
+    tasks.markFailed(placeholderId, message);
+    await _updatePlaceholderMessage(
+      ref,
+      session.id,
+      placeholderId,
+      content: message,
+    );
+    return message;
+  }
+
+  // 成功：移除占位与任务，走原有原子写入。
+  try {
+    await messageDao.deleteMessage(placeholderId);
+  } catch (_) {
+    // 占位删除失败不影响结果写入；任务注册表仍然清理，避免悬空 spinner。
+  }
+  tasks.finish(placeholderId);
+
+  final savedError = await _saveGeneratedImageConversation(
+    ref: ref,
+    session: session,
+    modelId: modelId,
+    userContent: userContent,
+    assistantContent: assistantContent,
+    filePrefix: filePrefix,
     image: generated,
     sourceAttachment: referenceImagePath == null
         ? null
@@ -1978,7 +2089,221 @@ Future<String?> generateImage({
             fileName: referenceImageName ?? 'reference-image',
             fileType: 'image',
           ),
+    includeUserMessage: includeUserMessage,
   );
+
+  // 自动图床：上传成功后把 CDN 地址附到 assistant 消息正文。
+  if (savedError == null &&
+      ref.read(imageGenerationConfigProvider).autoUploadToCdn) {
+    unawaited(_uploadGeneratedImageToCdn(ref, session, generated));
+  }
+  return savedError;
+}
+
+/// 上传生成图片到百度 CDN 图床，并把地址追加到最新 assistant 消息。
+Future<void> _uploadGeneratedImageToCdn(
+  WidgetRef ref,
+  Session session,
+  GeneratedImage image,
+) async {
+  try {
+    const uploader = BaiduCdnImageUploader();
+    final url = await uploader.uploadBytes(
+      image.bytes,
+      mimeType: image.extension == 'png' ? 'image/png' : 'image/jpeg',
+    );
+    final messages = await ref
+        .read(messageDaoProvider)
+        .getMessagesBySession(session.id);
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role == 'assistant') {
+        final message = messages[i];
+        final suffix = '\n\n图床地址：$url';
+        await ref.read(messageDaoProvider).updateMessageContent(
+          message.id,
+          message.content.endsWith(suffix) ? message.content : '${message.content}$suffix',
+        );
+        ref.invalidate(messagesProvider(session.id));
+        break;
+      }
+    }
+  } catch (_) {
+    // 图床上传失败不阻断图片生成结果。
+  }
+}
+
+Future<void> _updatePlaceholderMessage(
+  WidgetRef ref,
+  String sessionId,
+  String messageId, {
+  required String content,
+}) async {
+  try {
+    await ref.read(messageDaoProvider).updateMessageContent(
+      messageId,
+      content,
+    );
+  } catch (_) {
+    // 占位更新失败不阻塞任务结果，占位消息保持原样。
+  }
+  ref.invalidate(messagesProvider(sessionId));
+}
+
+/// 重试失败 / 取消的图片生成任务：删除旧占位，以相同参数重新执行。
+Future<String?> retryImageGeneration({
+  required WidgetRef ref,
+  required String sessionId,
+  required String messageId,
+}) async {
+  final tasks = ref.read(imageGenerationTasksProvider.notifier);
+  final task = ref.read(imageGenerationTasksProvider)[messageId];
+  if (task == null) return '生成任务已失效，请重新生成';
+  if (task.isRunning) return '生成仍在进行中';
+  if (task.isCancelled) {
+    tasks.finish(messageId);
+    return null;
+  }
+
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+  final modelId = session.defaultChannelModelId;
+  final modelInfo = modelId == null
+      ? null
+      : await channelDao.getModelWithChannel(modelId);
+  if (modelInfo == null) return '请先选择一个模型';
+  final channel = modelInfo.channel;
+
+  final hasReference = task.referenceImagePath != null &&
+      task.referenceImagePath!.trim().isNotEmpty;
+  tasks.finish(messageId);
+  try {
+    await ref.read(messageDaoProvider).deleteMessage(messageId);
+  } catch (_) {
+    // 占位删除失败时继续重试，最终会话可能出现重复占位提示，
+    // 但不会产生错误结果消息。
+  }
+  ref.invalidate(messagesProvider(sessionId));
+
+  return _runImageGenerationTask(
+    ref: ref,
+    session: session,
+    modelId: modelId,
+    channel: channel,
+    prompt: task.prompt,
+    referenceImagePath: task.referenceImagePath,
+    referenceImageName: task.referenceImageName,
+    userContent: hasReference ? '参考图生成：${task.prompt}' : task.prompt,
+    assistantContent: hasReference ? '已根据参考图生成图片' : '已生成图片',
+    filePrefix: hasReference ? 'reference-generated' : 'generated',
+  );
+}
+
+/// 重新生成图片消息：定位 assistant 图片消息与前一条用户消息，删除旧结果
+/// 后以相同提示词 / 参考图重新调用图片接口（不重复插入用户消息）。
+Future<String?> retryImageMessage({
+  required WidgetRef ref,
+  required String sessionId,
+  required String assistantMessageId,
+}) async {
+  final messageDao = ref.read(messageDaoProvider);
+  final attachmentDao = ref.read(attachmentDaoProvider);
+  final messages = await messageDao.getMessagesBySession(sessionId);
+  final assistantIndex = messages.indexWhere(
+    (m) => m.id == assistantMessageId,
+  );
+  if (assistantIndex <= 0) return '未找到图片消息';
+
+  final assistantAttachments = await attachmentDao.getAttachmentsByMessage(
+    assistantMessageId,
+  );
+  if (!assistantAttachments.any((a) => a.fileType == 'image')) {
+    return '该消息不是图片消息';
+  }
+
+  Message? userMessage;
+  for (var i = assistantIndex - 1; i >= 0; i--) {
+    if (messages[i].role == 'user') {
+      userMessage = messages[i];
+      break;
+    }
+  }
+  if (userMessage == null) return '未找到对应提示词';
+
+  const referencePrefix = '参考图生成：';
+  var prompt = userMessage.content;
+  String? referenceImagePath;
+  String? referenceImageName;
+  if (prompt.startsWith(referencePrefix)) {
+    prompt = prompt.substring(referencePrefix.length).trim();
+    final userAttachments = await attachmentDao.getAttachmentsByMessage(
+      userMessage.id,
+    );
+    for (final attachment in userAttachments) {
+      if (attachment.fileType != 'image') continue;
+      final path = attachment.localPath.trim();
+      if (path.isNotEmpty) {
+        referenceImagePath = path;
+        referenceImageName = attachment.fileName;
+        break;
+      }
+    }
+  }
+
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+  final modelId = session.defaultChannelModelId;
+  final modelInfo = modelId == null
+      ? null
+      : await channelDao.getModelWithChannel(modelId);
+  if (modelInfo == null) return '请先选择一个模型';
+  final channel = modelInfo.channel;
+
+  // 删除旧的 assistant 结果（含附件），随后按相同参数重新生成。
+  await messageDao.deleteMessage(assistantMessageId);
+  await attachmentDao.deleteByMessage(assistantMessageId);
+  ref.invalidate(messagesProvider(sessionId));
+
+  return _runImageGenerationTask(
+    ref: ref,
+    session: session,
+    modelId: modelId,
+    channel: channel,
+    prompt: prompt,
+    referenceImagePath: referenceImagePath,
+    referenceImageName: referenceImageName,
+    userContent: referenceImagePath != null ? '参考图生成：$prompt' : prompt,
+    assistantContent: referenceImagePath != null ? '已根据参考图生成图片' : '已生成图片',
+    filePrefix: referenceImagePath != null ? 'reference-generated' : 'generated',
+    includeUserMessage: false,
+    size: ref.read(imageGenerationConfigProvider).size,
+  );
+}
+
+/// 取消会话内运行中的图片生成任务（stop 按钮入口）。
+Future<void> cancelImageGeneration({
+  required WidgetRef ref,
+  required String sessionId,
+}) async {
+  await ref
+      .read(imageGenerationTasksProvider.notifier)
+      .cancelForSession(sessionId);
+  final cancelled = ref
+      .read(imageGenerationTasksProvider)
+      .values
+      .where((task) => task.sessionId == sessionId)
+      .toList();
+  for (final task in cancelled) {
+    await _updatePlaceholderMessage(
+      ref,
+      sessionId,
+      task.messageId,
+      content: '图片生成已取消',
+    );
+  }
 }
 
 /// 编辑图片：把参考图（`imagePath`）与编辑提示词发送到
@@ -1990,6 +2315,7 @@ Future<String?> editImage({
   required String sessionId,
   required String imagePath,
   required String prompt,
+  String? size,
 }) async {
   final sessionDao = ref.read(sessionDaoProvider);
   final channelDao = ref.read(channelDaoProvider);
@@ -2021,7 +2347,11 @@ Future<String?> editImage({
 
   final GeneratedImage edited;
   try {
-    edited = await service.edit(imagePath: imagePath, prompt: trimmedPrompt);
+    edited = await service.edit(
+      imagePath: imagePath,
+      prompt: trimmedPrompt,
+      size: size ?? ref.read(imageGenerationConfigProvider).size,
+    );
   } catch (e) {
     return '图片编辑失败：$e';
   }
@@ -2435,6 +2765,7 @@ Future<String?> _saveGeneratedImageConversation({
   required String filePrefix,
   required GeneratedImage image,
   _GeneratedSourceAttachment? sourceAttachment,
+  bool includeUserMessage = true,
 }) async {
   File? file;
   _StoredAttachment? archivedSource;
@@ -2464,22 +2795,24 @@ Future<String?> _saveGeneratedImageConversation({
     final sessionDao = ref.read(sessionDaoProvider);
     final attachmentDao = ref.read(attachmentDaoProvider);
     await database.transaction(() async {
-      await messageDao.insertMessage(
-        id: userMsgId,
-        sessionId: session.id,
-        role: 'user',
-        content: userContent,
-        tokens: userTokens,
-      );
-      if (archivedSource != null) {
-        await attachmentDao.insertAttachment(
-          id: archivedSource.id,
-          messageId: userMsgId,
-          fileType: archivedSource.fileType,
-          localPath: archivedSource.localPath,
-          fileName: archivedSource.fileName,
-          fileSize: archivedSource.fileSize,
+      if (includeUserMessage) {
+        await messageDao.insertMessage(
+          id: userMsgId,
+          sessionId: session.id,
+          role: 'user',
+          content: userContent,
+          tokens: userTokens,
         );
+        if (archivedSource != null) {
+          await attachmentDao.insertAttachment(
+            id: archivedSource.id,
+            messageId: userMsgId,
+            fileType: archivedSource.fileType,
+            localPath: archivedSource.localPath,
+            fileName: archivedSource.fileName,
+            fileSize: archivedSource.fileSize,
+          );
+        }
       }
       await messageDao.insertMessage(
         id: assistantMsgId,

@@ -1,6 +1,13 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import 'http_client_adapter_factory.dart';
+
+/// 测试注入点：非 null 时 `getDio` 返回该工厂构造的实例，
+/// 不再走真实网络与缓存。widget 测试的 FakeAsync 环境无法完成
+/// 真实 socket 事件，相关协议测试统一用 fake adapter 回环。
+@visibleForTesting
+Dio Function(String baseUrl)? debugDioFactory;
 
 /// 按 baseUrl 缓存 Dio 实例，复用连接池
 final Map<String, Dio> _dioCache = {};
@@ -16,6 +23,8 @@ const _cacheExpiry = Duration(hours: 1);
 
 /// 获取或创建 Dio 实例
 Dio getDio(String baseUrl) {
+  final factory = debugDioFactory;
+  if (factory != null) return factory(baseUrl);
   final normalized = baseUrl.replaceAll(RegExp(r'/+$'), '');
 
   // 清理过期缓存

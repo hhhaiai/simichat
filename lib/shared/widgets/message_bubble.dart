@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import '../../core/ai/image_generation_task.dart';
 import '../../core/attachments/attachment_policy.dart';
 import '../../core/media/audio_transcript_archive.dart';
 import 'latex_markdown_widget.dart';
@@ -29,6 +30,9 @@ class MessageAttachmentView {
   /// 图片长按回调（如“编辑此图”）。为 null 时图片无长按交互。
   final VoidCallback? onEditImage;
 
+  /// 图片上传图床回调（百度 CDN）。为 null 时不显示上传按钮。
+  final VoidCallback? onUploadImageCdn;
+
   const MessageAttachmentView({
     this.attachmentId,
     required this.fileName,
@@ -42,6 +46,7 @@ class MessageAttachmentView {
     this.onDownload,
     this.isPlayingAudio = false,
     this.onEditImage,
+    this.onUploadImageCdn,
   });
 
   bool get isImage => fileType == 'image';
@@ -82,6 +87,10 @@ class MessageBubble extends StatelessWidget {
   final List<MessageAttachmentView> attachments;
   final AttachmentImageBuilder? attachmentImageBuilder;
 
+  /// 图片生成任务视图（占位消息）：运行中显示进度，失败显示错误与重试。
+  final ImageGenerationTask? imageGenerationTask;
+  final VoidCallback? onRetryImageGeneration;
+
   const MessageBubble({
     super.key,
     this.messageId,
@@ -102,6 +111,8 @@ class MessageBubble extends StatelessWidget {
     this.modelName,
     this.attachments = const [],
     this.attachmentImageBuilder,
+    this.imageGenerationTask,
+    this.onRetryImageGeneration,
   });
 
   @override
@@ -175,7 +186,14 @@ class MessageBubble extends StatelessWidget {
           ),
         if (thinkingContent != null && thinkingContent!.isNotEmpty)
           _ThinkingBlock(content: thinkingContent!),
-        if (content.trim().isNotEmpty) LatexMarkdownWidget(data: content),
+        if (imageGenerationTask != null &&
+            (imageGenerationTask!.isRunning || imageGenerationTask!.isFailed))
+          _ImageGenerationProgress(
+            task: imageGenerationTask!,
+            onRetry: onRetryImageGeneration,
+          )
+        else if (content.trim().isNotEmpty)
+          LatexMarkdownWidget(data: content),
         if (attachments.isNotEmpty) ...[
           const SizedBox(height: 8),
           _AttachmentList(
@@ -929,6 +947,31 @@ class _ImageAttachmentPreview extends StatelessWidget {
                           ],
                         ),
                       ),
+                      if (attachment.isImage &&
+                          attachment.onUploadImageCdn != null)
+                        IconButton(
+                          key: ValueKey(
+                            'upload-cdn-attachment-${_attachmentIdentity(attachment)}',
+                          ),
+                          tooltip: '上传图床（百度 CDN）',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: attachment.onUploadImageCdn,
+                          icon: const Icon(
+                            Icons.cloud_upload_outlined,
+                            size: 18,
+                          ),
+                        ),
+                      if (attachment.canEditImage &&
+                          attachment.onEditImage != null)
+                        IconButton(
+                          key: ValueKey(
+                            'edit-attachment-${_attachmentIdentity(attachment)}',
+                          ),
+                          tooltip: '编辑图片',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: attachment.onEditImage,
+                          icon: const Icon(Icons.auto_fix_high_outlined, size: 18),
+                        ),
                       if (attachment.onDownload != null)
                         IconButton(
                           key: ValueKey(
@@ -1089,6 +1132,76 @@ class _MessageMeta extends StatelessWidget {
           fontSize: 12,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
+      ),
+    );
+  }
+}
+
+/// 图片生成占位消息的进度 / 失败展示。
+class _ImageGenerationProgress extends StatelessWidget {
+  const _ImageGenerationProgress({required this.task, this.onRetry});
+
+  final ImageGenerationTask task;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (task.isRunning) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '正在生成图片…',
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.error.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '图片生成失败',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: scheme.error,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            task.compactError,
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+          if (onRetry != null) ...[
+            const SizedBox(height: 6),
+            TextButton.icon(
+              key: const ValueKey('retry-image-generation'),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, 36),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('重试', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ],
       ),
     );
   }

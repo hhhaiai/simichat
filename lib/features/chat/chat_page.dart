@@ -11,8 +11,11 @@ import '../../core/ai/model_switch_record.dart';
 import '../../core/media/audio_player.dart';
 import '../../core/media/audio_transcript_archive.dart';
 import '../../core/media/attachment_export_service.dart';
+import '../../core/media/baidu_cdn_image_uploader.dart';
 import '../../core/database/dao/channel_dao.dart';
 import '../../shared/providers/chat_provider.dart';
+import '../../shared/providers/image_generation_provider.dart';
+import '../../shared/providers/image_generation_tasks_provider.dart';
 import '../../shared/providers/channel_provider.dart';
 import '../../shared/providers/connectivity_provider.dart';
 import '../../shared/providers/database_provider.dart';
@@ -69,6 +72,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // 会话内临时模型覆盖
   String? _pendingModelId;
   bool _isSubmitting = false;
+  bool _isUploadingImageCdn = false;
   // Composer 动作可能在会话切换后才返回。generation 用来区分“仍在运行”
   // 和用户已经 Stop 的旧动作；sessionId 则用来阻止旧动作清理当前会话的
   // composer。持久化层仍然使用动作开始时捕获的 sessionId。
@@ -738,6 +742,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _handleStop() async {
+    final sessionId = ref.read(activeSessionIdProvider);
+    if (sessionId != null) {
+      final hasRunningImageTask = ref
+          .read(imageGenerationTasksProvider)
+          .values
+          .any(
+            (task) => task.sessionId == sessionId && task.isRunning,
+          );
+      if (hasRunningImageTask) {
+        await cancelImageGeneration(ref: ref, sessionId: sessionId);
+        return;
+      }
+    }
+    await _handleStopStreaming();
+  }
+
+  Future<void> _handleRetryImageGeneration(String messageId) async {
+    final sessionId = ref.read(activeSessionIdProvider);
+    if (sessionId == null) return;
+    final error = await retryImageGeneration(
+      ref: ref,
+      sessionId: sessionId,
+      messageId: messageId,
+    );
+    if (error != null && mounted) {
+      _showSnackBar(error);
+    }
+  }
+
   Future<void> _handleStopStreaming() async {
     final visibleSessionId = ref.read(activeSessionIdProvider);
     final visibleMediaTask = visibleSessionId == null
@@ -830,9 +864,70 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return _handleGenerateImageWithAttachments(content, const []);
   }
 
+  /// 生成图片前选择尺寸（记住上次选择），取消则中止本次生成。
+  Future<String?> _pickImageGenerationSize() async {
+    final config = ref.read(imageGenerationConfigProvider);
+    String? chosen;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                '图片尺寸',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+            ),
+            for (final size in kImageGenerationSizeOptions)
+              ListTile(
+                dense: true,
+                title: Text(size, style: const TextStyle(fontSize: 13)),
+                trailing: size == (chosen ?? config.size)
+                    ? Icon(
+                        Icons.check,
+                        size: 18,
+                        color: Theme.of(sheetContext).colorScheme.primary,
+                      )
+                    : null,
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  chosen = size;
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null) {
+      await ref
+          .read(imageGenerationConfigProvider.notifier)
+          .setSize(chosen!);
+    }
+    return chosen;
+  }
+
   Future<bool> _handleGenerateImageWithAttachments(
     String content,
     List<PendingAttachment> referenceAttachments,
+  ) async {
+    final size = await _pickImageGenerationSize();
+    if (size == null) return false;
+    return _handleGenerateImageWithAttachmentsAndSize(
+      content,
+      referenceAttachments,
+      size,
+    );
+  }
+
+  Future<bool> _handleGenerateImageWithAttachmentsAndSize(
+    String content,
+    List<PendingAttachment> referenceAttachments,
+    String size,
   ) async {
     if (_isSubmitting) return false;
     if (!ref.read(isOnlineProvider)) {
@@ -880,6 +975,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         sessionId: activeSessionId,
         prompt: content,
         referenceAttachments: referenceAttachments,
+        size: size,
       );
       if (!mounted || !_isComposerOperationLive(operationGeneration)) {
         return false;
@@ -1141,16 +1237,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final operationGeneration = _beginComposerOperation(activeSessionId);
     _setSubmitting(true);
     try {
+      final imageConfig = ref.read(imageGenerationConfigProvider);
       final submitted = await showImageEditDialog(
         context,
         imagePath: imagePath,
-        onEdit: (prompt) async {
-          return editImage(
+        initialSize: imageConfig.size,
+        sizeOptions: kImageGenerationSizeOptions,
+        onEdit: (prompt, size) async {
+          final editError = await editImage(
             ref: ref,
             sessionId: activeSessionId,
             imagePath: imagePath,
             prompt: prompt,
+            size: size,
           );
+          if (editError == null) {
+            await ref
+                .read(imageGenerationConfigProvider.notifier)
+                .setSize(size);
+          }
+          return editError;
         },
       );
       if (!mounted || !_isComposerOperationLive(operationGeneration)) {
@@ -1285,11 +1391,33 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     String operationSessionId,
     String assistantMessageId,
   ) async {
-    final submitted = await retryMessage(
-      ref: ref,
-      sessionId: operationSessionId,
-      assistantMessageId: assistantMessageId,
+    // 图片消息的"重新生成"走图片接口：以原提示词 / 参考图重新生成，
+    // 而不是把文字重发到聊天接口。
+    final messageAttachments = await ref
+        .read(attachmentDaoProvider)
+        .getAttachmentsByMessage(assistantMessageId);
+    final isImageMessage = messageAttachments.any(
+      (a) => a.fileType == 'image',
     );
+
+    final bool submitted;
+    if (isImageMessage) {
+      final error = await retryImageMessage(
+        ref: ref,
+        sessionId: operationSessionId,
+        assistantMessageId: assistantMessageId,
+      );
+      submitted = error == null;
+      if (error != null && mounted && _isCurrentOperationSession(operationSessionId)) {
+        _showSnackBar(error);
+      }
+    } else {
+      submitted = await retryMessage(
+        ref: ref,
+        sessionId: operationSessionId,
+        assistantMessageId: assistantMessageId,
+      );
+    }
     // retry 的消息结果可以继续落在 operationSessionId；这里没有任何
     // composer 清理，只有当前仍是该会话时才滚动当前页面。
     if (!mounted ||
@@ -1489,13 +1617,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _handleUploadImageCdn(String path) async {
+    if (_isUploadingImageCdn) return;
+    _isUploadingImageCdn = true;
+    try {
+      const uploader = BaiduCdnImageUploader();
+      final url = await uploader.uploadFile(path);
+      await Clipboard.setData(ClipboardData(text: url));
+      if (mounted) {
+        _showSnackBar('图床地址已复制：$url');
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar('图床上传失败：$e');
+      }
+    } finally {
+      _isUploadingImageCdn = false;
+    }
+  }
+
   void _handleOpenAttachmentImage(String path) {
     final file = File(path);
     if (!file.existsSync()) {
       _showSnackBar('图片文件不存在或已被移动');
       return;
     }
-    showImageViewer(context, imageProvider: FileImage(file));
+    showImageViewer(
+      context,
+      imageProvider: FileImage(file),
+      onEditImage: () => _handleEditImage(path),
+    );
   }
 
   Future<void> _handleDownloadAttachment({
@@ -1703,6 +1854,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                             attachment.localPath,
                                           )
                                         : null,
+                                    onUploadImageCdn:
+                                        attachment.fileType == 'image'
+                                        ? () => _handleUploadImageCdn(
+                                            attachment.localPath,
+                                          )
+                                        : null,
                                   );
                                 })
                                 .toList();
@@ -1723,6 +1880,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 return null;
                               },
                             );
+                            final imageTask = ref
+                                .watch(imageGenerationTasksProvider)[msg.id];
                             return MessageBubble(
                               key: ValueKey('message-${msg.id}'),
                               messageId: msg.id,
@@ -1748,6 +1907,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   _isPreparingSpeech,
                               onFork: () => _handleFork(msg.id),
                               attachments: attachments ?? const [],
+                              imageGenerationTask: isUser ? null : imageTask,
+                              onRetryImageGeneration:
+                                  imageTask == null || imageTask.isRunning
+                                  ? null
+                                  : () => _handleRetryImageGeneration(msg.id),
                             );
                           }
                           // 流式输出中的气泡
@@ -1818,7 +1982,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               isSubmitting: _isSubmitting,
               hasTextNotifier: _hasTextNotifier,
               onSend: _handleSend,
-              onStop: _handleStopStreaming,
+              onStop: _handleStop,
               onDraftChanged: _handleComposerDraftChanged,
               initialAttachments:
                   _draftCache[activeSessionId]?.attachments ?? const [],
@@ -2021,7 +2185,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           isSubmitting: _isSubmitting,
           hasTextNotifier: _hasTextNotifier,
           onSend: _handleSend,
-          onStop: _handleStopStreaming,
+          onStop: _handleStop,
           onDraftChanged: _handleComposerDraftChanged,
           onGenerateImage: _handleGenerateImage,
           onGenerateImageWithAttachments: _handleGenerateImageWithAttachments,
