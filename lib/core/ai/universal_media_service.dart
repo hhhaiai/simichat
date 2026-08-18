@@ -15,7 +15,10 @@ export '../media/media_job.dart';
 /// OpenAI 兼容 / 自定义媒体接口的默认路径。
 const kDefaultImageGenerationEndpoint = '/v1/images/generations';
 const kDefaultImageEditEndpoint = '/v1/images/edits';
-const kDefaultVideoGenerationEndpoint = '/v1/videos/generations';
+/// OpenAI Videos 风格默认提交端点。实测 OpenAI 兼容中转站
+///（如 SimiRouter）只在 `/v1/videos` 注册路由，`/v1/videos/generations`
+/// 会返回 "Invalid URL"；xAI 风格仍是可选 profile 的显式端点。
+const kDefaultVideoGenerationEndpoint = '/v1/videos';
 const kDefaultMusicGenerationEndpoint = '/v1/audio/music';
 
 const kDefaultImageGenerationModel = 'dall-e-3';

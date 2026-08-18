@@ -497,7 +497,9 @@ void main() {
 
       expect(asset.bytes, [4, 5, 6]);
       final body = await seen.future;
-      expect(body, contains('name="image"'));
+      // 默认端点现在是 OpenAI Videos 风格 /v1/videos：参考图字段为
+      // input_reference（xAI 风格 /v1/videos/generations 仍用 image）。
+      expect(body, contains('name="input_reference"'));
       expect(body, contains('reference.png'));
       expect(body, isNot(contains('secret-media-key')));
     });
