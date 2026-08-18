@@ -73,6 +73,15 @@
 - 门禁：全量 Flutter 测试 1121 项通过，`flutter analyze` 无问题，`git diff --check` 通过。本轮未做真机安装与 UI 取证；视频 / 音乐 / Realtime 的真实云端质量仍需真机 + 真实 Key 补证。
 
 
+
+### 0.4 Android 真机覆盖安装与真机交互取证（2026-08-19）
+
+- `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 重建当前工作树 release APK，`adb install -r` 覆盖安装 `Success`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir` 保持不变；monkey 启动 `top.simitalk.aichat/.MainActivity` 成功。
+- 真机 UI 取证（uiautomator）：设置页 SimiRouter 推广卡紧凑展示且不遮挡下方渠道列表；**用量行以真实 Key 拉取成功**（“已用 $0.16 · 未设限额”，与上游 `/v1/dashboard/billing/usage` 80141.1968 quota 换算一致）；Composer `+` 菜单包含 生成图片/生成视频/深度思考/实时语音对话 等全部入口，未配置 TTS 时声音合成/克隆禁用并展示原因。
+- 真机 E2E：Composer 输入提示词 → 生成图片 → 尺寸选择 bottom sheet（1024x1024/1536x1024/1024x1536/auto）→ 发出真实请求 → 上游返回 503 → 占位消息转为“图片生成失败 + 重试”，重试路径再次请求并保持可重试；生成视频 per-request 弹窗（提示词预览 + 时长 + 分辨率 + 取消/开始生成）验证通过；logcat 无 FATAL。
+- 真实图片成功生成被上游 503 阻塞（gpt-image 渠道临时不可用），成功路径的云端 E2E 仍待上游恢复后补证；iPhone13 真机本轮未连接，已通过 iOS unsigned Release 构建（90.1MB）作为编译门禁。
+
+
 ## 二、本轮修复逐项记录
 
 ### 0. ChatGPT 风格实时语音面板、Android 原生 PCM 与覆盖安装（2026-08-18）
