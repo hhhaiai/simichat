@@ -60,6 +60,19 @@
 - 随后执行 `scripts/smoke_device_integration_model_switch.sh 37101FDJH0077P`。隔离包 `top.simitalk.aichat.modelswitch` 以 `install -r -d` 安装并在 smoke 后清理；四个 marker `SIMICHAT_MODEL_SWITCH_BASELINE`、`SIMICHAT_MODEL_SWITCH_UI_ACTION`、`SIMICHAT_MODEL_SWITCH_DB_EVIDENCE`、`SIMICHAT_MODEL_SWITCH_SMOKE_PASS` 均按顺序出现，`All tests passed` / `SMOKE_TEST_EXIT status=0`，正式包 hash、安装时间和数据目录保持不变，隔离包无残留。
 - 当前工作树全量 Flutter 测试 `1030 tests passed`，`flutter --no-version-check analyze --no-pub` 为 `No issues found!`，`git diff --check` 无输出。Composer、媒体任务、STT / TTS、Gemini Live 和 Realtime PCM 的本地测试 / loopback / fake adapter 证据仍不等同于真实 OpenAI、xAI、Gemini、Claude、Ollama、图片 / 视频 / 音乐、云端语音或声音克隆 E2E。
 
+
+### 0.3 SimiRouter 主打完善轮（2026-08-19）
+
+- 用用户提供的 SimiRouter 测试 Key 对真实上游完成回环验证：`/v1/models`（32 模型、无能力元数据）、chat（mimo-v2.5-chat / gpt-5.4）、TTS（mimo-v2.5-tts alloy 中文）、ASR（mimo-v2.5-asr auto/zh 回环）、生图（gpt-image-1.5 b64_json）、图片编辑（`/v1/images/edits` multipart）、`mimo-v2.5-chat` 真实照片识图、视频路由（`/v1/videos` 存在，`/v1/videos/generations` 为 Invalid URL）、`/v1/realtime` 路由、账单（`/v1/dashboard/billing/usage` + `subscription`，new-api 格式）。结论写入 `docs/simirouter-mimo-v2.5-chat-multimodal.md`。
+- 修复：SimiRouter 推广卡紧凑化（logo 缩小、不再遮挡下方内容）；模型一键测试按能力分派（image→生图探测、TTS→语音探测、video/music/ASR 跳过不误删）；一键剔除改为确认对话框 + 只剔永久性失败（401/403/404/协议不支持），临时失败保留并提示；小三角测试按钮改为 40px 目标 + spinner + 防并发 + 结果图标；获取模型按名称去重、能力变化就地更新、远端下架模型提示不删；视频默认端点改为 `/v1/videos`。
+- ChatGPT 风格图片交互：生成中 in-chat 占位消息（spinner / 失败可重试 / 可取消，stop 按钮路由取消）；图片气泡显式编辑按钮、查看器编辑入口、图片消息"重新生成"走图片接口（含参考图回放）；生图尺寸选择（1024/1536/auto，记住上次，编辑对话框同款）。
+- 百度 CDN 图床：`BaiduCdnImageUploader`（与 imgtool.py 同协议），图片气泡/查看器手动上传按钮（复制 URL），设置开关"生成后自动上传图床"。
+- 展示层：HTML 页面工件卡片（应用内 WebView 预览 + 复制 + 下载）、代码块下载按钮、Markdown 行内链接外开、搜索结果紧凑卡片样式；深度思考折叠（既有，流式/完成态均默认收起）验证保留。
+- 视频生成 per-request 弹窗：显式参考图选择 + 时长 / 分辨率可选参数（extra 透传）；STT 单次语言选择（麦克风长按 auto/zh/en，一次生效）。
+- SimiRouter 专属：渠道卡已接入态显示用量行（已用 / 限额 + 刷新）；Realtime 面板新增 SimiRouter 预设（`wss://api.dwchainless.com/v1/realtime`，Bearer，模型名用户填）；能力推断修正（gpt-5 全系 vision、`mimo-v2.5-pro-chat` 纳入精确 Vision 例外）。
+- 门禁：全量 Flutter 测试 1121 项通过，`flutter analyze` 无问题，`git diff --check` 通过。本轮未做真机安装与 UI 取证；视频 / 音乐 / Realtime 的真实云端质量仍需真机 + 真实 Key 补证。
+
+
 ## 二、本轮修复逐项记录
 
 ### 0. ChatGPT 风格实时语音面板、Android 原生 PCM 与覆盖安装（2026-08-18）

@@ -45,3 +45,12 @@
 - 未使用 SimiRouter live endpoint 或 Key；未验证 `mimo-v2.5-chat` 在云端是否已上架、是否实际接受图片、配额 / 错误码 / 限流和响应质量。
 - 未验证 SimiRouter 的 `openai_response` 云端兼容性；本次仅扩展本地能力选择契约。
 - 未声明 PDF、Office、`native_file` 或其他原生文件识别能力。若要支持，必须先获得并验证对应上游 contract，再单独实现协议、路由和测试。
+
+## 2026-08-19 真实上游验证（补充）
+
+使用用户提供的 SimiRouter 测试 Key 对真实上游做了回环验证：
+
+- `POST /v1/chat/completions`，`mimo-v2.5-chat` + 真实照片（1024px 白猫图 data URL）两次请求均正确识别图片内容（“图片里是一只白色的猫…”），图片输入被正常处理。
+- 此前 1x1 像素图的“无法回答”属于模型对不可解读输入的婉拒，不是渠道不支持识图。
+- 同轮验证：`/v1/models` 返回 32 个模型且无能力元数据；`mimo-v2.5-tts`（alloy/中文）与 `mimo-v2.5-asr`（auto/zh 回环转写）均通过；`gpt-image-1.5` 生成与 `/v1/images/edits` multipart 编辑通过；`/v1/videos` 路由存在（`/v1/videos/generations` 为 Invalid URL，客户端默认端点已改为 `/v1/videos`）；`/v1/realtime` 路由存在；`/v1/dashboard/billing/usage` 与 `/v1/dashboard/billing/subscription` 可用（new-api 格式）。
+- 结论：P0 门禁保留；`mimo-v2.5-chat` 与新增的 `mimo-v2.5-pro-chat` 精确 Vision 例外与上游行为一致。

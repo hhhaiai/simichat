@@ -65,9 +65,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('视频 / 音乐 / 通用媒体接口'),
-        160,
+        200,
         scrollable: find.byType(Scrollable).first,
       );
+      await tester.ensureVisible(find.text('视频 / 音乐 / 通用媒体接口'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('视频 / 音乐 / 通用媒体接口'));
       await tester.pumpAndSettle();
 
