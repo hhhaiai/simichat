@@ -1,8 +1,14 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlighter/flutter_highlighter.dart';
 import 'package:flutter_highlighter/themes/github.dart';
 import 'package:flutter_highlighter/themes/dracula.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 /// 代码块组件：语法高亮 + 行号 + 语言标签 + 复制按钮
 /// 参考 GitHub / VS Code 的代码块渲染风格
@@ -38,6 +44,87 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _copied = false);
     });
+  }
+
+  /// 按语言取文件扩展名，无语言的代码存为 .txt。
+  String _fileExtension(String language) {
+    const known = <String, String>{
+      'dart': 'dart',
+      'python': 'py',
+      'py': 'py',
+      'javascript': 'js',
+      'js': 'js',
+      'typescript': 'ts',
+      'ts': 'ts',
+      'html': 'html',
+      'xml': 'xml',
+      'css': 'css',
+      'scss': 'scss',
+      'less': 'less',
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yml',
+      'bash': 'sh',
+      'sh': 'sh',
+      'shell': 'sh',
+      'zsh': 'sh',
+      'sql': 'sql',
+      'markdown': 'md',
+      'md': 'md',
+      'rust': 'rs',
+      'go': 'go',
+      'java': 'java',
+      'kotlin': 'kt',
+      'swift': 'swift',
+      'objc': 'm',
+      'c': 'c',
+      'cpp': 'cpp',
+      'csharp': 'cs',
+    };
+    return known[language.toLowerCase()] ?? 'txt';
+  }
+
+  Future<void> _downloadCode() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final extension = _fileExtension(_language);
+      if (!kIsWeb &&
+          (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+        final path = await FilePicker.platform.saveFile(
+          dialogTitle: '保存代码',
+          fileName: 'code.$extension',
+          type: FileType.custom,
+          allowedExtensions: [extension],
+        );
+        if (path == null) return;
+        await File(path).writeAsString(widget.code);
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('代码已保存'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        final root = await getApplicationDocumentsDirectory();
+        final file = File(
+          p.join(
+            root.path,
+            'code_exports',
+            'code-${DateTime.now().millisecondsSinceEpoch}.$extension',
+          ),
+        );
+        await file.parent.create(recursive: true);
+        await file.writeAsString(widget.code);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('代码已保存：${file.path}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('代码保存失败：$e')));
+    }
   }
 
   /// 获取语言对应的图标
@@ -174,6 +261,33 @@ class _CodeBlockWidgetState extends State<CodeBlockWidget> {
                       ),
                     ),
                   ),
+                // 下载按钮
+                InkWell(
+                  onTap: _downloadCode,
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.download,
+                          size: 14,
+                          color: isDark ? Colors.white54 : Colors.grey[600],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '下载',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isDark ? Colors.white54 : Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 // 复制按钮
                 InkWell(
                   onTap: _copyCode,

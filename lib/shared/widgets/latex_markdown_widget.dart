@@ -7,6 +7,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'code_block_widget.dart';
 import 'drawio_widget.dart';
+import 'html_artifact_card.dart';
 import 'mermaid_widget.dart';
 import 'image_viewer.dart';
 
@@ -1090,6 +1091,10 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     }
     if (_isDrawioLanguage(normalizedLanguage) || _looksLikeDrawio(code)) {
       return DrawioWidget(code: code);
+    }
+    if (normalizedLanguage == 'html' &&
+        HtmlArtifactCard.looksLikeHtmlDocument(code)) {
+      return HtmlArtifactCard(code: code);
     }
     if (language == null && !code.contains('\n')) {
       return null;
