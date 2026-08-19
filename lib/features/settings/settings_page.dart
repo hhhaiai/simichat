@@ -4054,6 +4054,25 @@ class SettingsPage extends ConsumerWidget {
         refreshModels(ref);
       }
 
+      // 本地独有行（远端目录已无此模型）：按名称重新推断能力，修复旧版
+      // 把 grok-imagine-* / gpt-image-* 等媒体模型存成 chat 的历史数据。
+      for (final row in existingModels) {
+        if (remoteIds.contains(row.modelName)) continue;
+        final inferred = ModelCapability.inferFromModel(row.modelName);
+        if (row.capability == 'chat' && inferred != 'chat') {
+          await channelDao.updateModelCapability(
+            id: row.id,
+            capability: inferred,
+            capabilities: {inferred},
+          );
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        refreshChannelModels(ref, channel.id);
+        refreshModels(ref);
+      }
+
       // 修复旧版按"能力+名称"去重写入的同名重复行：同一模型名同时存在
       // chat 与媒体能力行时删除 chat 行（媒体行保留），幂等。
       final rows = await channelDao.getModelsByChannel(channel.id);
