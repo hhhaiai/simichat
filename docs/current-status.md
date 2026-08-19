@@ -82,6 +82,16 @@
 - 真实图片成功生成被上游 503 阻塞（gpt-image 渠道临时不可用），成功路径的云端 E2E 仍待上游恢复后补证；iPhone13 真机本轮未连接，已通过 iOS unsigned Release 构建（90.1MB）作为编译门禁。
 
 
+
+### 0.5 模型选择器与媒体能力标签修复（2026-08-19）
+
+- 修复模型选择器语义标签把 `MapEntry(...)` 对象字符串拼进文案的 bug（`'$entry.key / model'` 插值错误），长字符串曾直接覆盖模型行。
+- 模型选择器展示全部已配置模型：TTS / STT / 生图 / 视频等媒体模型可见并带能力标签（Audio 音频 / Image 图片生成 / Video 视频），置灰不可选；按 (渠道, 模型名) 去重，优先保留媒体能力行。
+- 目录推断策略更新：中转站 `/v1/models` 无能力元数据时，按精心维护的前缀表推断媒体能力（grok-imagine-image*、grok-imagine-video、gpt-image-*、mimo-v2.5-tts*、-asr、whisper-*、wan-video 等）；请求门禁仍只信显式元数据，两层互不影响。
+- 获取模型时修复历史数据：远端同名行能力就地更新；本地独有行按名称重新推断并修正 chat 误标；旧版"按能力+名称"重复行自动清理（chat 与媒体行并存时删 chat 行）。
+- 真机验证（Pixel 8）：重新构建覆盖安装后触发"自动获取模型"，选择器中 grok-imagine-image-lite/quality → Image 图片生成、gpt-image-1.5/2 → Image 图片生成、grok-imagine-video → Video 视频、mimo-v2.5-tts*/asr → Audio 音频，无重复行与 MapEntry 垃圾文本。全量 1122 项测试通过。
+
+
 ## 二、本轮修复逐项记录
 
 ### 0. ChatGPT 风格实时语音面板、Android 原生 PCM 与覆盖安装（2026-08-18）
