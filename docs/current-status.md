@@ -92,6 +92,14 @@
 - 真机验证（Pixel 8）：重新构建覆盖安装后触发"自动获取模型"，选择器中 grok-imagine-image-lite/quality → Image 图片生成、gpt-image-1.5/2 → Image 图片生成、grok-imagine-video → Video 视频、mimo-v2.5-tts*/asr → Audio 音频，无重复行与 MapEntry 垃圾文本。全量 1122 项测试通过。
 
 
+
+### 0.6 媒体模型可点击配置（2026-08-19）
+
+- 模型选择器中的媒体模型（生图 / TTS / STT / 视频 / 音乐）从置灰改为可点击：点击不再切换聊天模型，而是把该模型写入对应工具配置并提示——生图 → 图片生成配置、TTS / STT 按名称分派到语音合成 / 识别配置、视频 / 音乐 → 通用媒体接口路由。TTS / STT / 媒体 notifier 新增 `applyModel` / `applyMediaModel` 快捷 setter（只改模型名并持久化，不动其它字段）。
+- 媒体行显示 tune 图标与语义提示"点击配置到对应工具"；聊天模型行为不变。
+- 真机验证（Pixel 8）：点击 gpt-image-1.5 后设置 → 图片生成配置的模型已变为 gpt-image-1.5，会话默认聊天模型未变。全量 1122 项测试通过。
+
+
 ## 二、本轮修复逐项记录
 
 ### 0. ChatGPT 风格实时语音面板、Android 原生 PCM 与覆盖安装（2026-08-18）
