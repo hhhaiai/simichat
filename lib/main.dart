@@ -25,6 +25,11 @@ import 'core/smoke/dreaming_reflection_smoke_harness.dart';
 import 'core/smoke/android_background_dreaming_smoke_harness.dart';
 import 'core/smoke/ios_background_dreaming_smoke_harness.dart';
 import 'core/database/dao/channel_dao.dart';
+import 'shared/providers/image_generation_provider.dart';
+import 'shared/providers/audio_transcription_provider.dart';
+import 'shared/providers/text_to_speech_provider.dart';
+import 'shared/providers/universal_media_provider.dart';
+import 'core/ai/universal_media_service.dart';
 import 'core/ai/model_capability.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
@@ -381,8 +386,17 @@ class ChatModelSelector extends ConsumerWidget {
               maxHeight: 480,
             ),
             onSelected: (modelId) {
-              final target = _findModel(models, modelId);
+              final target = _findModel(
+                allConfiguredAsync.valueOrNull ?? models,
+                modelId,
+              );
               if (target == null) return;
+              if (!models.any((m) => m.channelModel.id == modelId)) {
+                // 媒体模型：点击不是切换聊天模型，而是把该模型配置到
+                // 对应的生成 / 语音工具上。
+                unawaited(_applyMediaModel(context, ref, target));
+                return;
+              }
               unawaited(
                 _switchModel(context, ref, target: target, previous: current),
               );
@@ -569,8 +583,8 @@ class ChatModelSelector extends ConsumerWidget {
         items.add(
           PopupMenuItem<String>(
             // 媒体模型（TTS / STT / 生图 / 视频 / 音乐 / 向量 / 重排）
-            // 在菜单中可见但不可选：能力标签说明其用途，避免误当聊天模型。
-            enabled: isChatSelectable,
+            // 可点击：点击不是切换聊天模型，而是把该模型配置到对应工具。
+            enabled: true,
             value: model.channelModel.id,
             height: 44,
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -579,7 +593,9 @@ class ChatModelSelector extends ConsumerWidget {
               selected: isSelected,
               label: isSelected
                   ? '${entry.key} / $modelLabel，当前已选择'
-                  : '${entry.key} / $modelLabel',
+                  : isChatSelectable
+                  ? '${entry.key} / $modelLabel'
+                  : '${entry.key} / $modelLabel，$capabilityLabel，点击配置到对应工具',
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: isSelected
@@ -600,6 +616,14 @@ class ChatModelSelector extends ConsumerWidget {
                                 Icons.check_rounded,
                                 size: 17,
                                 color: Theme.of(context).colorScheme.primary,
+                              )
+                            : !isChatSelectable
+                            ? Icon(
+                                Icons.tune,
+                                size: 15,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               )
                             : null,
                       ),
@@ -655,6 +679,59 @@ class ChatModelSelector extends ConsumerWidget {
       }
     }
     return items;
+  }
+
+  /// 媒体模型点击：把模型配置到对应工具（生图 / TTS / STT / 视频 / 音乐），
+  /// 不修改会话默认聊天模型。
+  Future<void> _applyMediaModel(
+    BuildContext context,
+    WidgetRef ref,
+    ChannelModelWithChannel model,
+  ) async {
+    final name = model.channelModel.modelName;
+    final capability = model.channelModel.capability;
+    final label = ModelCapability.label(capability);
+    String message;
+    switch (capability) {
+      case ModelCapability.image:
+        await ref
+            .read(imageGenerationConfigProvider.notifier)
+            .setModel(name);
+        message = '已把 $name 设为图片生成模型（生成图片 / 编辑图片工具使用）';
+      case ModelCapability.audio:
+        final lower = name.toLowerCase();
+        final isTts =
+            lower.contains('tts') ||
+            lower.contains('text-to-speech') ||
+            lower.contains('voice') ||
+            lower.contains('speech') &&
+                !lower.contains('to-text');
+        if (isTts) {
+          await ref
+              .read(textToSpeechConfigProvider.notifier)
+              .applyModel(name);
+          message = '已把 $name 设为语音合成（TTS）模型';
+        } else {
+          await ref
+              .read(speechToTextConfigProvider.notifier)
+              .applyModel(name);
+          message = '已把 $name 设为语音识别（STT）模型';
+        }
+      case ModelCapability.video:
+        await ref
+            .read(universalMediaConfigProvider.notifier)
+            .applyMediaModel(UniversalMediaKind.video, name);
+        message = '已把 $name 设为视频生成模型';
+      case ModelCapability.music:
+        await ref
+            .read(universalMediaConfigProvider.notifier)
+            .applyMediaModel(UniversalMediaKind.music, name);
+        message = '已把 $name 设为音乐生成模型';
+      default:
+        message = '$name（$label）请在对应功能中配置使用';
+    }
+    if (!context.mounted) return;
+    _showMessage(context, message);
   }
 
   Future<void> _switchModel(

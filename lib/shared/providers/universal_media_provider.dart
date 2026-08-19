@@ -680,6 +680,32 @@ final universalMediaConfigProvider =
     );
 
 class UniversalMediaConfigNotifier extends StateNotifier<UniversalMediaConfig> {
+  /// 模型选择器快捷配置：把视频 / 音乐模型直接写入对应路由（只改模型名，
+  /// 其余端点与协议配置保持不变）。
+  Future<void> applyMediaModel(UniversalMediaKind kind, String model) async {
+    final trimmed = model.trim();
+    if (trimmed.isEmpty) return;
+    final next = kind == UniversalMediaKind.video
+        ? state.copyWith(videoModel: trimmed)
+        : state.copyWith(musicModel: trimmed);
+    if (next.videoModel == state.videoModel &&
+        next.musicModel == state.musicModel) {
+      return;
+    }
+    state = next;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        kind == UniversalMediaKind.video
+            ? kUniversalMediaVideoModelStorageKey
+            : kUniversalMediaMusicModelStorageKey,
+        trimmed,
+      );
+    } catch (_) {
+      // 持久化失败不阻断本次使用。
+    }
+  }
+
   UniversalMediaConfigNotifier() : super(const UniversalMediaConfig()) {
     ready = _load();
   }

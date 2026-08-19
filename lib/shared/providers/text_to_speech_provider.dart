@@ -312,6 +312,21 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     );
   }
 
+  /// 模型选择器快捷配置：只替换模型名（如 mimo-v2.5-tts 系列），
+  /// 其余 TTS 配置保持不变并持久化。
+  Future<void> applyModel(String model) async {
+    await ready;
+    final trimmed = model.trim();
+    if (trimmed.isEmpty || trimmed == state.model) return;
+    state = state.copyWith(model: trimmed);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kTextToSpeechModelStorageKey, trimmed);
+    } catch (_) {
+      // 持久化失败不阻断本次使用。
+    }
+  }
+
   Future<void> saveOpenAiCompatible({
     required bool enabled,
     required String baseUrl,

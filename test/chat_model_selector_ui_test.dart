@@ -5,6 +5,7 @@ import 'package:ai_chat_app/core/database/dao/channel_dao.dart';
 import 'package:ai_chat_app/main.dart';
 import 'package:ai_chat_app/shared/providers/channel_provider.dart';
 import 'package:ai_chat_app/shared/providers/database_provider.dart';
+import 'package:ai_chat_app/shared/providers/text_to_speech_provider.dart';
 import 'package:ai_chat_app/shared/providers/session_provider.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -210,7 +211,7 @@ void main() {
   );
 
   testWidgets(
-    'selector shows media models disabled with capability labels and no MapEntry noise',
+    'selector shows media models with capability labels, tap configures tools, no MapEntry noise',
     (tester) async {
       final db = await _createDatabaseWithModels(
         sessionId: 'selector-session',
@@ -262,7 +263,8 @@ void main() {
           ),
         ),
       );
-      expect(ttsItem.enabled, false);
+      // 媒体模型可点击：点击把它配置到对应工具，而不是切换聊天模型。
+      expect(ttsItem.enabled, true);
 
       // 语义标签不能再包含 MapEntry(...) 垃圾字符串。
       final semantics = tester.getSemantics(
@@ -274,6 +276,24 @@ void main() {
         ),
       );
       expect(semantics.label, isNot(contains('MapEntry')));
+
+      // 点击 TTS 模型：写入 TTS 配置，会话默认聊天模型不变。
+      await tester.tap(find.text('mimo-v2.5-tts'));
+      await tester.pumpAndSettle();
+      expect(
+        container.read(textToSpeechConfigProvider).model,
+        'mimo-v2.5-tts',
+      );
+      expect(
+        (await db.sessionDao.getSession(
+          'selector-session',
+        ))?.defaultChannelModelId,
+        'selector-alpha',
+      );
+      expect(
+        find.textContaining('已把 mimo-v2.5-tts 设为语音合成'),
+        findsOneWidget,
+      );
     },
   );
 }
