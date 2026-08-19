@@ -208,6 +208,74 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'selector shows media models disabled with capability labels and no MapEntry noise',
+    (tester) async {
+      final db = await _createDatabaseWithModels(
+        sessionId: 'selector-session',
+        sessionTitle: 'Selector',
+      );
+      addTearDown(db.close);
+      await db.channelDao.addModel(
+        id: 'selector-tts',
+        channelId: 'selector-channel-alpha',
+        modelName: 'mimo-v2.5-tts',
+        capability: 'audio',
+      );
+      await db.channelDao.addModel(
+        id: 'selector-asr',
+        channelId: 'selector-channel-alpha',
+        modelName: 'mimo-v2.5-asr',
+        capability: 'audio',
+      );
+      await db.channelDao.addModel(
+        id: 'selector-image',
+        channelId: 'selector-channel-alpha',
+        modelName: 'gpt-image-1.5',
+        capability: 'image',
+      );
+
+      final container = _createContainer(
+        db,
+        sessionId: 'selector-session',
+        selectedModelId: 'selector-alpha',
+      );
+      addTearDown(container.dispose);
+      await _pumpMobileApp(tester, container);
+
+      await tester.tap(find.byKey(ChatModelSelector.selectorKey));
+      await tester.pumpAndSettle();
+
+      // 媒体模型可见，带能力标签，且不可点击选择。
+      expect(find.text('mimo-v2.5-tts'), findsOneWidget);
+      expect(find.text('mimo-v2.5-asr'), findsOneWidget);
+      expect(find.text('gpt-image-1.5'), findsOneWidget);
+      expect(find.text('Audio 音频'), findsNWidgets(2));
+      expect(find.text('Image 图片生成'), findsOneWidget);
+
+      final ttsItem = tester.widget<PopupMenuItem<String>>(
+        find.ancestor(
+          of: find.text('mimo-v2.5-tts'),
+          matching: find.byWidgetPredicate(
+            (w) => w is PopupMenuItem<String> && w.value == 'selector-tts',
+          ),
+        ),
+      );
+      expect(ttsItem.enabled, false);
+
+      // 语义标签不能再包含 MapEntry(...) 垃圾字符串。
+      final semantics = tester.getSemantics(
+        find.ancestor(
+          of: find.text('selector-alpha'),
+          matching: find.byWidgetPredicate(
+            (w) => w is PopupMenuItem<String>,
+          ),
+        ),
+      );
+      expect(semantics.label, isNot(contains('MapEntry')));
+    },
+  );
 }
 
 Future<AppDatabase> _createDatabaseWithModels({

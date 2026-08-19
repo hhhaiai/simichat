@@ -25,6 +25,7 @@ import 'core/smoke/dreaming_reflection_smoke_harness.dart';
 import 'core/smoke/android_background_dreaming_smoke_harness.dart';
 import 'core/smoke/ios_background_dreaming_smoke_harness.dart';
 import 'core/database/dao/channel_dao.dart';
+import 'core/ai/model_capability.dart';
 import 'shared/widgets/sidebar.dart';
 import 'shared/providers/chat_provider.dart';
 import 'shared/providers/channel_provider.dart';
@@ -328,6 +329,7 @@ class ChatModelSelector extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final modelsAsync = ref.watch(allModelsProvider);
+    final allConfiguredAsync = ref.watch(allConfiguredModelsProvider);
     final selectedId = ref.watch(selectedModelIdProvider);
     final activeSession = ref.watch(activeSessionProvider);
     final preferredModelId = _preferredModelId(activeSession, selectedId);
@@ -387,8 +389,13 @@ class ChatModelSelector extends ConsumerWidget {
             },
             itemBuilder: (_) => _buildMenuItems(
               context,
-              models,
+              // 菜单展示全部已配置模型（含 TTS / STT / 生图等媒体模型，
+              // 以能力标签标注且不可选）；聊天选择仍只允许聊天类模型。
+              allConfiguredAsync.valueOrNull ?? models,
               selectedId: current?.channelModel.id,
+              selectableIds: models
+                  .map((m) => m.channelModel.id)
+                  .toSet(),
             ),
             child: _buildModelControl(context, currentLabel),
           ),
@@ -505,6 +512,7 @@ class ChatModelSelector extends ConsumerWidget {
     BuildContext context,
     List<ChannelModelWithChannel> models, {
     required String? selectedId,
+    required Set<String> selectableIds,
   }) {
     final grouped = <String, List<ChannelModelWithChannel>>{};
     for (final model in models) {
@@ -539,9 +547,16 @@ class ChatModelSelector extends ConsumerWidget {
 
       for (final model in entry.value) {
         final isSelected = model.channelModel.id == selectedId;
+        final isChatSelectable = selectableIds.contains(model.channelModel.id);
         final modelLabel = model.channelModel.modelName;
+        final capabilityLabel = ModelCapability.label(
+          model.channelModel.capability,
+        );
         items.add(
           PopupMenuItem<String>(
+            // 媒体模型（TTS / STT / 生图 / 视频 / 音乐 / 向量 / 重排）
+            // 在菜单中可见但不可选：能力标签说明其用途，避免误当聊天模型。
+            enabled: isChatSelectable,
             value: model.channelModel.id,
             height: 44,
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -549,8 +564,8 @@ class ChatModelSelector extends ConsumerWidget {
               container: true,
               selected: isSelected,
               label: isSelected
-                  ? '$entry.key / $modelLabel，当前已选择'
-                  : '$entry.key / $modelLabel',
+                  ? '${entry.key} / $modelLabel，当前已选择'
+                  : '${entry.key} / $modelLabel',
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: isSelected
@@ -585,9 +600,37 @@ class ChatModelSelector extends ConsumerWidget {
                             fontWeight: isSelected
                                 ? FontWeight.w700
                                 : FontWeight.normal,
+                            color: isChatSelectable
+                                ? null
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ),
+                      if (!isChatSelectable) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme
+                                .surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            capabilityLabel,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
