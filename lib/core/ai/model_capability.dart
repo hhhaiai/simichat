@@ -357,6 +357,12 @@ abstract final class ModelCapability {
   /// Conservative capability inference for OpenAI-compatible `/v1/models`
   /// and model lists from Claude, Gemini, Ollama, xAI/Grok, and compatible
   /// gateways. Explicit metadata is preferred over naming heuristics.
+  ///
+  /// 中转站目录通常不带能力元数据：媒体模型名命中精心维护的前缀表时
+  /// 推断为对应媒体能力（gpt-image-* / grok-imagine-image* / wan-video /
+  /// mimo-v2.5-tts* / asr 等），避免被统一标成 chat 而进入聊天选择器。
+  /// `supports*Model` 的"媒体能力只信显式元数据"门禁不受影响——目录
+  /// 标签与请求门禁是两个层级。
   static String inferFromModel(
     String modelId, {
     Map<String, dynamic>? metadata,
@@ -371,6 +377,12 @@ abstract final class ModelCapability {
     if (_matchesAny(id, _embeddingHints)) return embedding;
     if (_matchesAny(id, _nonChatServiceHints)) return chat;
     if (_hasReasonerNameHint(id)) return reasoner;
+
+    // 媒体模型名推断（先于 vision：grok-imagine-* 等不会命中 vision 表）。
+    if (_matchesAny(id, _imageGenerationHints)) return image;
+    if (_matchesAny(id, _videoGenerationHints)) return video;
+    if (_matchesAny(id, _musicGenerationHints)) return music;
+    if (_matchesAny(id, _audioModelHints)) return audio;
 
     if (_visionHints.any(id.contains) ||
         id.contains('-vl') ||

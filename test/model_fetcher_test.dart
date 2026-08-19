@@ -219,7 +219,7 @@ void main() {
     );
 
     test(
-      'ignores malformed OpenAI model rows and keeps xAI media names as chat',
+      'ignores malformed OpenAI model rows and infers xAI media names',
       () {
         final models = ModelFetcher.parseOpenAIModels({
           'data': [
@@ -242,8 +242,9 @@ void main() {
         final xai = models.firstWhere(
           (model) => model.id == 'grok-imagine-video',
         );
-        expect(xai.capability, ModelCapability.chat);
-        expect(xai.supports(ModelCapability.video), isFalse);
+        // 名称命中 grok-imagine-video 前缀表 → 目录能力为 video。
+        expect(xai.capability, ModelCapability.video);
+        expect(xai.supports(ModelCapability.video), isTrue);
         expect(
           models
               .firstWhere((model) => model.id == 'explicit-video')

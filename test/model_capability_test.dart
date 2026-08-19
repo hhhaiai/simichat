@@ -235,7 +235,7 @@ void main() {
     });
 
     test(
-      'normalizes aliases and does not infer dedicated media from names',
+      'normalizes aliases and infers dedicated media from curated names',
       () {
         expect(ModelCapability.normalize(' VIDEO '), ModelCapability.video);
         expect(
@@ -245,15 +245,33 @@ void main() {
         expect(ModelCapability.normalize('multimodal'), ModelCapability.vision);
         expect(ModelCapability.normalize('completion'), ModelCapability.chat);
 
+        // 中转站目录不带能力元数据：精心维护的媒体名前缀表用于目录
+        // 推断（grok-voice = TTS、grok-imagine-video = 视频、whisper =
+        // 语音识别）；请求门禁仍只信显式元数据，两层互不影响。
+        expect(
+          ModelCapability.inferFromModel('grok-voice'),
+          ModelCapability.audio,
+        );
+        expect(
+          ModelCapability.inferFromModel('grok-imagine-video'),
+          ModelCapability.video,
+        );
+        expect(
+          ModelCapability.inferFromModel('gemini-2.5-flash-preview-tts'),
+          ModelCapability.audio,
+        );
+        expect(
+          ModelCapability.inferFromModel('musicgen-small'),
+          ModelCapability.music,
+        );
+        expect(
+          ModelCapability.inferFromModel('whisper-1'),
+          ModelCapability.audio,
+        );
+
         for (final modelId in [
           'grok-4.6',
-          'grok-voice',
-          'grok-imagine-video',
-          'gemini-2.5-flash-preview-tts',
           'claude-sonnet-4-20250514',
-          'video-generation-unknown',
-          'musicgen-small',
-          'whisper-1',
         ]) {
           expect(
             ModelCapability.inferFromModel(modelId),
