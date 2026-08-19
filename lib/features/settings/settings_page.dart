@@ -4054,6 +4054,31 @@ class SettingsPage extends ConsumerWidget {
         refreshModels(ref);
       }
 
+      // 修复旧版按"能力+名称"去重写入的同名重复行：同一模型名同时存在
+      // chat 与媒体能力行时删除 chat 行（媒体行保留），幂等。
+      final rows = await channelDao.getModelsByChannel(channel.id);
+      final byName = <String, List<ChannelModel>>{};
+      for (final row in rows) {
+        byName.putIfAbsent(row.modelName, () => []).add(row);
+      }
+      final duplicateIds = <String>[];
+      for (final entry in byName.entries) {
+        if (entry.value.length < 2) continue;
+        final hasMedia = entry.value.any((r) => r.capability != 'chat');
+        if (hasMedia) {
+          duplicateIds.addAll(
+            entry.value
+                .where((r) => r.capability == 'chat')
+                .map((r) => r.id),
+          );
+        }
+      }
+      if (duplicateIds.isNotEmpty) {
+        await channelDao.deleteModels(duplicateIds);
+        refreshChannelModels(ref, channel.id);
+        refreshModels(ref);
+      }
+
       // 远端已不存在的本地模型：提示但不自动删除。
       final missingNames = existingModels
           .map((m) => m.modelName)

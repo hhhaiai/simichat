@@ -514,8 +514,22 @@ class ChatModelSelector extends ConsumerWidget {
     required String? selectedId,
     required Set<String> selectableIds,
   }) {
-    final grouped = <String, List<ChannelModelWithChannel>>{};
+    // 旧版"按能力+名称"去重曾给同一模型写入重复行（chat 与媒体能力各一），
+    // 菜单按 (渠道, 模型名) 去重：优先保留媒体能力行，避免同名重复与
+    // 媒体模型被误显示为可选 Chat 行。
+    final deduped = <String, ChannelModelWithChannel>{};
     for (final model in models) {
+      final key = '${model.channel.id}:${model.channelModel.modelName}';
+      final existing = deduped[key];
+      if (existing == null ||
+          (existing.channelModel.capability == 'chat' &&
+              model.channelModel.capability != 'chat')) {
+        deduped[key] = model;
+      }
+    }
+
+    final grouped = <String, List<ChannelModelWithChannel>>{};
+    for (final model in deduped.values) {
       grouped.putIfAbsent(model.channel.name, () => []).add(model);
     }
 
