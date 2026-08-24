@@ -8,6 +8,14 @@ abstract final class ModelCapability {
   static const embedding = 'embedding';
   static const image = 'image';
   static const audio = 'audio';
+
+  /// Explicit audio task capabilities. `audio` remains a compatibility
+  /// umbrella for imported models, while these labels let the UI route a
+  /// model without inspecting its display name.
+  static const tts = 'tts';
+  static const asr = 'asr';
+  static const voiceDesign = 'voice_design';
+  static const voiceClone = 'voice_clone';
   static const video = 'video';
   static const music = 'music';
 
@@ -24,6 +32,10 @@ abstract final class ModelCapability {
     image,
     reasoner,
     audio,
+    tts,
+    asr,
+    voiceDesign,
+    voiceClone,
     video,
     music,
     rerank,
@@ -112,6 +124,8 @@ abstract final class ModelCapability {
     'text_to_speech',
     'asr-',
     '-asr',
+    'stt',
+    '-stt',
     'tts-',
     '-tts',
     'grok-voice',
@@ -154,7 +168,11 @@ abstract final class ModelCapability {
       'text_generation' => chat,
       'multimodal' || 'image-input' || 'image_input' => vision,
       'image-generation' || 'image_generation' || 'imagegen' => image,
-      'speech' || 'stt' || 'tts' || 'transcription' => audio,
+      'speech' || 'stt' || 'transcription' => audio,
+      'tts' || 'text-to-speech' || 'text_to_speech' => tts,
+      'asr' || 'speech-to-text' || 'speech_to_text' => asr,
+      'voice-design' || 'voice_design' || 'voicedesign' => voiceDesign,
+      'voice-clone' || 'voice_clone' || 'voiceclone' => voiceClone,
       'audio-generation' || 'audio_generation' => music,
       'rerank' || 're-rank' || 're_rank' || 'reranker' => rerank,
       _ when all.contains(lowered) => lowered,
@@ -172,9 +190,48 @@ abstract final class ModelCapability {
   static bool isImage(String? value) => normalize(value) == image;
   static bool isReasoner(String? value) => normalize(value) == reasoner;
   static bool isAudio(String? value) => normalize(value) == audio;
+  static bool isTts(String? value) => normalize(value) == tts;
+  static bool isAsr(String? value) => normalize(value) == asr;
+  static bool isVoiceDesign(String? value) => normalize(value) == voiceDesign;
+  static bool isVoiceClone(String? value) => normalize(value) == voiceClone;
   static bool isVideo(String? value) => normalize(value) == video;
   static bool isMusic(String? value) => normalize(value) == music;
   static bool isRerank(String? value) => normalize(value) == rerank;
+
+  /// Resolve the default voice task for legacy rows that only persisted the
+  /// umbrella `audio` capability. Explicit capability metadata always wins;
+  /// the narrow model-family hints are kept here, in the central capability
+  /// registry, rather than scattered through widgets and request builders.
+  static String voiceCapabilityForModel({
+    required String modelId,
+    required Set<String> capabilities,
+  }) {
+    final normalized = capabilities.map(normalize).toSet();
+    for (final explicit in <String>[asr, music, voiceDesign, voiceClone, tts]) {
+      if (normalized.contains(explicit)) return explicit;
+    }
+    final id = modelId.trim().toLowerCase();
+    if (id.contains('asr') ||
+        id.contains('stt') ||
+        id.contains('whisper') ||
+        id.contains('transcri') ||
+        id.contains('speech-to-text') ||
+        id.contains('speech_to_text')) {
+      return asr;
+    }
+    if (id.contains('music') ||
+        id.contains('lyria') ||
+        id.contains('musicgen')) {
+      return music;
+    }
+    if (id.contains('voiceclone') || id.contains('voice-clone')) {
+      return voiceClone;
+    }
+    if (id.contains('voicedesign') || id.contains('voice-design')) {
+      return voiceDesign;
+    }
+    return tts;
+  }
 
   /// Return whether the model can accept an image in a normal chat request.
   /// Explicit non-chat capabilities veto broad model-name hints.
@@ -243,9 +300,10 @@ abstract final class ModelCapability {
 
   /// Return whether the app has a verified model-level native file contract
   /// for the requested attachment. The OpenAI Responses adapter has a
-  /// protocol-level PDF part, but SimiRouter's exact `mimo-v2.5-chat` chat
-  /// model is not verified to accept that part. Keep this exception narrow so
-  /// generic `openai_response` PDF support remains available.
+  /// first-class `input_file` part for PDF and ordinary document payloads,
+  /// but SimiRouter's exact `mimo-v2.5-chat` chat model is not verified to
+  /// accept that part. Keep this exception narrow so generic
+  /// `openai_response` file support remains available.
   static bool supportsVerifiedNativeFile({
     required String? capability,
     required String modelId,
@@ -254,7 +312,8 @@ abstract final class ModelCapability {
   }) {
     final type = attachmentType.trim().toLowerCase();
     final normalizedProtocol = protocol.trim().toLowerCase();
-    if (type != 'pdf' || normalizedProtocol != 'openai_response') {
+    if ((type != 'pdf' && type != 'document') ||
+        normalizedProtocol != 'openai_response') {
       return false;
     }
     return !_isExactSimiRouterMimoChatVision(
@@ -564,7 +623,9 @@ abstract final class ModelCapability {
     if (raw.isEmpty) return;
 
     if (raw.contains('embed')) result.add(embedding);
-    if (raw.contains('rerank') || raw.contains('re-rank') || raw.contains('re_rank')) {
+    if (raw.contains('rerank') ||
+        raw.contains('re-rank') ||
+        raw.contains('re_rank')) {
       result.add(rerank);
     }
     if (raw.contains('reason') || raw.contains('think')) result.add(reasoner);
@@ -774,6 +835,14 @@ abstract final class ModelCapability {
         return 'Reasoner 深度思考';
       case audio:
         return 'Audio 音频';
+      case tts:
+        return 'TTS 语音合成';
+      case asr:
+        return 'ASR 语音识别';
+      case voiceDesign:
+        return '声音设计';
+      case voiceClone:
+        return '声音克隆';
       case video:
         return 'Video 视频';
       case music:

@@ -396,6 +396,180 @@ void main() {
         expect(attachments.single.id, stableIds[2]);
       },
     );
+
+    test(
+      'recovery restores every source from a persisted source manifest exactly once',
+      () async {
+        final db = database.AppDatabase.forTesting(NativeDatabase.memory());
+        addTearDown(db.close);
+        final root = await Directory.systemTemp.createTemp(
+          'simichat_universal_media_recovery_sources_',
+        );
+        addTearDown(() async {
+          if (await root.exists()) await root.delete(recursive: true);
+        });
+        await _seedValidRouting(db);
+        const jobId = 'recovery-multi-source-job';
+        final ids = UniversalMediaDeliveryIds.forOperationId(jobId);
+        final contextDirectory = Directory(
+          '${root.path}${Platform.pathSeparator}generated_context',
+        );
+        await contextDirectory.create(recursive: true);
+        final sourceSpecs =
+            <({String id, String name, String type, List<int> bytes})>[
+              (
+                id: ids.sourceAttachmentId,
+                name: 'first-frame.png',
+                type: 'image',
+                bytes: <int>[1, 2, 3],
+              ),
+              (
+                id: '${ids.sourceAttachmentId}-1',
+                name: 'reference-2.png',
+                type: 'image',
+                bytes: <int>[4, 5, 6],
+              ),
+              (
+                id: '${ids.sourceAttachmentId}-2',
+                name: 'reference.wav',
+                type: 'audio',
+                bytes: <int>[7, 8, 9, 10],
+              ),
+            ];
+        final manifestSources = <Map<String, Object>>[];
+        for (final source in sourceSpecs) {
+          final file = File(
+            '${contextDirectory.path}${Platform.pathSeparator}${source.id}-${source.name}',
+          );
+          await file.writeAsBytes(source.bytes, flush: true);
+          manifestSources.add(<String, Object>{
+            'id': source.id,
+            'file_name': source.name,
+            'file_type': source.type,
+            'local_path': 'generated_context/${source.id}-${source.name}',
+            'file_size': source.bytes.length,
+          });
+        }
+        final manifest = File(
+          '${contextDirectory.path}${Platform.pathSeparator}$jobId-sources.json',
+        );
+        await manifest.writeAsString(
+          jsonEncode(<String, Object>{
+            'format': 'simichat.media_sources.v1',
+            'sources': manifestSources,
+          }),
+          flush: true,
+        );
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        await db.mediaJobDao.upsertJob(
+          id: jobId,
+          sessionId: 'recovery-session',
+          kind: 'video',
+          status: media_database.mediaJobPendingStatus,
+          provider: 'fake-provider',
+          model: 'video-test',
+          endpoint: '/v1/videos/generations',
+          phase: 'pending',
+          providerJobId: 'provider-$jobId',
+          pollUrl: 'https://media.test/v1/videos/$jobId',
+          prompt: 'multi source recovery prompt',
+          createdAt: now,
+          updatedAt: now,
+          deadline: now + 60000,
+          endpointStyle: UniversalMediaEndpointStyle.auto.name,
+          channelModelId: 'media-model',
+          deliveryUserMessageId: ids.userMessageId,
+          deliveryAssistantMessageId: ids.assistantMessageId,
+          deliveryAttachmentId: ids.attachmentId,
+          deliverySourceAttachmentId: ids.sourceAttachmentId,
+          deliveryPhase: media_database.mediaJobDeliveryPlannedPhase,
+          deliveryUserContent: '参考素材生成视频：multi source recovery prompt',
+          deliveryAssistantContent: '已根据参考素材生成视频',
+          deliveryFileType: 'video',
+          deliverySourcePath:
+              'generated_context/${manifest.uri.pathSegments.last}',
+          deliverySourceFileName: manifest.uri.pathSegments.last,
+          deliverySourceFileType: 'source-manifest',
+        );
+
+        final persistedBeforeRecovery = await db.mediaJobDao.getJob(jobId);
+        expect(
+          persistedBeforeRecovery!.deliverySourcePath,
+          'generated_context/${manifest.uri.pathSegments.last}',
+        );
+
+        final notifier = UniversalMediaJobNotifier(mediaJobDao: db.mediaJobDao);
+        final adapter = _CompletingMediaAdapter();
+        final coordinator = UniversalMediaRecoveryCoordinator(
+          appDatabase: db,
+          notifier: notifier,
+          serviceFactory: _ServiceFactoryHarness(adapter).create,
+        );
+        await coordinator.start(
+          delivery: _localDelivery(
+            database: db,
+            notifier: notifier,
+            rootDirectory: root,
+          ),
+        );
+
+        final completed = await db.mediaJobDao.getJob(jobId);
+        expect(completed!.status, media_database.mediaJobCompletedStatus);
+        expect(
+          completed.deliveryPhase,
+          media_database.mediaJobDeliveryCompletedPhase,
+        );
+        final messages = await db.messageDao.getMessagesBySession(
+          'recovery-session',
+        );
+        final attachments = await db.attachmentDao.getAllAttachments();
+        expect(messages, hasLength(2));
+        expect(attachments, hasLength(4));
+        expect(
+          attachments
+              .where((attachment) => attachment.messageId == ids.userMessageId)
+              .map((attachment) => attachment.id),
+          containsAll(sourceSpecs.map((source) => source.id)),
+        );
+        expect(
+          attachments
+              .where(
+                (attachment) => attachment.messageId == ids.assistantMessageId,
+              )
+              .single
+              .fileType,
+          'video',
+        );
+
+        final asset = UniversalMediaAsset(
+          bytes: Uint8List.fromList(<int>[1, 2, 3, 4]),
+          mimeType: 'video/mp4',
+          extension: 'mp4',
+        );
+        await deliverRecoveredUniversalMediaJob(
+          database: db,
+          notifier: UniversalMediaJobNotifier(mediaJobDao: db.mediaJobDao),
+          row: completed,
+          result: UniversalMediaJobResult(
+            job: UniversalMediaJob(
+              id: jobId,
+              kind: UniversalMediaKind.video,
+              status: UniversalMediaJobStatus.completed,
+              asset: asset,
+            ),
+            asset: asset,
+          ),
+          leaseId: 'duplicate-multi-source-delivery',
+          rootDirectory: root,
+        );
+        expect(
+          await db.messageDao.getMessagesBySession('recovery-session'),
+          hasLength(2),
+        );
+        expect(await db.attachmentDao.getAllAttachments(), hasLength(4));
+      },
+    );
   });
 }
 

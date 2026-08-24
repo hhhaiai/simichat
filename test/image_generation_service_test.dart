@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/ai/image_generation_service.dart';
+import 'package:ai_chat_app/core/media/media_provider_profile.dart';
+import 'package:ai_chat_app/core/media/media_request_options.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -73,6 +75,119 @@ void main() {
       expect(lastRequestBody?['prompt'], '一只在月球上的猫');
       expect(lastRequestBody?['response_format'], 'b64_json');
     });
+
+    test(
+      'typed image options preserve model and per-request fields on the wire',
+      () async {
+        serveImageEndpoint(
+          responder: (_) => {
+            'payload': {
+              'data': [
+                {
+                  'b64_json': base64Encode([9, 8, 7]),
+                },
+              ],
+            },
+          },
+        );
+
+        final image =
+            await ImageGenerationService(
+              baseUrl: baseUrl,
+              apiKey: 'sk-test',
+              model: 'gpt-image-2',
+            ).generateWithOptions(
+              const ImageGenerationOptions(
+                model: 'gpt-image-2',
+                prompt: '森林小屋',
+                count: 4,
+                aspectRatio: '16:9',
+                resolution: '2K',
+                size: '1536x1024',
+                quality: 'high',
+              ),
+              profile: MediaRequestProviderProfile.openAiImageGeneration,
+            );
+
+        expect(image.single.bytes, [9, 8, 7]);
+        expect(lastRequestBody?['model'], 'gpt-image-2');
+        expect(lastRequestBody?['n'], 4);
+        expect(lastRequestBody?['aspect_ratio'], '16:9');
+        expect(lastRequestBody?['resolution'], '2K');
+        expect(lastRequestBody?['size'], '1536x1024');
+        expect(lastRequestBody?['quality'], 'high');
+      },
+    );
+
+    test('typed automatic image options omit advanced wire fields', () async {
+      serveImageEndpoint(
+        responder: (_) => {
+          'payload': {
+            'data': [
+              {
+                'b64_json': base64Encode([5, 4, 3]),
+              },
+            ],
+          },
+        },
+      );
+
+      await ImageGenerationService(
+        baseUrl: baseUrl,
+        apiKey: 'sk-test',
+        model: 'gpt-image-2',
+      ).generateWithOptions(
+        const ImageGenerationOptions(model: 'gpt-image-2', prompt: '使用服务端默认参数'),
+        profile: MediaRequestProviderProfile.openAiImageGeneration,
+      );
+
+      expect(lastRequestBody, isNot(contains('aspect_ratio')));
+      expect(lastRequestBody, isNot(contains('resolution')));
+      expect(lastRequestBody, isNot(contains('size')));
+      expect(lastRequestBody, isNot(contains('quality')));
+      expect(lastRequestBody?['n'], 1);
+    });
+
+    test(
+      'Grok typed image parameters keep provider-specific wire names',
+      () async {
+        serveImageEndpoint(
+          responder: (_) => {
+            'payload': {
+              'data': [
+                {
+                  'b64_json': base64Encode([4, 2, 4, 2]),
+                },
+              ],
+            },
+          },
+        );
+
+        await ImageGenerationService(
+          baseUrl: baseUrl,
+          apiKey: 'sk-test',
+          model: 'grok-imagine-image-lite',
+        ).generateWithOptions(
+          const ImageGenerationOptions(
+            model: 'grok-imagine-image-lite',
+            prompt: 'wide studio',
+            count: 2,
+            aspectRatio: '16:9',
+            resolution: '2K',
+            quality: 'high',
+          ),
+          profile: MediaRequestProviderProfile.xAiGrokImage,
+        );
+
+        expect(lastRequestBody?['model'], 'grok-imagine-image-lite');
+        expect(lastRequestBody?['n'], 2);
+        expect(lastRequestBody?['aspect_ratio'], '16:9');
+        expect(lastRequestBody?['resolution'], '2K');
+        expect(lastRequestBody?['quality'], 'high');
+        expect(lastRequestBody, isNot(contains('size')));
+        expect(lastRequestBody?['response_format'], 'url');
+      },
+    );
 
     test(
       'resolves image generation through a configured /api/v3 prefix',
@@ -534,6 +649,61 @@ void main() {
 
         expect(result.bytes, [5, 6, 7]);
         expect(await seen.future, isNotEmpty);
+      },
+    );
+
+    test(
+      'keeps requested count and every reference image at the multipart boundary',
+      () async {
+        final seen = Completer<String>();
+        unawaited(
+          server.forEach((request) async {
+            final body = await utf8.decodeStream(request);
+            seen.complete(body);
+            request.response
+              ..headers.contentType = ContentType.json
+              ..write(
+                jsonEncode({
+                  'data': [
+                    {
+                      'b64_json': base64Encode([1, 2, 3]),
+                    },
+                    {
+                      'b64_json': base64Encode([4, 5, 6]),
+                    },
+                  ],
+                }),
+              );
+            await request.response.close();
+          }),
+        );
+        final tempDir = await Directory.systemTemp.createTemp('image-many-');
+        addTearDown(() => tempDir.delete(recursive: true));
+        final first = File('${tempDir.path}/first.png')
+          ..writeAsBytesSync([1, 2]);
+        final second = File('${tempDir.path}/second.png')
+          ..writeAsBytesSync([3, 4]);
+
+        final results =
+            await ImageGenerationService(
+              baseUrl: baseUrl,
+              apiKey: 'image-test-key',
+              model: 'gpt-image-2',
+            ).generateAll(
+              'two references',
+              count: 2,
+              referenceImagePaths: [first.path, second.path],
+            );
+
+        final body = await seen.future;
+        expect(results.map((image) => image.bytes), [
+          [1, 2, 3],
+          [4, 5, 6],
+        ]);
+        expect(body, contains('name="n"'));
+        expect(body, contains('\r\n2\r\n'));
+        expect(body, contains('filename="first.png"'));
+        expect(body, contains('filename="second.png"'));
       },
     );
 

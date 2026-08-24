@@ -4,6 +4,9 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:ai_chat_app/core/ai/universal_media_service.dart';
+import 'package:ai_chat_app/core/media/media_model_capability.dart';
+import 'package:ai_chat_app/core/media/media_provider_profile.dart';
+import 'package:ai_chat_app/core/media/media_request_options.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -1515,6 +1518,7 @@ void main() {
       },
     );
   });
+  _runTypedVideoOptionsTests();
 }
 
 class _LatePendingAdapter implements UniversalMediaAdapter {
@@ -1579,4 +1583,190 @@ class _NeverCompletesMediaAdapter implements UniversalMediaAdapter {
     requestUri: request.job.pollUrl ?? request.baseUri,
     bytes: const <int>[],
   );
+}
+
+void _runTypedVideoOptionsTests() {
+  group('typed video request options', () {
+    late HttpServer server;
+    late String baseUrl;
+
+    setUp(() async {
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      baseUrl = 'http://127.0.0.1:${server.port}';
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test(
+      'xAI profile serializes duration and aspect_ratio on the actual wire',
+      () async {
+        final bodySeen = Completer<Map<String, dynamic>>();
+        server.listen((request) async {
+          final body = await utf8.decoder.bind(request).join();
+          bodySeen.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'data': [
+                  {
+                    'b64_json': base64Encode([1, 2, 3, 4]),
+                  },
+                ],
+              }),
+            );
+          await request.response.close();
+        });
+
+        final result =
+            await UniversalMediaService(
+              baseUrl: baseUrl,
+              apiKey: 'video-test-key',
+            ).submitVideoWithOptions(
+              options: const VideoGenerationOptions(
+                model: 'grok-imagine-video-1.5',
+                prompt: 'A paper airplane flying over a city',
+                duration: 8,
+                aspectRatio: '16:9',
+                resolution: '720p',
+              ),
+              profile: MediaRequestProviderProfile.xAiGrokVideo,
+              endpoint: '/v1/videos/generations',
+              taskOptions: const UniversalMediaTaskOptions.xAiVideo(),
+            );
+
+        final body = await bodySeen.future;
+        expect(result.asset?.bytes, [1, 2, 3, 4]);
+        expect(body['duration'], 8);
+        expect(body['aspect_ratio'], '16:9');
+        expect(body['resolution'], '720p');
+        expect(body.containsKey('seconds'), isFalse);
+        expect(body.containsKey('aspectRatio'), isFalse);
+      },
+    );
+
+    test(
+      'JSON custom profile keeps every reference image as data URIs',
+      () async {
+        final temp = await Directory.systemTemp.createTemp('video-many-ref-');
+        addTearDown(() => temp.delete(recursive: true));
+        final first = File('${temp.path}/one.png')..writeAsBytesSync([1, 2]);
+        final second = File('${temp.path}/two.png')..writeAsBytesSync([3, 4]);
+        final bodySeen = Completer<Map<String, dynamic>>();
+        server.listen((request) async {
+          final body = await utf8.decoder.bind(request).join();
+          bodySeen.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'data': [
+                  {
+                    'b64_json': base64Encode([9, 8, 7]),
+                  },
+                ],
+              }),
+            );
+          await request.response.close();
+        });
+        const profile = MediaRequestProviderProfile(
+          id: 'custom-multi-reference',
+          capability: MediaModelCapability(maxReferenceImages: 2),
+          referenceImagesField: 'reference_images',
+        );
+
+        await UniversalMediaService(
+          baseUrl: baseUrl,
+          apiKey: 'video-test-key',
+        ).submitVideoWithOptions(
+          options: VideoGenerationOptions(
+            model: 'custom-video',
+            prompt: 'two images',
+            referenceImages: [first.path, second.path],
+          ),
+          profile: profile,
+          endpoint: '/v1/videos',
+          taskOptions: const UniversalMediaTaskOptions(
+            requestFormat: UniversalMediaRequestFormat.json,
+          ),
+        );
+
+        final body = await bodySeen.future;
+        expect(body['reference_images'], isA<List>());
+        expect(body['reference_images'], hasLength(2));
+        expect(
+          (body['reference_images'] as List).singleWhere(
+            (value) => value.toString().contains('data:image/png;base64,AQI='),
+          ),
+          isNotEmpty,
+        );
+        expect(jsonEncode(body), isNot(contains(first.path)));
+        expect(jsonEncode(body), isNot(contains(second.path)));
+      },
+    );
+
+    test(
+      'typed video profile keeps first frame and reference audio separate',
+      () async {
+        final temp = await Directory.systemTemp.createTemp('video-typed-');
+        addTearDown(() => temp.delete(recursive: true));
+        final reference = File('${temp.path}/reference.png')
+          ..writeAsBytesSync([1, 2, 3]);
+        final firstFrame = File('${temp.path}/first.png')
+          ..writeAsBytesSync([4, 5, 6]);
+        final audio = File('${temp.path}/voice.wav')
+          ..writeAsBytesSync([7, 8, 9]);
+        final bodySeen = Completer<Map<String, dynamic>>();
+        server.listen((request) async {
+          final body = await utf8.decoder.bind(request).join();
+          bodySeen.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'data': [
+                  {
+                    'b64_json': base64Encode([1, 2, 3, 4]),
+                  },
+                ],
+              }),
+            );
+          await request.response.close();
+        });
+
+        await UniversalMediaService(
+          baseUrl: baseUrl,
+          apiKey: 'video-test-key',
+        ).submitVideoWithOptions(
+          options: VideoGenerationOptions(
+            model: 'custom-video',
+            prompt: '一段带配音的镜头',
+            referenceImages: [reference.path],
+            firstFrameImage: firstFrame.path,
+            referenceAudio: audio.path,
+            duration: 8,
+            aspectRatio: '16:9',
+            resolution: '720p',
+          ),
+          profile: MediaRequestProviderProfile.openAiCompatibleVideo,
+          endpoint: '/v1/videos',
+          taskOptions: const UniversalMediaTaskOptions(
+            requestFormat: UniversalMediaRequestFormat.json,
+          ),
+        );
+
+        final body = await bodySeen.future;
+        expect(body['duration'], 8);
+        expect(body['aspect_ratio'], '16:9');
+        expect(body['resolution'], '720p');
+        expect(body['reference_images'], isA<String>());
+        expect(body['first_frame'], startsWith('data:image/png;base64,'));
+        expect(body['reference_audio'], startsWith('data:audio/wav;base64,'));
+        final encoded = jsonEncode(body);
+        expect(encoded, isNot(contains(reference.path)));
+        expect(encoded, isNot(contains(firstFrame.path)));
+        expect(encoded, isNot(contains(audio.path)));
+      },
+    );
+  });
 }

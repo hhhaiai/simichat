@@ -555,7 +555,14 @@ class UniversalMediaSubmitRequest {
     required this.endpointStyle,
     this.taskOptions = const UniversalMediaTaskOptions(),
     this.referenceImagePath,
+    this.referenceImagePaths = const <String>[],
+    this.firstFrameImagePath,
+    this.referenceAudioPath,
+    this.referenceImageField,
+    this.firstFrameField,
+    this.referenceAudioField,
     this.extra = const <String, dynamic>{},
+    this.requestFields = const <String, dynamic>{},
     this.cancelToken,
   });
 
@@ -567,8 +574,22 @@ class UniversalMediaSubmitRequest {
   final String endpoint;
   final UniversalMediaEndpointStyle endpointStyle;
   final UniversalMediaTaskOptions taskOptions;
+
+  /// [referenceImagePath] is retained for pre-P0 callers. New typed requests
+  /// use the complete ordered [referenceImagePaths] collection.
   final String? referenceImagePath;
+  final List<String> referenceImagePaths;
+  final String? firstFrameImagePath;
+  final String? referenceAudioPath;
+  final String? referenceImageField;
+  final String? firstFrameField;
+  final String? referenceAudioField;
+
+  /// Legacy free-form fields retained for existing saved routes.
   final Map<String, dynamic> extra;
+
+  /// Values emitted by a validated provider/model profile.
+  final Map<String, dynamic> requestFields;
   final CancelToken? cancelToken;
 }
 

@@ -680,16 +680,43 @@ final universalMediaConfigProvider =
     );
 
 class UniversalMediaConfigNotifier extends StateNotifier<UniversalMediaConfig> {
-  /// 模型选择器快捷配置：把视频 / 音乐模型直接写入对应路由（只改模型名，
-  /// 其余端点与协议配置保持不变）。
-  Future<void> applyMediaModel(UniversalMediaKind kind, String model) async {
+  /// Bind a video/music route to a model already configured in Settings.  The
+  /// channel model id is persisted alongside the profile so execution can
+  /// resolve the owning Base URL/API key instead of falling back to chat.
+  Future<void> applyMediaModel(
+    UniversalMediaKind kind,
+    String model, {
+    String? channelModelId,
+    String? endpoint,
+    UniversalMediaProviderProfile? profile,
+  }) async {
     final trimmed = model.trim();
     if (trimmed.isEmpty) return;
+    final normalizedId = _normalizeUniversalMediaChannelModelId(channelModelId);
+    final selectedProfile = profile;
     final next = kind == UniversalMediaKind.video
-        ? state.copyWith(videoModel: trimmed)
-        : state.copyWith(musicModel: trimmed);
+        ? state.copyWith(
+            videoModel: trimmed,
+            videoChannelModelId: normalizedId,
+            videoEndpoint: endpoint,
+            videoProfileId: selectedProfile?.id,
+            videoTaskOptions: selectedProfile?.taskOptions,
+          )
+        : state.copyWith(
+            musicModel: trimmed,
+            musicChannelModelId: normalizedId,
+            musicEndpoint: endpoint,
+            musicProfileId: selectedProfile?.id,
+            musicTaskOptions: selectedProfile?.taskOptions,
+          );
     if (next.videoModel == state.videoModel &&
-        next.musicModel == state.musicModel) {
+        next.videoChannelModelId == state.videoChannelModelId &&
+        next.videoEndpoint == state.videoEndpoint &&
+        next.videoProfileId == state.videoProfileId &&
+        next.musicModel == state.musicModel &&
+        next.musicChannelModelId == state.musicChannelModelId &&
+        next.musicEndpoint == state.musicEndpoint &&
+        next.musicProfileId == state.musicProfileId) {
       return;
     }
     state = next;
@@ -701,6 +728,33 @@ class UniversalMediaConfigNotifier extends StateNotifier<UniversalMediaConfig> {
             : kUniversalMediaMusicModelStorageKey,
         trimmed,
       );
+      final idKey = kind == UniversalMediaKind.video
+          ? kUniversalMediaVideoChannelModelIdStorageKey
+          : kUniversalMediaMusicChannelModelIdStorageKey;
+      await _writeOptional(prefs, idKey, normalizedId);
+      if (endpoint != null && endpoint.trim().isNotEmpty) {
+        await prefs.setString(
+          kind == UniversalMediaKind.video
+              ? kUniversalMediaVideoEndpointStorageKey
+              : kUniversalMediaMusicEndpointStorageKey,
+          endpoint.trim(),
+        );
+      }
+      if (selectedProfile != null) {
+        final taskOptionsKey = kind == UniversalMediaKind.video
+            ? kUniversalMediaVideoTaskOptionsStorageKey
+            : kUniversalMediaMusicTaskOptionsStorageKey;
+        await prefs.setString(
+          taskOptionsKey,
+          jsonEncode(selectedProfile.taskOptions.toJson()),
+        );
+        await prefs.setString(
+          kind == UniversalMediaKind.video
+              ? kUniversalMediaVideoProfileStorageKey
+              : kUniversalMediaMusicProfileStorageKey,
+          selectedProfile.id,
+        );
+      }
     } catch (_) {
       // 持久化失败不阻断本次使用。
     }
@@ -1727,10 +1781,17 @@ class UniversalMediaJobNotifier
     required String prompt,
     String? endpoint,
     String? referenceImagePath,
+    List<String> referenceImagePaths = const <String>[],
+    String? firstFrameImagePath,
+    String? referenceAudioPath,
+    String? referenceImageField,
+    String? firstFrameField,
+    String? referenceAudioField,
     CancelToken? cancelToken,
     UniversalMediaEndpointStyle endpointStyle =
         UniversalMediaEndpointStyle.auto,
     Map<String, dynamic> extra = const <String, dynamic>{},
+    Map<String, dynamic> requestFields = const <String, dynamic>{},
     UniversalMediaTaskOptions taskOptions = const UniversalMediaTaskOptions(),
     String? sessionId,
     String? provider,
@@ -1746,9 +1807,16 @@ class UniversalMediaJobNotifier
       prompt: prompt,
       endpoint: endpoint,
       referenceImagePath: referenceImagePath,
+      referenceImagePaths: referenceImagePaths,
+      firstFrameImagePath: firstFrameImagePath,
+      referenceAudioPath: referenceAudioPath,
+      referenceImageField: referenceImageField,
+      firstFrameField: firstFrameField,
+      referenceAudioField: referenceAudioField,
       cancelToken: cancelToken,
       endpointStyle: endpointStyle,
       extra: extra,
+      requestFields: requestFields,
       taskOptions: taskOptions,
     );
     final job = _withContext(
@@ -1794,7 +1862,14 @@ class UniversalMediaJobNotifier
     required String prompt,
     String? endpoint,
     String? referenceImagePath,
+    List<String> referenceImagePaths = const <String>[],
+    String? firstFrameImagePath,
+    String? referenceAudioPath,
+    String? referenceImageField,
+    String? firstFrameField,
+    String? referenceAudioField,
     Map<String, dynamic> extra = const <String, dynamic>{},
+    Map<String, dynamic> requestFields = const <String, dynamic>{},
     UniversalMediaEndpointStyle endpointStyle =
         UniversalMediaEndpointStyle.auto,
     UniversalMediaTaskOptions taskOptions = const UniversalMediaTaskOptions(),
@@ -1806,6 +1881,9 @@ class UniversalMediaJobNotifier
     String? deliveryUserContent,
     String? deliveryAssistantContent,
     String? deliveryFileType,
+    String? deliverySourcePath,
+    String? deliverySourceFileName,
+    String? deliverySourceFileType,
   }) async {
     final operation = _ActiveUniversalMediaOperation(
       service: service,
@@ -1842,6 +1920,9 @@ class UniversalMediaJobNotifier
         deliveryUserContent: deliveryUserContent,
         deliveryAssistantContent: deliveryAssistantContent,
         deliveryFileType: deliveryFileType,
+        deliverySourcePath: deliverySourcePath,
+        deliverySourceFileName: deliverySourceFileName,
+        deliverySourceFileType: deliverySourceFileType,
       );
       operation.job = initialJob;
       final submitted = await submit(
@@ -1852,9 +1933,16 @@ class UniversalMediaJobNotifier
         prompt: prompt,
         endpoint: endpoint,
         referenceImagePath: referenceImagePath,
+        referenceImagePaths: referenceImagePaths,
+        firstFrameImagePath: firstFrameImagePath,
+        referenceAudioPath: referenceAudioPath,
+        referenceImageField: referenceImageField,
+        firstFrameField: firstFrameField,
+        referenceAudioField: referenceAudioField,
         cancelToken: operation.cancelToken,
         endpointStyle: endpointStyle,
         extra: extra,
+        requestFields: requestFields,
         taskOptions: taskOptions,
         sessionId: sessionId,
         provider: provider,

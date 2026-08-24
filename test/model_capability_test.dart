@@ -234,6 +234,37 @@ void main() {
       expect(ModelCapability.normalizeMedia('tts'), ModelCapability.audio);
     });
 
+    test('legacy audio model task is resolved centrally', () {
+      expect(
+        ModelCapability.voiceCapabilityForModel(
+          modelId: 'mimo-v2.5-asr',
+          capabilities: const {ModelCapability.audio},
+        ),
+        ModelCapability.asr,
+      );
+      expect(
+        ModelCapability.voiceCapabilityForModel(
+          modelId: 'mimo-v2.5-tts',
+          capabilities: const {ModelCapability.audio},
+        ),
+        ModelCapability.tts,
+      );
+      expect(
+        ModelCapability.voiceCapabilityForModel(
+          modelId: 'neutral-model',
+          capabilities: const {ModelCapability.asr},
+        ),
+        ModelCapability.asr,
+      );
+      expect(
+        ModelCapability.voiceCapabilityForModel(
+          modelId: 'grok-stt',
+          capabilities: const {ModelCapability.audio},
+        ),
+        ModelCapability.asr,
+      );
+    });
+
     test(
       'normalizes aliases and infers dedicated media from curated names',
       () {
@@ -269,10 +300,7 @@ void main() {
           ModelCapability.audio,
         );
 
-        for (final modelId in [
-          'grok-4.6',
-          'claude-sonnet-4-20250514',
-        ]) {
+        for (final modelId in ['grok-4.6', 'claude-sonnet-4-20250514']) {
           expect(
             ModelCapability.inferFromModel(modelId),
             ModelCapability.chat,
@@ -407,7 +435,9 @@ void main() {
       expect(
         ModelCapability.primaryCapability(
           'provider-neutral-model',
-          metadata: {'capabilities': ['rerank']},
+          metadata: {
+            'capabilities': ['rerank'],
+          },
         ),
         ModelCapability.rerank,
       );

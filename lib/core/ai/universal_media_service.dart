@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../media/media_job.dart';
+import '../media/media_provider_profile.dart';
+import '../media/media_request_options.dart';
 import 'api_endpoint_resolver.dart';
 import 'http_helper.dart';
 import 'sse_helper.dart';
@@ -15,6 +17,7 @@ export '../media/media_job.dart';
 /// OpenAI 兼容 / 自定义媒体接口的默认路径。
 const kDefaultImageGenerationEndpoint = '/v1/images/generations';
 const kDefaultImageEditEndpoint = '/v1/images/edits';
+
 /// OpenAI Videos 风格默认提交端点。实测 OpenAI 兼容中转站
 ///（如 SimiRouter）只在 `/v1/videos` 注册路由，`/v1/videos/generations`
 /// 会返回 "Invalid URL"；xAI 风格仍是可选 profile 的显式端点。
@@ -264,6 +267,38 @@ class UniversalMediaService {
     );
   }
 
+  /// 新任务面板的视频类型化入口。
+  ///
+  /// [profile] 是唯一允许把 Options 转成厂商字段的层；这里不接收一整包
+  /// `extra`，并把首帧、普通参考图、参考音频分别传给网络边界。
+  Future<UniversalMediaJobResult> submitVideoWithOptions({
+    required VideoGenerationOptions options,
+    required MediaRequestProviderProfile profile,
+    String endpoint = kDefaultVideoGenerationEndpoint,
+    CancelToken? cancelToken,
+    UniversalMediaTaskOptions taskOptions = const UniversalMediaTaskOptions(),
+    UniversalMediaEndpointStyle endpointStyle =
+        UniversalMediaEndpointStyle.auto,
+  }) {
+    final fields = profile.serializeVideoGeneration(options);
+    return submit(
+      kind: UniversalMediaKind.video,
+      model: options.model,
+      prompt: options.prompt,
+      endpoint: endpoint,
+      referenceImagePaths: options.referenceImages,
+      firstFrameImagePath: options.firstFrameImage,
+      referenceAudioPath: options.referenceAudio,
+      referenceImageField: profile.referenceImagesField,
+      firstFrameField: profile.firstFrameField,
+      referenceAudioField: profile.referenceAudioField,
+      requestFields: fields,
+      cancelToken: cancelToken,
+      taskOptions: taskOptions,
+      endpointStyle: endpointStyle,
+    );
+  }
+
   Future<UniversalMediaJobResult> submitMusic({
     required String model,
     required String prompt,
@@ -293,10 +328,20 @@ class UniversalMediaService {
     required String prompt,
     String? endpoint,
     String? referenceImagePath,
+    List<String> referenceImagePaths = const <String>[],
+    String? firstFrameImagePath,
+    String? referenceAudioPath,
+    String? referenceImageField,
+    String? firstFrameField,
+    String? referenceAudioField,
     CancelToken? cancelToken,
     UniversalMediaEndpointStyle endpointStyle =
         UniversalMediaEndpointStyle.auto,
+
+    /// 兼容旧调用方的自由字段。新任务必须经 profile 序列化为
+    /// [requestFields]，不能把未知厂商参数直接带入请求。
     Map<String, dynamic> extra = const <String, dynamic>{},
+    Map<String, dynamic> requestFields = const <String, dynamic>{},
     UniversalMediaTaskOptions taskOptions = const UniversalMediaTaskOptions(),
   }) async {
     final normalizedBaseUrl = _normalizeBaseUrl(baseUrl);
@@ -320,7 +365,14 @@ class UniversalMediaService {
       endpointStyle: endpointStyle,
       taskOptions: taskOptions,
       referenceImagePath: referenceImagePath,
+      referenceImagePaths: referenceImagePaths,
+      firstFrameImagePath: firstFrameImagePath,
+      referenceAudioPath: referenceAudioPath,
+      referenceImageField: referenceImageField,
+      firstFrameField: firstFrameField,
+      referenceAudioField: referenceAudioField,
       extra: extra,
+      requestFields: requestFields,
       cancelToken: cancelToken,
     );
 
@@ -1195,15 +1247,19 @@ class DioUniversalMediaAdapter implements UniversalMediaAdapter {
     final openAiVideoCreate =
         taskOptions.protocol == UniversalMediaProtocol.openAiVideo ||
         (!explicitlyConfigured && _isOpenAiVideoCreateEndpoint(url));
-    final referencePath = request.referenceImagePath?.trim();
+    final referencePaths = _normalizeLocalPaths(
+      legacyPath: request.referenceImagePath,
+      paths: request.referenceImagePaths,
+    );
+    final firstFramePath = request.firstFrameImagePath?.trim();
+    final referenceAudioPath = request.referenceAudioPath?.trim();
     final xAiVideoGeneration =
         taskOptions.protocol == UniversalMediaProtocol.xAiVideo ||
         (!explicitlyConfigured &&
             _isXAiVideoGenerationEndpoint(url) &&
             (request.endpointStyle ==
                     UniversalMediaEndpointStyle.xAiRequestId ||
-                referencePath == null ||
-                referencePath.isEmpty));
+                referencePaths.isEmpty));
     final imageEndpoint = request.kind == UniversalMediaKind.image;
     final modelLooksLikeGptImage = request.model
         .trim()
@@ -1214,50 +1270,122 @@ class DioUniversalMediaAdapter implements UniversalMediaAdapter {
         !openAiVideoCreate &&
         !xAiVideoGeneration &&
         !modelLooksLikeGptImage &&
+        !request.requestFields.containsKey('response_format') &&
+        !request.requestFields.containsKey('output_format') &&
         !request.extra.containsKey('response_format') &&
         !request.extra.containsKey('output_format');
     final fields = <String, dynamic>{
       'model': request.model,
       'prompt': request.prompt,
       if (imageResponseFormatRequested) 'response_format': 'b64_json',
+      ...request.requestFields,
       ...request.extra,
     };
-    final hasReference = referencePath != null && referencePath.isNotEmpty;
     final referenceField =
+        request.referenceImageField ??
         taskOptions.referenceField ??
         (openAiVideoCreate ? 'input_reference' : 'image');
+    final firstFrameField = request.firstFrameField;
+    final audioField = request.referenceAudioField;
+    final hasAttachments =
+        referencePaths.isNotEmpty ||
+        (firstFramePath != null && firstFramePath.isNotEmpty) ||
+        (referenceAudioPath != null && referenceAudioPath.isNotEmpty);
     final requestFormat = taskOptions.requestFormat;
     final useMultipart =
         !xAiVideoGeneration &&
         (requestFormat == UniversalMediaRequestFormat.multipart ||
             (requestFormat == UniversalMediaRequestFormat.auto &&
-                hasReference));
+                hasAttachments));
     final Object data;
     if (xAiVideoGeneration) {
+      // xAI's currently declared image field is a single object. More than one
+      // reference is rejected rather than silently discarding the later paths.
+      if (referencePaths.length > 1) {
+        throw const UniversalMediaException('当前 xAI 视频 profile 最多支持 1 张参考图');
+      }
+      if (firstFramePath != null && firstFramePath.isNotEmpty) {
+        throw const UniversalMediaException('当前 xAI 视频 profile 不支持首帧图');
+      }
+      if (referenceAudioPath != null && referenceAudioPath.isNotEmpty) {
+        throw const UniversalMediaException('当前 xAI 视频 profile 不支持参考音频');
+      }
       data = <String, dynamic>{
         ...fields,
-        if (hasReference)
-          'image': <String, String>{
-            'url': await _localImageDataUri(referencePath),
+        if (referencePaths.isNotEmpty)
+          referenceField: <String, String>{
+            'url': await _localImageDataUri(referencePaths.single),
           },
       };
     } else if (useMultipart) {
-      final path = referencePath;
-      data = FormData.fromMap({
-        ...fields,
-        if (path != null && path.isNotEmpty)
-          referenceField: await MultipartFile.fromFile(
-            path,
-            filename: _fileNameFromPath(path),
+      final formData = FormData.fromMap(fields);
+      for (final path in referencePaths) {
+        formData.files.add(
+          MapEntry(
+            referenceField,
+            await MultipartFile.fromFile(
+              path,
+              filename: _fileNameFromPath(path),
+            ),
           ),
-      });
-    } else if (hasReference) {
-      // JSON-only compatible endpoints must receive bytes as a data URL; a
-      // local path is never serialized into a request body.
-      data = <String, dynamic>{
+        );
+      }
+      if (firstFramePath != null && firstFramePath.isNotEmpty) {
+        if (firstFrameField == null || firstFrameField.isEmpty) {
+          throw const UniversalMediaException('当前模型未声明首帧图字段');
+        }
+        formData.files.add(
+          MapEntry(
+            firstFrameField,
+            await MultipartFile.fromFile(
+              firstFramePath,
+              filename: _fileNameFromPath(firstFramePath),
+            ),
+          ),
+        );
+      }
+      if (referenceAudioPath != null && referenceAudioPath.isNotEmpty) {
+        if (audioField == null || audioField.isEmpty) {
+          throw const UniversalMediaException('当前模型未声明参考音频字段');
+        }
+        formData.files.add(
+          MapEntry(
+            audioField,
+            await MultipartFile.fromFile(
+              referenceAudioPath,
+              filename: _fileNameFromPath(referenceAudioPath),
+            ),
+          ),
+        );
+      }
+      data = formData;
+    } else if (hasAttachments) {
+      // JSON-only endpoints receive data URIs (never local paths). Repeated
+      // references are preserved as an ordered list instead of firstOrNull.
+      final referencePayload = <String>[];
+      for (final path in referencePaths) {
+        referencePayload.add(await _localImageDataUri(path));
+      }
+      final jsonData = <String, dynamic>{
         ...fields,
-        referenceField: await _localImageDataUri(referencePath),
+        if (referencePayload.isNotEmpty)
+          referenceField: referencePayload.length == 1
+              ? referencePayload.single
+              : referencePayload,
       };
+      if (firstFramePath != null && firstFramePath.isNotEmpty) {
+        if (firstFrameField == null || firstFrameField.isEmpty) {
+          throw const UniversalMediaException('当前模型未声明首帧图字段');
+        }
+        jsonData[firstFrameField] = await _localImageDataUri(firstFramePath);
+      }
+      if (referenceAudioPath != null && referenceAudioPath.isNotEmpty) {
+        if (audioField == null || audioField.isEmpty) {
+          throw const UniversalMediaException('当前模型未声明参考音频字段');
+        }
+        jsonData[audioField] = await _localAudioDataUri(referenceAudioPath);
+      }
+      data = jsonData;
     } else {
       data = fields;
     }
@@ -1354,6 +1482,36 @@ bool _isOpenAiVideoCreateEndpoint(Uri url) {
 bool _isXAiVideoGenerationEndpoint(Uri url) {
   final segments = url.pathSegments.map((segment) => segment.toLowerCase());
   return segments.contains('videos') && segments.contains('generations');
+}
+
+List<String> _normalizeLocalPaths({
+  String? legacyPath,
+  List<String> paths = const <String>[],
+}) {
+  final result = <String>[];
+  final seen = <String>{};
+  for (final raw in <String?>[legacyPath, ...paths]) {
+    final path = raw?.trim();
+    if (path != null && path.isNotEmpty && seen.add(path)) result.add(path);
+  }
+  return List<String>.unmodifiable(result);
+}
+
+Future<String> _localAudioDataUri(String path) async {
+  final file = File(path);
+  if (!await file.exists()) {
+    throw const UniversalMediaException('参考音频文件不存在');
+  }
+  final length = await file.length();
+  if (length <= 0) {
+    throw const UniversalMediaException('参考音频文件为空');
+  }
+  if (length > kMaxGeneratedMusicBytes) {
+    throw const UniversalMediaException('参考音频过大，无法提交');
+  }
+  final bytes = await file.readAsBytes();
+  final mime = _mimeFromPath(path, UniversalMediaKind.music) ?? 'audio/wav';
+  return 'data:$mime;base64,${base64Encode(bytes)}';
 }
 
 Future<String> _localImageDataUri(String path) async {

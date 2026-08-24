@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
@@ -308,20 +309,6 @@ class ModelTester {
 
   /// 语音识别模型名提示（whisper / transcri / asr 等），这些模型无法用
   /// 廉价的 TTS 请求探测，测试时直接跳过。
-  static const _asrModelHints = [
-    'whisper',
-    'transcri',
-    'speech-to-text',
-    'speech_to_text',
-    'asr-',
-    '-asr',
-  ];
-
-  static bool _isAsrModelName(String modelId) {
-    final id = modelId.trim().toLowerCase();
-    return _asrModelHints.any(id.contains);
-  }
-
   /// 返回不需要真实请求的跳过结果。视频 / 音乐生成任务昂贵且异步，
   /// 语音识别需要音频文件，都不适合批量连通性探测——跳过意味着
   /// 保留模型，绝不因为"无法测试"而删除。
@@ -332,23 +319,36 @@ class ModelTester {
     final normalized = ModelCapability.normalize(capability);
     switch (normalized) {
       case ModelCapability.video:
-        return ModelTestResult.skipped(
-          reason: '视频生成模型不参与连通性测试，保留不剔除',
-        );
+        return ModelTestResult.skipped(reason: '视频生成模型不参与连通性测试，保留不剔除');
       case ModelCapability.music:
+        return ModelTestResult.skipped(reason: '音乐生成模型不参与连通性测试，保留不剔除');
+      case ModelCapability.voiceDesign:
+      case ModelCapability.voiceClone:
         return ModelTestResult.skipped(
-          reason: '音乐生成模型不参与连通性测试，保留不剔除',
+          reason: '声音设计/克隆需要风格或参考音频，自动测试只保留模型不发起消耗请求',
         );
       case ModelCapability.audio:
-        if (_isAsrModelName(modelId)) {
-          return ModelTestResult.skipped(
-            reason: '语音识别模型暂不支持连通性测试，保留不剔除',
-          );
+        // Legacy imported rows only say `audio`; keep their historical
+        // non-consuming behavior. Newly fetched rows use explicit `asr` and
+        // take the fixture-based endpoint probe below.
+        if (_legacyAsrModelName(modelId)) {
+          return ModelTestResult.skipped(reason: '语音识别模型需要真实音频，旧 Audio 行保留未测');
         }
         return null;
       default:
         return null;
     }
+  }
+
+  static bool _legacyAsrModelName(String modelId) {
+    final id = modelId.trim().toLowerCase();
+    return id.contains('whisper') ||
+        id.contains('transcri') ||
+        id.contains('speech-to-text') ||
+        id.contains('speech_to_text') ||
+        id.contains('asr-') ||
+        id.endsWith('-asr') ||
+        id.contains('stt');
   }
 
   /// 测试指定模型是否可用（30 秒超时）。
@@ -383,8 +383,24 @@ class ModelTester {
         model: model,
       );
     }
-    if (ModelCapability.isAudio(capability) && !_isAsrModelName(model)) {
+    final normalizedCapability = ModelCapability.normalize(capability);
+    final effectiveAudioCapability =
+        normalizedCapability == ModelCapability.audio
+        ? ModelCapability.voiceCapabilityForModel(
+            modelId: model,
+            capabilities: {normalizedCapability},
+          )
+        : normalizedCapability;
+    if (effectiveAudioCapability == ModelCapability.tts) {
       return _testSpeechModel(
+        protocol: protocol,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+      );
+    }
+    if (effectiveAudioCapability == ModelCapability.asr) {
+      return _testSpeechRecognitionModel(
         protocol: protocol,
         baseUrl: baseUrl,
         apiKey: apiKey,
@@ -424,6 +440,8 @@ class ModelTester {
           'prompt': 'ping',
           'n': 1,
           'size': '1024x1024',
+          if (model.trim().toLowerCase().contains('grok-imagine-image'))
+            'response_format': 'url',
         },
         options: Options(
           headers: {'Authorization': 'Bearer $apiKey'},
@@ -461,18 +479,33 @@ class ModelTester {
     }
     try {
       final dio = createDio();
-      final response = await dio.post<List<int>>(
-        resolveOpenAiEndpoint(baseUrl, 'audio/speech').toString(),
-        data: <String, dynamic>{
-          'model': model,
-          'input': '连接测试',
-          'voice': 'alloy',
-        },
-        options: Options(
-          headers: {'Authorization': 'Bearer $apiKey'},
-          responseType: ResponseType.bytes,
-        ),
+      final data = <String, dynamic>{
+        'model': model,
+        'input': '连接测试',
+        'voice': 'alloy',
+        'response_format': 'mp3',
+        'speed': 1,
+      };
+      final options = Options(
+        headers: {'Authorization': 'Bearer $apiKey'},
+        responseType: ResponseType.bytes,
       );
+      Response<List<int>> response;
+      try {
+        response = await dio.post<List<int>>(
+          resolveOpenAiEndpoint(baseUrl, 'audio/speech').toString(),
+          data: data,
+          options: options,
+        );
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        if (status != 404 && status != 405) rethrow;
+        response = await dio.post<List<int>>(
+          resolveOpenAiEndpoint(baseUrl, 'audio/tasks').toString(),
+          data: data,
+          options: options,
+        );
+      }
       final bytes = response.data;
       if (bytes == null || bytes.isEmpty) {
         return '语音合成模型未返回音频数据';
@@ -483,6 +516,108 @@ class ModelTester {
     } catch (e) {
       return e.toString();
     }
+  }
+
+  /// OpenAI-compatible ASR probe using a tiny silent WAV fixture.  It is
+  /// deliberately a few hundred bytes and never reads a user's recording.
+  static Future<String?> _testSpeechRecognitionModel({
+    required String protocol,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+  }) async {
+    if (protocol != 'openai_chat' && protocol != 'openai_response') {
+      return '当前协议暂不支持语音识别自动测试';
+    }
+    try {
+      final wav = _silentWavFixture();
+      final dio = createDio();
+      final endpoint = resolveOpenAiEndpoint(
+        baseUrl,
+        'audio/transcriptions',
+      ).toString();
+      final options = Options(
+        headers: {'Authorization': 'Bearer $apiKey'},
+        responseType: ResponseType.json,
+      );
+      Response<dynamic> response;
+      try {
+        response = await dio
+            .post<dynamic>(
+              endpoint,
+              data: FormData.fromMap({
+                'file': MultipartFile.fromBytes(wav, filename: 'probe.wav'),
+                'model': model,
+                'language': 'auto',
+                'response_format': 'json',
+              }),
+              options: options,
+            )
+            .timeout(const Duration(seconds: 30));
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        if (status != 400 && status != 415 && status != 422) rethrow;
+        response = await dio
+            .post<dynamic>(
+              endpoint,
+              data: jsonEncode({
+                'model': model,
+                'url': 'data:audio/wav;base64,${base64Encode(wav)}',
+                'language': 'auto',
+                'response_format': 'json',
+              }),
+              options: Options(
+                headers: {
+                  'Authorization': 'Bearer $apiKey',
+                  'Content-Type': 'application/json',
+                },
+                responseType: ResponseType.json,
+              ),
+            )
+            .timeout(const Duration(seconds: 30));
+      }
+      final data = response.data;
+      if (data is Map &&
+          (data['text'] is String || data['transcript'] is String)) {
+        return null;
+      }
+      if (data is String && data.trim().isNotEmpty) return null;
+      return '语音识别模型未返回转写文本';
+    } on TimeoutException {
+      return '测试超时（30秒），请检查网络或模型状态';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  static List<int> _silentWavFixture() {
+    const sampleRate = 8000;
+    const channels = 1;
+    const bitsPerSample = 16;
+    const dataSize = 160;
+    final bytes = <int>[];
+    void ascii(String value) => bytes.addAll(value.codeUnits);
+    void u32(int value) => bytes.addAll([
+      value & 0xff,
+      (value >> 8) & 0xff,
+      (value >> 16) & 0xff,
+      (value >> 24) & 0xff,
+    ]);
+    void u16(int value) => bytes.addAll([value & 0xff, (value >> 8) & 0xff]);
+    ascii('RIFF');
+    u32(36 + dataSize);
+    ascii('WAVEfmt ');
+    u32(16);
+    u16(1);
+    u16(channels);
+    u32(sampleRate);
+    u32(sampleRate * channels * bitsPerSample ~/ 8);
+    u16(channels * bitsPerSample ~/ 8);
+    u16(bitsPerSample);
+    ascii('data');
+    u32(dataSize);
+    bytes.addAll(List<int>.filled(dataSize, 0));
+    return bytes;
   }
 
   static Future<String?> _testEmbeddingModel({

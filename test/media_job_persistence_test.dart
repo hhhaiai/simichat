@@ -10,29 +10,45 @@ import 'package:ai_chat_app/core/ai/universal_media_service.dart';
 
 void main() {
   group('media job database', () {
-    test(
-      'fresh database registers media_jobs with delivery ownership',
-      () async {
-        final db = AppDatabase.forTesting(NativeDatabase.memory());
-        addTearDown(db.close);
+    test('fresh database registers media jobs and chunked-content tasks', () async {
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
 
-        expect(db.schemaVersion, 13);
-        expect(await db.mediaJobDao.listPendingJobs(), isEmpty);
-        final tables = await db
-            .customSelect(
-              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_jobs'",
-            )
-            .get();
-        expect(tables, hasLength(1));
-        final columns = await db
-            .customSelect('PRAGMA table_info(media_jobs)')
-            .get();
-        expect(
-          columns.map((row) => row.read<String>('name')),
-          contains('lease_id'),
-        );
-      },
-    );
+      expect(db.schemaVersion, 14);
+      expect(await db.mediaJobDao.listPendingJobs(), isEmpty);
+      final tables = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_jobs'",
+          )
+          .get();
+      expect(tables, hasLength(1));
+      final columns = await db
+          .customSelect('PRAGMA table_info(media_jobs)')
+          .get();
+      expect(
+        columns.map((row) => row.read<String>('name')),
+        contains('lease_id'),
+      );
+      final chunkedTables = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunked_content_tasks'",
+          )
+          .get();
+      expect(chunkedTables, hasLength(1));
+      final chunkedColumns = await db
+          .customSelect('PRAGMA table_info(chunked_content_tasks)')
+          .get();
+      expect(
+        chunkedColumns.map((row) => row.read<String>('name')),
+        containsAll(<String>[
+          'session_id',
+          'source_attachment_id',
+          'request_snapshot',
+          'chunk_results',
+          'lease_id',
+        ]),
+      );
+    });
 
     test('schema 8 file migrates without losing existing tables', () async {
       final directory = await Directory.systemTemp.createTemp(
@@ -42,6 +58,7 @@ void main() {
       try {
         final oldDatabase = AppDatabase.forTesting(NativeDatabase(file));
         await oldDatabase.customStatement('DROP TABLE media_jobs');
+        await oldDatabase.customStatement('DROP TABLE chunked_content_tasks');
         // 用当前 schema 建库后回退版本号，必须同时移除 v8 之后才引入的列，
         // 否则重开时迁移会重复添加已存在的列（duplicate column）。
         await oldDatabase.customStatement(
@@ -62,6 +79,12 @@ void main() {
             )
             .get();
         expect(existing, hasLength(1));
+        final chunked = await migrated
+            .customSelect(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunked_content_tasks'",
+            )
+            .get();
+        expect(chunked, hasLength(1));
       } finally {
         await directory.delete(recursive: true);
       }
