@@ -10,9 +10,13 @@ class AttachmentDao extends DatabaseAccessor<AppDatabase>
   AttachmentDao(super.db);
 
   Future<List<Attachment>> getAttachmentsByMessage(String messageId) {
-    return (select(
-      attachments,
-    )..where((t) => t.messageId.equals(messageId))).get();
+    return (select(attachments)
+          ..where((t) => t.messageId.equals(messageId))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
+        .get();
   }
 
   Future<List<Attachment>> getAllAttachments() {

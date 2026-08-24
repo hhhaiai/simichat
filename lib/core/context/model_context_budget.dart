@@ -50,6 +50,13 @@ int _inferContextWindowTokens(String protocol, String modelName) {
   final protocolKey = protocol.toLowerCase();
   final model = modelName.toLowerCase();
 
+  // SimiChat 的默认低成本模型明确按有限窗口处理。即使自定义网关没有在
+  // protocol 名称中包含 openai，也必须在客户端 128K 边界前开始滚动摘要，
+  // 不能把“长期本地会话”误当成上游拥有无限输入窗口。
+  if (model.split('/').last == 'gpt-5.3-codex-spark') {
+    return 128000;
+  }
+
   if (model.contains('1m') ||
       model.contains('1000k') ||
       model.contains('gpt-4.1') ||

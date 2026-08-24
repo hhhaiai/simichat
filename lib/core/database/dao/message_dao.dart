@@ -248,6 +248,55 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     );
   }
 
+  /// 用一个新的滚动摘要原子替换旧摘要，并把本轮覆盖的原始消息标记为已摘要。
+  ///
+  /// 原始消息行不会删除；本地时间线、搜索和导出仍保留完整原文。只有可重新
+  /// 生成的 summary 行会被折叠，避免长期会话把数十个旧摘要再次塞满模型窗口。
+  Future<void> replaceSummariesWithRollingSummary({
+    required List<String> summaryIdsToReplace,
+    required List<String> originalMessageIds,
+    required String id,
+    required String sessionId,
+    required String content,
+    required String summaryStartId,
+    required String summaryEndId,
+    required int tokens,
+  }) {
+    return transaction(() async {
+      if (summaryIdsToReplace.isNotEmpty) {
+        await (delete(messages)..where(
+              (t) =>
+                  t.sessionId.equals(sessionId) &
+                  t.messageType.equals('summary') &
+                  t.id.isIn(summaryIdsToReplace),
+            ))
+            .go();
+      }
+      await into(messages).insert(
+        MessagesCompanion.insert(
+          id: id,
+          sessionId: sessionId,
+          role: 'system',
+          content: content,
+          messageType: const Value('summary'),
+          summaryStartId: Value(summaryStartId),
+          summaryEndId: Value(summaryEndId),
+          tokens: Value(tokens),
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+      if (originalMessageIds.isNotEmpty) {
+        await (update(messages)..where(
+              (t) =>
+                  t.sessionId.equals(sessionId) &
+                  t.messageType.equals('original') &
+                  t.id.isIn(originalMessageIds),
+            ))
+            .write(const MessagesCompanion(isSummarized: Value(true)));
+      }
+    });
+  }
+
   Future<void> deleteMessage(String id) async {
     await (delete(messages)..where((t) => t.id.equals(id))).go();
     await _deleteMessageSemanticIndexRow(id);

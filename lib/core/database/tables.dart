@@ -220,6 +220,36 @@ class McpServers extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// 可恢复的超长文本分批任务。
+///
+/// 原始正文保留在已归档的附件文件中；此表只保存附件引用、无凭据请求
+/// 快照、chunk 执行状态和中间结果，避免把每一段伪装成普通聊天消息。
+class ChunkedContentTasks extends Table {
+  TextColumn get id => text()();
+  TextColumn get sessionId => text()();
+  TextColumn get sourceMessageId => text()();
+  TextColumn get sourceAttachmentId => text()();
+  TextColumn get originalPrompt => text()();
+  TextColumn get channelModelId => text()();
+  TextColumn get providerId => text()();
+  TextColumn get strategy => text()(); // mapReduce | orderedTransform
+  TextColumn get requestSnapshot => text()(); // credential-free JSON
+  TextColumn get status => text()();
+  TextColumn get phase => text()();
+  IntColumn get totalChunks => integer().withDefault(const Constant(0))();
+  IntColumn get completedChunks => integer().withDefault(const Constant(0))();
+  TextColumn get chunkResults => text().withDefault(const Constant('[]'))();
+  TextColumn get retryMetadata => text().withDefault(const Constant('{}'))();
+  TextColumn get finalResponseMessageId => text().nullable()();
+  TextColumn get error => text().nullable()();
+  TextColumn get leaseId => text().nullable()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 /// 可恢复的图片 / 视频 / 音乐异步任务。
 ///
 /// 这里只保存重新定位服务端任务所需的元数据，不保存 API Key、授权头或

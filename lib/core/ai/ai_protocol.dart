@@ -21,7 +21,16 @@ class Attachment {
   final String path;
   final String? mimeType;
 
-  const Attachment({required this.type, required this.path, this.mimeType});
+  /// 用户可见的原始文件名。协议适配器在原生 file part 中必须使用它，
+  /// 不能从应用私有归档路径反推出带随机前缀的名字。
+  final String? fileName;
+
+  const Attachment({
+    required this.type,
+    required this.path,
+    this.mimeType,
+    this.fileName,
+  });
 }
 
 /// 流式响应块，携带正文和可选的思考内容

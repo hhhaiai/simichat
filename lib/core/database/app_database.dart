@@ -16,6 +16,7 @@ import 'dao/mcp_dao.dart';
 import 'dao/skill_dao.dart';
 import 'dao/persona_audit_log_dao.dart';
 import 'dao/media_job_dao.dart';
+import 'dao/chunked_content_task_dao.dart';
 
 part 'app_database.g.dart';
 
@@ -34,6 +35,7 @@ part 'app_database.g.dart';
     Skills,
     PersonaAuditLogs,
     MediaJobs,
+    ChunkedContentTasks,
   ],
   daos: [
     SessionDao,
@@ -47,6 +49,7 @@ part 'app_database.g.dart';
     SkillDao,
     PersonaAuditLogDao,
     MediaJobDao,
+    ChunkedContentTaskDao,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -54,7 +57,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -131,6 +134,9 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 13) {
         await m.addColumn(sessions, sessions.isPinned);
+      }
+      if (from < 14) {
+        await m.createTable(chunkedContentTasks);
       }
     },
   );

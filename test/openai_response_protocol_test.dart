@@ -124,6 +124,7 @@ void main() {
         expect(OpenAiResponseProtocol().nativeAttachmentTypes, {
           'image',
           'pdf',
+          'document',
         });
         final tempDir = await Directory.systemTemp.createTemp(
           'simichat_response_audio_',
@@ -312,6 +313,72 @@ void main() {
         'filename': 'report.pdf',
       });
       expect(jsonEncode(filePart), isNot(contains(tempDir.path)));
+    });
+
+    test('sends ordinary documents once as Responses input_file', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'simichat_response_document_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      });
+      final document = File('${tempDir.path}/archived-random-name.md');
+      const documentBytes = [0x23, 0x20, 0x54, 0x69, 0x74, 0x6c, 0x65];
+      await document.writeAsBytes(documentBytes);
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seenPayload = Completer<Map<String, dynamic>>();
+      unawaited(
+        server.forEach((request) async {
+          final body = await utf8.decodeStream(request);
+          seenPayload.complete(jsonDecode(body) as Map<String, dynamic>);
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: {"type":"response.output_text.delta","delta":"seen"}\n\n',
+          );
+          request.response.write(
+            'data: {"type":"response.completed","response":{"output":[]}}\n\n',
+          );
+          await request.response.close();
+        }),
+      );
+
+      final chunks = await OpenAiResponseProtocol()
+          .sendStream(
+            baseUrl: 'http://${server.address.host}:${server.port}/v1',
+            apiKey: 'test-key',
+            model: 'gpt-response-file-test',
+            messages: [
+              AiMessage(
+                role: 'user',
+                content: '总结文档',
+                attachments: [
+                  Attachment(
+                    type: 'document',
+                    path: document.path,
+                    fileName: '用户目录/报告.md',
+                  ),
+                ],
+              ),
+            ],
+          )
+          .toList();
+
+      expect(chunks.single.content, 'seen');
+      final payload = await seenPayload.future;
+      final content =
+          ((payload['input'] as List).single as Map)['content'] as List;
+      expect(content.first, {'type': 'input_text', 'text': '总结文档'});
+      expect(content.last, {
+        'type': 'input_file',
+        'file_data': 'data:text/markdown;base64,${base64Encode(documentBytes)}',
+        'filename': '报告.md',
+      });
+      expect(jsonEncode(content.last), isNot(contains(tempDir.path)));
     });
   });
 }

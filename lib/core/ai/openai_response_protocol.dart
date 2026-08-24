@@ -5,12 +5,11 @@ import 'attachment_helper.dart';
 import 'sse_helper.dart';
 
 class OpenAiResponseProtocol implements AiProtocol {
-  // Responses has a first-class `input_file` part for PDFs. Ordinary text
-  // documents deliberately stay on the bounded UTF-8 extraction path in the
-  // chat provider; advertising them here would send the same document twice
-  // (once as extracted text and once as a file part) and would make support
-  // depend on a provider-specific interpretation of arbitrary MIME types.
-  static const _nativeAttachmentTypes = {'image', 'pdf'};
+  // Responses has a first-class `input_file` part.  `document` is a real
+  // protocol part, not a filename-only compatibility placeholder: the chat
+  // provider suppresses text extraction for this route, so each document is
+  // sent exactly once as base64 file data with its original safe filename.
+  static const _nativeAttachmentTypes = {'image', 'pdf', 'document'};
 
   @override
   Set<String> get nativeAttachmentTypes => _nativeAttachmentTypes;
@@ -128,8 +127,9 @@ class OpenAiResponseProtocol implements AiProtocol {
               'type': 'input_image',
               'image_url': 'data:${att.mimeType};base64,${att.base64}',
             });
-          } else if (attachmentType == 'pdf' &&
-              nativeAttachmentTypes.contains('pdf')) {
+          } else if ((attachmentType == 'pdf' ||
+                  attachmentType == 'document') &&
+              nativeAttachmentTypes.contains(attachmentType)) {
             if (att.base64.isEmpty || att.fileName?.trim().isEmpty != false) {
               throw AttachmentLoadException(
                 attachmentType: attachmentType,

@@ -80,5 +80,16 @@ void main() {
       );
       expect(dynamicCompressThresholdForBudget(budget, 90000), 90000);
     });
+
+    test('gpt-5.3-codex-spark has an explicit conservative client budget', () {
+      final budget = resolveModelContextBudget(
+        protocol: 'custom',
+        modelName: 'gpt-5.3-codex-spark',
+      );
+
+      expect(budget.contextWindowTokens, 128000);
+      expect(budget.maxInputTokens, 115200);
+      expect(dynamicCompressThresholdForBudget(budget, 2000), 57600);
+    });
   });
 }

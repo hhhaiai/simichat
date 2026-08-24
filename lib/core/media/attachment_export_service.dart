@@ -122,6 +122,47 @@ class AttachmentDraftArchive {
     final file = File(normalizedPath);
     if (await file.exists()) await file.delete();
   }
+
+  /// 在 composer 私有目录内重命名一个已归档文件。
+  ///
+  /// [fileName] 永远先经过 [safeAttachmentFileName]，且保留原始 archive
+  /// UUID 前缀，所以用户提供的路径片段不能越出 `composer_drafts`，两个
+  /// 同名附件也不会相互覆盖。返回的是新的私有路径；展示层可以另行保留
+  /// Unicode 显示名，不必把用户文本直接拼到文件系统路径中。
+  Future<String> renameFile({
+    required String path,
+    required String fileName,
+  }) async {
+    final root = await _root();
+    final normalizedRoot = p.normalize(File(root.path).absolute.path);
+    final normalizedPath = p.normalize(File(path).absolute.path);
+    final prefix = '$normalizedRoot${Platform.pathSeparator}';
+    if (!normalizedPath.startsWith(prefix)) {
+      throw const FileSystemException('只能重命名 Composer 私有附件');
+    }
+    final file = File(normalizedPath);
+    if (!await file.exists()) {
+      throw const FileSystemException('附件文件不存在或已被清理');
+    }
+    final basename = p.basename(normalizedPath);
+    final separator = basename.indexOf('-');
+    final archiveId = separator <= 0
+        ? _attachmentArchiveUuid.v4()
+        : basename.substring(0, separator);
+    final target = File(
+      p.join(
+        file.parent.path,
+        '$archiveId-${safeAttachmentFileName(fileName)}',
+      ),
+    );
+    if (p.normalize(target.absolute.path) == normalizedPath) {
+      return normalizedPath;
+    }
+    if (await target.exists()) {
+      throw const FileSystemException('附件重命名目标已存在');
+    }
+    return (await file.rename(target.path)).path;
+  }
 }
 
 class ArchivedMessageAttachment {

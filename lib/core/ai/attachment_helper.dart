@@ -133,11 +133,9 @@ Never throwUnsupportedAudioAttachment(String protocol) {
 
 /// 读取可直接传给多模态模型的附件为 base64。
 Future<List<AttachmentData>> loadAttachments(
-  List<Attachment> attachments,
-  {
+  List<Attachment> attachments, {
   int maxBytes = kAttachmentFileDataMaxBytes,
-  }
-) async {
+}) async {
   if (maxBytes <= 0) {
     throw ArgumentError.value(maxBytes, 'maxBytes', 'must be positive');
   }
@@ -179,7 +177,9 @@ Future<List<AttachmentData>> loadAttachments(
         type: normalizedType,
         base64: base64Encode(bytes),
         mimeType: mimeType,
-        fileName: _attachmentBasename(att.path),
+        fileName:
+            _safeAttachmentFileName(att.fileName) ??
+            _attachmentBasename(att.path),
         audioFormat: normalizedType == 'audio'
             ? _guessAudioFormat(att.path, mimeType)
             : null,
@@ -208,19 +208,13 @@ Future<List<int>> _readLocalAttachmentBytes(
   try {
     stat = await file.stat();
   } on Object {
-    throw _attachmentLoadException(
-      type,
-      AttachmentLoadFailureKind.unreadable,
-    );
+    throw _attachmentLoadException(type, AttachmentLoadFailureKind.unreadable);
   }
   if (stat.type == FileSystemEntityType.notFound) {
     throw _attachmentLoadException(type, AttachmentLoadFailureKind.missing);
   }
   if (stat.type != FileSystemEntityType.file) {
-    throw _attachmentLoadException(
-      type,
-      AttachmentLoadFailureKind.unreadable,
-    );
+    throw _attachmentLoadException(type, AttachmentLoadFailureKind.unreadable);
   }
   if (stat.size <= 0) {
     throw _attachmentLoadException(type, AttachmentLoadFailureKind.empty);
@@ -245,10 +239,7 @@ Future<List<int>> _readLocalAttachmentBytes(
   } on AttachmentLoadException {
     rethrow;
   } on Object {
-    throw _attachmentLoadException(
-      type,
-      AttachmentLoadFailureKind.unreadable,
-    );
+    throw _attachmentLoadException(type, AttachmentLoadFailureKind.unreadable);
   }
   if (bytes.isEmpty) {
     throw _attachmentLoadException(type, AttachmentLoadFailureKind.empty);
@@ -261,16 +252,11 @@ AttachmentLoadException _attachmentLoadException(
   AttachmentLoadFailureKind kind,
 ) {
   final message = switch (kind) {
-    AttachmentLoadFailureKind.invalidSource =>
-      '附件来源不是可读取的本地文件，未发送；已保留输入和附件。',
-    AttachmentLoadFailureKind.missing =>
-      '附件文件不存在或已被移动，未发送；已保留输入和附件。',
-    AttachmentLoadFailureKind.unreadable =>
-      '无法读取附件内容，未发送；已保留输入和附件。',
-    AttachmentLoadFailureKind.tooLarge =>
-      '附件超过 25 MiB 安全上限，未发送；已保留输入和附件。',
-    AttachmentLoadFailureKind.empty =>
-      '附件文件为空，未发送；已保留输入和附件。',
+    AttachmentLoadFailureKind.invalidSource => '附件来源不是可读取的本地文件，未发送；已保留输入和附件。',
+    AttachmentLoadFailureKind.missing => '附件文件不存在或已被移动，未发送；已保留输入和附件。',
+    AttachmentLoadFailureKind.unreadable => '无法读取附件内容，未发送；已保留输入和附件。',
+    AttachmentLoadFailureKind.tooLarge => '附件超过 25 MiB 安全上限，未发送；已保留输入和附件。',
+    AttachmentLoadFailureKind.empty => '附件文件为空，未发送；已保留输入和附件。',
   };
   return AttachmentLoadException(
     attachmentType: type.isEmpty ? 'document' : type,
@@ -303,6 +289,21 @@ String _attachmentBasename(String path) {
     return 'attachment';
   }
   return basename;
+}
+
+String? _safeAttachmentFileName(String? value) {
+  final normalized = value?.trim();
+  if (normalized == null || normalized.isEmpty) return null;
+  // Filename 是协议元数据，不是路径；移除目录和控制字符，防止把私有归档
+  // 路径、Windows 路径或 CRLF 直接带进上游请求。
+  final basename = normalized
+      .replaceAll('\\', '/')
+      .split('/')
+      .last
+      .replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), '_')
+      .trim();
+  if (basename.isEmpty || basename == '.' || basename == '..') return null;
+  return basename.length <= 255 ? basename : basename.substring(0, 255);
 }
 
 String _mimeTypeForAttachment(Attachment attachment, String type) {
