@@ -53,6 +53,18 @@ PY
   fi
 
   "${FLUTTER_BIN:-flutter}" --no-version-check pub get
+
+  if [[ "$remove_integration_test" == '1' ]]; then
+    # `flutter pub get` normally regenerates this file, but an existing
+    # registrant can survive when the Android build is run with `--no-pub` or
+    # when the plugin metadata is served from a previous build.  Never leave
+    # a release source file that references the dev-only integration_test
+    # plugin: its class is intentionally not on the release classpath.
+    local registrant="android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java"
+    if [[ -f "$registrant" ]] && grep -Fq 'dev.flutter.plugins.integration_test.IntegrationTestPlugin' "$registrant"; then
+      rm -f "$registrant"
+    fi
+  fi
 }
 
 simichat_release_pubspec_restore() {
