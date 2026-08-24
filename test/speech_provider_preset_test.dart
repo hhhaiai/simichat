@@ -162,6 +162,27 @@ void main() {
 
   test('simirouter preset voices expose 8 labelled options', () {
     expect(kSimiRouterTtsVoices, hasLength(8));
+    expect(kSimiRouterTtsVoices.map((voice) => (voice.label, voice.value)), [
+      ('冰糖 · 活泼少女', 'alloy'),
+      ('茉莉 · 知性女声', 'echo'),
+      ('Mia · 活泼英文女声', 'nova'),
+      ('Chloe · 甜美梦幻', 'shimmer'),
+      ('苏打 · 阳光少年', 'onyx'),
+      ('白桦 · 成熟男声', 'fable'),
+      ('Milo · 阳光英文男声', 'milo'),
+      ('Dean · 沉稳温柔', 'dean'),
+    ]);
+    expect(simiRouterTtsVoiceLabel('alloy'), '冰糖 · 活泼少女');
+    expect(simiRouterTtsVoiceLabel('echo'), '茉莉 · 知性女声');
+    expect(simiRouterTtsVoiceLabel('nova'), 'Mia · 活泼英文女声');
+    expect(simiRouterTtsVoiceLabel('shimmer'), 'Chloe · 甜美梦幻');
+    expect(simiRouterTtsVoiceLabel('onyx'), '苏打 · 阳光少年');
+    expect(simiRouterTtsVoiceLabel('fable'), '白桦 · 成熟男声');
+    expect(simiRouterTtsVoiceLabel('milo'), 'Milo · 阳光英文男声');
+    expect(simiRouterTtsVoiceLabel('dean'), 'Dean · 沉稳温柔');
+    expect(simiRouterTtsVoiceLabel(' ALLOY '), '冰糖 · 活泼少女');
+    expect(simiRouterTtsVoiceLabel('custom_voice'), 'custom_voice');
+    expect(simiRouterTtsVoiceLabel('  '), isEmpty);
     expect(kSimiRouterTtsVoices.first.label, contains('冰糖'));
     expect(kSimiRouterTtsVoices.first.value, 'alloy');
     expect(kSimiRouterTtsVoices.last.label, contains('Dean'));

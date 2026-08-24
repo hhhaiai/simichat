@@ -6,6 +6,7 @@ import '../../core/media/audio_transcription_service.dart';
 import '../../core/media/openai_speech_to_text_engine.dart';
 import '../../core/media/xai_speech_provider_profile.dart';
 import '../../core/media/xai_speech_to_text_engine.dart';
+import '../../core/database/dao/channel_dao.dart';
 
 const kSpeechToTextEnabledStorageKey = 'stt_enabled_v1';
 const kSpeechToTextProviderStorageKey = 'stt_provider_v1';
@@ -13,6 +14,7 @@ const kSpeechToTextBaseUrlStorageKey = 'stt_base_url_v1';
 const kSpeechToTextModelStorageKey = 'stt_model_v1';
 const kSpeechToTextApiKeyStorageKey = 'stt_api_key_encrypted_v1';
 const kSpeechToTextLanguageStorageKey = 'stt_language_v1';
+const kSpeechToTextChannelModelIdStorageKey = 'stt_channel_model_id_v1';
 const kSpeechToTextProviderOpenAiCompatible = 'openai_compatible';
 const kSpeechToTextProviderXai = kXaiSpeechProviderId;
 // Compatibility alias for callers that spell the vendor acronym in caps.
@@ -32,12 +34,22 @@ String _inferProviderFromBaseUrl(String baseUrl) {
   return kSpeechToTextProviderOpenAiCompatible;
 }
 
+String _providerForChannelModel(ChannelModelWithChannel model) {
+  final id = model.channelModel.modelName.trim().toLowerCase();
+  final base = model.channel.baseUrl.toLowerCase();
+  if (id.startsWith('mimo-') || base.contains('dwchainless')) {
+    return kSpeechToTextProviderOpenAiCompatible;
+  }
+  return _inferProviderFromBaseUrl(model.channel.baseUrl);
+}
+
 class SpeechToTextConfig {
   const SpeechToTextConfig({
     this.enabled = false,
     this.provider = kSpeechToTextProviderOpenAiCompatible,
     this.baseUrl = kDefaultSpeechToTextBaseUrl,
     this.model = kDefaultSpeechToTextModel,
+    this.channelModelId,
     this.apiKeyEncrypted,
     this.language = 'auto',
   });
@@ -46,6 +58,7 @@ class SpeechToTextConfig {
   final String provider;
   final String baseUrl;
   final String model;
+  final String? channelModelId;
   final String? apiKeyEncrypted;
 
   /// 识别语言：auto（自动）/ zh（中文）/ en（英文）。
@@ -80,15 +93,20 @@ class SpeechToTextConfig {
     String? provider,
     String? baseUrl,
     String? model,
+    String? channelModelId,
     String? apiKeyEncrypted,
     String? language,
     bool clearApiKey = false,
+    bool clearChannelModelId = false,
   }) {
     return SpeechToTextConfig(
       enabled: enabled ?? this.enabled,
       provider: provider ?? this.provider,
       baseUrl: baseUrl ?? this.baseUrl,
       model: model ?? this.model,
+      channelModelId: clearChannelModelId
+          ? null
+          : (channelModelId ?? this.channelModelId),
       apiKeyEncrypted: clearApiKey
           ? null
           : (apiKeyEncrypted ?? this.apiKeyEncrypted),
@@ -123,6 +141,9 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     final model =
         prefs.getString(kSpeechToTextModelStorageKey) ??
         kDefaultSpeechToTextModel;
+    final channelModelId = prefs
+        .getString(kSpeechToTextChannelModelIdStorageKey)
+        ?.trim();
     final apiKeyEncrypted = prefs.getString(kSpeechToTextApiKeyStorageKey);
     final language = prefs.getString(kSpeechToTextLanguageStorageKey) ?? 'auto';
     state = SpeechToTextConfig(
@@ -130,6 +151,9 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
       provider: provider,
       baseUrl: baseUrl,
       model: model,
+      channelModelId: channelModelId?.isNotEmpty == true
+          ? channelModelId
+          : null,
       apiKeyEncrypted: apiKeyEncrypted?.isEmpty == true
           ? null
           : apiKeyEncrypted,
@@ -143,12 +167,47 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     await ready;
     final trimmed = model.trim();
     if (trimmed.isEmpty || trimmed == state.model) return;
-    state = state.copyWith(model: trimmed);
+    state = state.copyWith(model: trimmed, clearChannelModelId: true);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(kSpeechToTextModelStorageKey, trimmed);
+      await prefs.remove(kSpeechToTextChannelModelIdStorageKey);
     } catch (_) {
       // 持久化失败不阻断本次使用。
+    }
+  }
+
+  /// Bind STT to a configured channel model and reuse that channel's route
+  /// and credentials.  Explicit xAI hosts still use the xAI adapter; all
+  /// OpenAI-compatible relays (including SimiRouter) keep the model field.
+  Future<void> applyChannelModel(ChannelModelWithChannel channelModel) async {
+    await ready;
+    final model = channelModel.channelModel.modelName.trim();
+    final id = channelModel.channelModel.id.trim();
+    if (model.isEmpty || id.isEmpty) return;
+    final provider = _providerForChannelModel(channelModel);
+    final next = state.copyWith(
+      enabled: true,
+      provider: provider,
+      baseUrl: channelModel.channel.baseUrl,
+      model: model,
+      channelModelId: id,
+      apiKeyEncrypted: channelModel.channel.apiKeyEncrypted,
+    );
+    state = next;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(kSpeechToTextEnabledStorageKey, true);
+      await prefs.setString(kSpeechToTextProviderStorageKey, provider);
+      await prefs.setString(kSpeechToTextBaseUrlStorageKey, next.baseUrl);
+      await prefs.setString(kSpeechToTextModelStorageKey, model);
+      await prefs.setString(kSpeechToTextChannelModelIdStorageKey, id);
+      await prefs.setString(
+        kSpeechToTextApiKeyStorageKey,
+        channelModel.channel.apiKeyEncrypted,
+      );
+    } catch (_) {
+      // Keep the in-memory route active if persistence is temporarily down.
     }
   }
 
@@ -215,11 +274,18 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
       throw const AudioTranscriptionException('请填写 STT API Key');
     }
 
+    final preservesChannelBinding =
+        state.channelModelId != null &&
+        state.model.trim() == normalizedModel &&
+        state.baseUrl.trim() == normalizedBaseUrl &&
+        state.provider == (xai ? kSpeechToTextProviderXai : provider);
+
     final next = SpeechToTextConfig(
       enabled: enabled,
       provider: xai ? kSpeechToTextProviderXai : provider,
       baseUrl: normalizedBaseUrl,
       model: normalizedModel,
+      channelModelId: preservesChannelBinding ? state.channelModelId : null,
       apiKeyEncrypted: encryptedKey,
       language: normalizedLanguage,
     );
@@ -228,6 +294,14 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     await prefs.setString(kSpeechToTextProviderStorageKey, next.provider);
     await prefs.setString(kSpeechToTextBaseUrlStorageKey, next.baseUrl);
     await prefs.setString(kSpeechToTextModelStorageKey, next.model);
+    if (next.channelModelId == null) {
+      await prefs.remove(kSpeechToTextChannelModelIdStorageKey);
+    } else {
+      await prefs.setString(
+        kSpeechToTextChannelModelIdStorageKey,
+        next.channelModelId!,
+      );
+    }
     await prefs.setString(kSpeechToTextLanguageStorageKey, next.language);
     if (next.apiKeyEncrypted == null) {
       await prefs.remove(kSpeechToTextApiKeyStorageKey);
@@ -246,6 +320,7 @@ class SpeechToTextConfigNotifier extends StateNotifier<SpeechToTextConfig> {
     await prefs.remove(kSpeechToTextProviderStorageKey);
     await prefs.remove(kSpeechToTextBaseUrlStorageKey);
     await prefs.remove(kSpeechToTextModelStorageKey);
+    await prefs.remove(kSpeechToTextChannelModelIdStorageKey);
     await prefs.remove(kSpeechToTextApiKeyStorageKey);
     await prefs.remove(kSpeechToTextLanguageStorageKey);
     state = const SpeechToTextConfig();
@@ -259,8 +334,7 @@ final speechToTextEngineProvider = Provider<SpeechToTextEngine?>((ref) {
     final apiKey = KeyEncryptor.decrypt(config.apiKeyEncrypted!);
     if (apiKey.trim().isEmpty) return null;
     // 单次语言覆盖优先：录音按钮长按选择只影响接下来的转录，不改设置。
-    final language =
-        ref.watch(sttLanguageOverrideProvider) ?? config.language;
+    final language = ref.watch(sttLanguageOverrideProvider) ?? config.language;
     if (config.isXai) {
       return XaiSpeechToTextEngine(
         baseUrl: config.baseUrl,

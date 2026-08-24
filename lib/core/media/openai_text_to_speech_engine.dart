@@ -57,6 +57,116 @@ String normalizeTextToSpeechModel(String model) {
   return value;
 }
 
+/// A voice advertised by an OpenAI-compatible `/v1/tts/voices` endpoint.
+/// Gateways differ in whether they return a string list or objects with
+/// `id`/`name`; normalize both shapes so the settings picker can reuse the
+/// currently configured channel without maintaining a second voice catalog.
+class TextToSpeechVoiceOption {
+  const TextToSpeechVoiceOption({required this.id, this.label});
+
+  final String id;
+  final String? label;
+
+  String get displayLabel =>
+      label == null || label!.trim().isEmpty || label!.trim() == id
+      ? id
+      : '$label ($id)';
+}
+
+Future<List<TextToSpeechVoiceOption>> fetchTextToSpeechVoices({
+  required String baseUrl,
+  required String apiKey,
+  String? model,
+}) async {
+  final normalizedBase = normalizeTextToSpeechBaseUrl(baseUrl);
+  final token = apiKey.trim();
+  if (token.isEmpty) {
+    throw const TextToSpeechException('TTS API Key 未配置');
+  }
+  final rawModel = model?.trim() ?? '';
+  final normalizedModel = rawModel.isEmpty
+      ? null
+      : normalizeTextToSpeechModel(rawModel);
+  final endpoint =
+      Uri.parse(resolveOpenAiEndpoint(normalizedBase, 'tts/voices')).replace(
+        queryParameters: normalizedModel == null
+            ? null
+            : {'model': normalizedModel},
+      );
+  final dio = createDio();
+  try {
+    final response = await dio.get<dynamic>(
+      endpoint.toString(),
+      options: Options(
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+        responseType: ResponseType.json,
+      ),
+    );
+    final values = _voiceValues(response.data);
+    if (values.isEmpty) {
+      throw const TextToSpeechException('音色接口未返回可用音色');
+    }
+    return values;
+  } on TextToSpeechException {
+    rethrow;
+  } on DioException catch (error) {
+    final status = error.response?.statusCode;
+    if (status == 401 || status == 403) {
+      throw const TextToSpeechException('音色接口鉴权失败，请检查 TTS API Key');
+    }
+    if (status == 404 || status == 405) {
+      throw const TextToSpeechException('当前渠道未提供 /v1/tts/voices 音色接口');
+    }
+    throw TextToSpeechException('获取音色失败（HTTP ${status ?? '网络错误'}）');
+  } finally {
+    dio.close(force: true);
+  }
+}
+
+List<TextToSpeechVoiceOption> _voiceValues(dynamic raw) {
+  dynamic value = raw;
+  if (value is Map) {
+    value =
+        value['voices'] ?? value['data'] ?? value['items'] ?? value['results'];
+  }
+  if (value is! Iterable) return const [];
+  final result = <TextToSpeechVoiceOption>[];
+  final seen = <String>{};
+  for (final item in value) {
+    String? id;
+    String? label;
+    if (item is String) {
+      id = item.trim();
+    } else if (item is Map) {
+      for (final key in const ['id', 'voice_id', 'voiceId', 'name', 'voice']) {
+        final candidate = item[key];
+        if (candidate is String && candidate.trim().isNotEmpty) {
+          id = candidate.trim();
+          break;
+        }
+      }
+      for (final key in const [
+        'label',
+        'display_name',
+        'displayName',
+        'name',
+      ]) {
+        final candidate = item[key];
+        if (candidate is String && candidate.trim().isNotEmpty) {
+          label = candidate.trim();
+          break;
+        }
+      }
+    }
+    if (id == null || id.isEmpty || !seen.add(id)) continue;
+    result.add(TextToSpeechVoiceOption(id: id, label: label));
+  }
+  return List<TextToSpeechVoiceOption>.unmodifiable(result);
+}
+
 /// 根据模型模式构造 /v1/audio/speech 请求体。
 ///
 /// - `mimo-v2.5-tts`（standard）：`voice` 音色 + 可选 `speed` / `response_format`
@@ -73,6 +183,17 @@ Map<String, dynamic> _buildRequestBody({
   String? referenceAudioPath,
 }) {
   final mode = simiRouterTtsModeOf(model);
+  // OpenAI-compatible TTS declares `speed` as a JSON number.  The settings
+  // layer keeps it as a string only to avoid preference/slider precision
+  // drift; sending that storage representation (for example `"1.00"`) makes
+  // stricter SimiRouter/mimo gateways reject an otherwise valid request and
+  // some relays surface that validation failure as HTTP 500.  Normalize once
+  // at the wire boundary and keep integral values integral for protocol parity
+  // with the documented curl examples (`"speed": 1`).
+  final parsedSpeed = double.parse(speed);
+  final Object wireSpeed = parsedSpeed == parsedSpeed.truncateToDouble()
+      ? parsedSpeed.toInt()
+      : parsedSpeed;
   switch (mode) {
     case SimiRouterTtsMode.voiceDesign:
       if (style.trim().isEmpty) {
@@ -82,7 +203,7 @@ Map<String, dynamic> _buildRequestBody({
         'model': model,
         'input': text,
         'style': style.trim(),
-        'speed': speed,
+        'speed': wireSpeed,
         'response_format': format,
       };
     case SimiRouterTtsMode.voiceClone:
@@ -94,7 +215,7 @@ Map<String, dynamic> _buildRequestBody({
         'model': model,
         'input': text,
         'voice': _referenceAudioDataUri(referencePath),
-        'speed': speed,
+        'speed': wireSpeed,
         'response_format': format,
       };
     case SimiRouterTtsMode.standard:
@@ -102,16 +223,18 @@ Map<String, dynamic> _buildRequestBody({
         'model': model,
         'voice': voice,
         'input': text,
-        'speed': speed,
+        'speed': wireSpeed,
         'response_format': format,
       };
     case null:
-      // 非 SimiRouter 模型（OpenAI tts-1 等）保持原有请求体。
+      // OpenAI-compatible TTS 也支持本次任务的语速与输出格式；不把
+      // SimiRouter 的 style / reference 字段混入普通模型请求。
       return {
         'model': model,
         'voice': voice,
         'input': text,
-        'response_format': 'mp3',
+        'speed': wireSpeed,
+        'response_format': format,
       };
   }
 }
@@ -131,8 +254,31 @@ String _referenceAudioDataUri(String path) {
   }
   // 先检查长度再读取，避免异常大的外部文件瞬间占满内存。
   final bytes = file.readAsBytesSync();
-  final ext = path.toLowerCase().endsWith('.wav') ? 'wav' : 'audio';
-  return 'data:audio/$ext;base64,${base64Encode(bytes)}';
+  return 'data:${_referenceAudioMimeType(path)};base64,${base64Encode(bytes)}';
+}
+
+String _referenceAudioMimeType(String path) {
+  final lower = path.trim().toLowerCase();
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  // SimiRouter's legacy voice-clone adapter derives its temporary upload
+  // filename from the data-URI subtype. Although `audio/mpeg` is the standard
+  // MP3 MIME, that value becomes a `.mpeg` upload and the live MiMo clone task
+  // can remain pending until the client times out. The gateway also accepts
+  // the widely used `audio/mp3` alias, which preserves the `.mp3` container
+  // suffix expected by this concrete clone pipeline.
+  if (lower.endsWith('.mp3')) return 'audio/mp3';
+  if (lower.endsWith('.m4a') || lower.endsWith('.mp4')) return 'audio/mp4';
+  if (lower.endsWith('.ogg') ||
+      lower.endsWith('.oga') ||
+      lower.endsWith('.opus')) {
+    return 'audio/ogg';
+  }
+  if (lower.endsWith('.aac')) return 'audio/aac';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  if (lower.endsWith('.webm')) return 'audio/webm';
+  throw const TextToSpeechException(
+    '不支持的参考音频格式，请使用 WAV、MP3、M4A、OGG、AAC、FLAC 或 WebM',
+  );
 }
 
 class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
@@ -183,32 +329,17 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
     final normalizedFormat = normalizeTextToSpeechResponseFormat(
       responseFormat,
     );
-    final mode = simiRouterTtsModeOf(normalizedModel);
-    // 非 mimo 的 OpenAI 兼容模型仍固定请求 mp3；mimo 才使用用户选择的格式。
-    final effectiveFormat = mode == null ? 'mp3' : normalizedFormat;
+    final effectiveFormat = normalizedFormat;
     final dio = createDio();
     try {
-      final response = await dio.post<List<int>>(
-        resolveOpenAiEndpoint(baseUrl, 'audio/speech'),
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Content-Type': 'application/json',
-            'Accept': _audioMimeType(effectiveFormat),
-          },
-          responseType: ResponseType.bytes,
-        ),
-        data: jsonEncode(
-          _buildRequestBody(
-            model: normalizedModel,
-            voice: normalizedVoice,
-            text: normalizedText,
-            speed: normalizedSpeed,
-            format: effectiveFormat,
-            style: style,
-            referenceAudioPath: referenceAudioPath,
-          ),
-        ),
+      final response = await _postSpeechWithCompatibilityFallback(
+        dio: dio,
+        token: token,
+        model: normalizedModel,
+        voice: normalizedVoice,
+        text: normalizedText,
+        speed: normalizedSpeed,
+        format: effectiveFormat,
         cancelToken: cancelToken,
       );
       if (cancelToken?.isCancelled == true) {
@@ -217,6 +348,13 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
       final bytes = response.data ?? const <int>[];
       if (bytes.isEmpty) {
         throw const TextToSpeechException('TTS 响应为空，无法播放');
+      }
+      if (_looksLikeNonAudioResponse(response, bytes)) {
+        // Some relays incorrectly return an error-shaped JSON/HTML document
+        // with HTTP 200. Saving it as an audio attachment defers the failure to
+        // the player and looks like a broken play button, so reject it at the
+        // response boundary without surfacing the provider body.
+        throw const TextToSpeechException('TTS 服务未返回有效音频，请稍后重试');
       }
       if (bytes.length > kTextToSpeechMaxAudioBytes) {
         throw const TextToSpeechException('TTS 音频过大，已拒绝保存');
@@ -233,6 +371,61 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
     }
   }
 
+  /// Some OpenAI-compatible gateways expose the same synchronous TTS
+  /// contract at `/v1/audio/tasks` instead of `/v1/audio/speech`.  Keep the
+  /// standard path first, then retry only for a route-level 404/405 so an
+  /// authentication or provider error is never hidden by a second request.
+  Future<Response<List<int>>> _postSpeechWithCompatibilityFallback({
+    required Dio dio,
+    required String token,
+    required String model,
+    required String voice,
+    required String text,
+    required String speed,
+    required String format,
+    required CancelToken? cancelToken,
+  }) async {
+    final body = jsonEncode(
+      _buildRequestBody(
+        model: model,
+        voice: voice,
+        text: text,
+        speed: speed,
+        format: format,
+        style: style,
+        referenceAudioPath: referenceAudioPath,
+      ),
+    );
+    final options = Options(
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': _audioMimeType(format),
+      },
+      responseType: ResponseType.bytes,
+    );
+    try {
+      return await dio.post<List<int>>(
+        resolveOpenAiEndpoint(baseUrl, 'audio/speech'),
+        options: options,
+        data: body,
+        cancelToken: cancelToken,
+      );
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (cancelToken?.isCancelled == true ||
+          (status != 404 && status != 405)) {
+        rethrow;
+      }
+      return dio.post<List<int>>(
+        resolveOpenAiEndpoint(baseUrl, 'audio/tasks'),
+        options: options,
+        data: body,
+        cancelToken: cancelToken,
+      );
+    }
+  }
+
   static String _audioMimeType(String format) {
     return switch (format) {
       'wav' => 'audio/wav',
@@ -241,6 +434,25 @@ class OpenAiCompatibleTextToSpeechEngine implements TextToSpeechEngine {
       'flac' => 'audio/flac',
       _ => 'audio/mpeg',
     };
+  }
+
+  static bool _looksLikeNonAudioResponse(
+    Response<List<int>> response,
+    List<int> bytes,
+  ) {
+    final contentType =
+        response.headers.value(Headers.contentTypeHeader)?.toLowerCase() ?? '';
+    if (contentType.startsWith('application/json') ||
+        contentType.startsWith('text/') ||
+        contentType.contains('html')) {
+      return true;
+    }
+    final prefix = utf8
+        .decode(bytes.take(32).toList(growable: false), allowMalformed: true)
+        .trimLeft();
+    return prefix.startsWith('{') ||
+        prefix.startsWith('[') ||
+        prefix.startsWith('<');
   }
 
   static String _safeDioError(DioException error) {

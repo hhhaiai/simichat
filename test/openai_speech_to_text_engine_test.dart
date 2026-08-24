@@ -66,6 +66,91 @@ void main() {
       expect(await seen.future, isNot(contains('stt-test-key')));
     });
 
+    test(
+      'falls back to JSON url transcription for compatible relays',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final paths = <String>[];
+        unawaited(
+          server.forEach((request) async {
+            paths.add(request.uri.path);
+            final body = await utf8.decodeStream(request);
+            if (paths.length == 1) {
+              expect(
+                request.headers.contentType?.mimeType,
+                'multipart/form-data',
+              );
+              request.response.statusCode = 415;
+            } else {
+              expect(request.headers.contentType?.mimeType, 'application/json');
+              final payload = jsonDecode(body) as Map<String, dynamic>;
+              expect(payload['model'], 'mimo-v2.5-asr');
+              expect(payload['url'], startsWith('data:audio/mp4;base64,'));
+              expect(payload['language'], 'en');
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(jsonEncode({'text': 'fallback ok'}));
+            }
+            await request.response.close();
+          }),
+        );
+        final engine = OpenAiCompatibleSpeechToTextEngine(
+          baseUrl: 'http://${server.address.host}:${server.port}/v1',
+          apiKey: 'stt-test-key',
+          model: 'mimo-v2.5-asr',
+          language: 'en',
+        );
+        final transcript = await engine.transcribe(
+          AudioTranscriptionInput(
+            audioPath: audioFile.path,
+            fileName: 'voice.m4a',
+            fileSize: await audioFile.length(),
+          ),
+        );
+        expect(transcript, 'fallback ok');
+        expect(paths, ['/v1/audio/transcriptions', '/v1/audio/transcriptions']);
+      },
+    );
+
+    test('JSON fallback also omits the automatic language sentinel', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      var attempt = 0;
+      final fallbackPayload = Completer<Map<String, dynamic>>();
+      unawaited(
+        server.forEach((request) async {
+          attempt += 1;
+          final body = await utf8.decodeStream(request);
+          if (attempt == 1) {
+            request.response.statusCode = 415;
+          } else {
+            fallbackPayload.complete(jsonDecode(body) as Map<String, dynamic>);
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'text': 'auto fallback ok'}));
+          }
+          await request.response.close();
+        }),
+      );
+
+      final engine = OpenAiCompatibleSpeechToTextEngine(
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        apiKey: 'stt-test-key',
+        model: 'mimo-v2.5-asr',
+        language: 'auto',
+      );
+      expect(
+        await engine.transcribe(
+          AudioTranscriptionInput(
+            audioPath: audioFile.path,
+            fileName: 'voice.m4a',
+            fileSize: await audioFile.length(),
+          ),
+        ),
+        'auto fallback ok',
+      );
+      expect((await fallbackPayload.future).containsKey('language'), isFalse);
+    });
+
     test('sanitizes provider failure body, key and local path', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));

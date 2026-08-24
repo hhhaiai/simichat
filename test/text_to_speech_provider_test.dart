@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/archive/structured_data_backup.dart';
+import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/media/speech_provider_preset.dart';
 import 'package:ai_chat_app/core/media/reference_audio_store.dart';
 import 'package:ai_chat_app/core/media/text_to_speech_service.dart';
@@ -14,6 +15,52 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test(
+    'task voice loader decrypts the key and returns provider voices',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final seen = Completer<({String path, String authorization})>();
+      unawaited(
+        server.forEach((request) async {
+          seen.complete((
+            path: request.uri.toString(),
+            authorization: request.headers.value('authorization') ?? '',
+          ));
+          request.response
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'voices': [
+                  {'id': 'provider-voice', 'label': '渠道音色'},
+                ],
+              }),
+            );
+          await request.response.close();
+        }),
+      );
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final config = TextToSpeechConfig(
+        enabled: true,
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        model: 'mimo-v2.5-tts',
+        voice: 'alloy',
+        apiKeyEncrypted: KeyEncryptor.encrypt('voice-loader-key'),
+      );
+
+      final voices = await container.read(textToSpeechVoiceLoaderProvider)(
+        config,
+      );
+
+      expect(voices.single.id, 'provider-voice');
+      expect(voices.single.displayLabel, '渠道音色 (provider-voice)');
+      final request = await seen.future;
+      expect(request.path, '/v1/tts/voices?model=mimo-v2.5-tts');
+      expect(request.authorization, 'Bearer voice-loader-key');
+    },
+  );
+
   test(
     'xAI custom voice creation decrypts the stored key and persists only the returned voice_id',
     () async {
@@ -229,6 +276,32 @@ void main() {
       expect(exportedText, isNot(contains(kTextToSpeechVoiceStorageKey)));
     }
   });
+
+  test(
+    'generic OpenAI-compatible TTS service keeps the configured output extension',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(textToSpeechConfigProvider.notifier);
+      await notifier.ready;
+
+      await notifier.saveOpenAiCompatible(
+        enabled: true,
+        baseUrl: 'https://speech.example.test/v1',
+        model: 'tts-compatible',
+        voice: 'alloy',
+        apiKey: 'tts-output-key',
+        responseFormat: 'wav',
+      );
+
+      expect(
+        container.read(textToSpeechServiceProvider)?.audioFileExtension,
+        'wav',
+        reason: '响应格式是 WAV 时不能把文件错误保存为 .mp3',
+      );
+    },
+  );
 
   test('saving enabled TTS without key is rejected', () async {
     SharedPreferences.setMockInitialValues({});

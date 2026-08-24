@@ -140,6 +140,42 @@ void main() {
       expect(details.displayText, isNot(contains('/Users/sanbo')));
     });
 
+    test(
+      'keeps ASR model, language, result message and supports deletion',
+      () async {
+        await archive.writeDraft(
+          messageId: 'message:metadata',
+          attachmentId: 'attachment:metadata',
+          fileName: 'voice.wav',
+          fileSize: 128,
+          transcript: '带参数的转写结果',
+          modelId: 'mimo-v2.5-asr',
+          language: 'zh',
+          resultMessageId: 'assistant-result-id',
+        );
+
+        final details = await archive.readDetails(
+          messageId: 'message:metadata',
+          attachmentId: 'attachment:metadata',
+        );
+        expect(details?.modelId, 'mimo-v2.5-asr');
+        expect(details?.language, 'zh');
+        expect(details?.resultMessageId, 'assistant-result-id');
+
+        await archive.deleteTranscript(
+          messageId: 'message:metadata',
+          attachmentId: 'attachment:metadata',
+        );
+        expect(
+          await archive.readDetails(
+            messageId: 'message:metadata',
+            attachmentId: 'attachment:metadata',
+          ),
+          isNull,
+        );
+      },
+    );
+
     test('failed transcript details do not expose copyable body', () async {
       await archive.writeFailure(
         messageId: 'message:fail-detail',

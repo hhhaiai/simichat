@@ -47,6 +47,38 @@ void main() {
       expect(await seen.future, isNot(contains('tts-test-key')));
     });
 
+    test(
+      'preserves per-task voice, speed and output format on the wire',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final seen = Completer<Map<String, dynamic>>();
+        unawaited(
+          server.forEach((request) async {
+            final body = await utf8.decodeStream(request);
+            seen.complete(jsonDecode(body) as Map<String, dynamic>);
+            request.response.headers.contentType = ContentType('audio', 'wav');
+            request.response.add([1, 2, 3]);
+            await request.response.close();
+          }),
+        );
+        final engine = OpenAiCompatibleTextToSpeechEngine(
+          baseUrl: 'http://${server.address.host}:${server.port}',
+          apiKey: 'task-key',
+          model: 'mimo-v2.5-tts',
+          speed: '1.35',
+          responseFormat: 'wav',
+        );
+        await engine.synthesize(
+          const TextToSpeechInput(text: 'task input', voice: 'nova'),
+        );
+        final payload = await seen.future;
+        expect(payload['voice'], 'nova');
+        expect(payload['speed'], 1.35);
+        expect(payload['response_format'], 'wav');
+      },
+    );
+
     test('sanitizes provider failure body, key and local path', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
@@ -144,6 +176,41 @@ void main() {
       );
     });
 
+    test('rejects a JSON error body returned with HTTP 200', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      unawaited(
+        server.forEach((request) async {
+          await request.drain<void>();
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode({
+              'error': {'message': 'upstream returned no audio'},
+            }),
+          );
+          await request.response.close();
+        }),
+      );
+
+      final engine = OpenAiCompatibleTextToSpeechEngine(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+        apiKey: 'tts-test-key',
+      );
+
+      await expectLater(
+        engine.synthesize(
+          const TextToSpeechInput(text: 'hello', voice: 'alloy'),
+        ),
+        throwsA(
+          isA<TextToSpeechException>().having(
+            (error) => error.message,
+            'message',
+            contains('未返回有效音频'),
+          ),
+        ),
+      );
+    });
+
     test('resolves TTS through a configured /api/v3 prefix', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
@@ -167,6 +234,76 @@ void main() {
       );
 
       expect(bytes, [1, 2, 3]);
+    });
+
+    test(
+      'falls back to audio/tasks when speech route is unavailable',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final seen = <String>[];
+        unawaited(
+          server.forEach((request) async {
+            seen.add(request.uri.path);
+            await request.drain<void>();
+            if (request.uri.path == '/v1/audio/speech') {
+              request.response.statusCode = 404;
+            } else {
+              request.response.headers.contentType = ContentType(
+                'audio',
+                'mpeg',
+              );
+              request.response.add([1, 2, 3]);
+            }
+            await request.response.close();
+          }),
+        );
+        final engine = OpenAiCompatibleTextToSpeechEngine(
+          baseUrl: 'http://${server.address.host}:${server.port}/v1',
+          apiKey: 'fallback-key',
+        );
+        expect(
+          await engine.synthesize(
+            const TextToSpeechInput(text: 'fallback', voice: 'alloy'),
+          ),
+          [1, 2, 3],
+        );
+        expect(seen, ['/v1/audio/speech', '/v1/audio/tasks']);
+      },
+    );
+
+    test('fetches and normalizes provider voices', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      unawaited(
+        server.forEach((request) async {
+          expect(request.method, 'GET');
+          expect(request.uri.path, '/v1/tts/voices');
+          expect(request.uri.queryParameters['model'], 'mimo-v2.5-tts');
+          expect(
+            request.headers.value(HttpHeaders.authorizationHeader),
+            'Bearer voices-key',
+          );
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode({
+              'voices': [
+                {'id': 'amber', 'name': 'Amber'},
+                'alloy',
+                {'voice_id': 'amber'},
+              ],
+            }),
+          );
+          await request.response.close();
+        }),
+      );
+      final voices = await fetchTextToSpeechVoices(
+        baseUrl: 'http://${server.address.host}:${server.port}/v1',
+        apiKey: 'voices-key',
+        model: 'mimo-v2.5-tts',
+      );
+      expect(voices.map((voice) => voice.id), ['amber', 'alloy']);
+      expect(voices.first.displayLabel, 'Amber (amber)');
     });
   });
 
@@ -217,7 +354,7 @@ void main() {
       expect(payload['model'], 'mimo-v2.5-tts');
       expect(payload['voice'], 'dean');
       expect(payload['input'], '你好');
-      expect(payload['speed'], '1.5');
+      expect(payload['speed'], 1.5);
       expect(payload['response_format'], 'wav');
       expect(payload.containsKey('style'), isFalse);
     });
@@ -230,7 +367,7 @@ void main() {
       );
       expect(payload['model'], 'mimo-v2.5-tts-voicedesign');
       expect(payload['style'], '温柔自然的年轻女声，普通话标准');
-      expect(payload['speed'], '1.5');
+      expect(payload['speed'], 1.5);
       expect(payload['response_format'], 'wav');
       expect(payload.containsKey('voice'), isFalse);
     });
@@ -273,9 +410,56 @@ void main() {
         payload['voice'],
         'data:audio/wav;base64,${base64Encode([0, 1, 2, 3, 4])}',
       );
-      expect(payload['speed'], '1.5');
+      expect(payload['speed'], 1.5);
       expect(payload['response_format'], 'wav');
     });
+
+    test('voice clone mode preserves the reference audio MIME type', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'simichat-tts-clone-mime-test-',
+      );
+      addTearDown(() => tempDir.delete(recursive: true));
+      final reference = File('${tempDir.path}/reference.m4a');
+      await reference.writeAsBytes([0, 1, 2, 3, 4]);
+
+      final payload = await captureMimoRequest(
+        'mimo-v2.5-tts-voiceclone',
+        const TextToSpeechInput(text: '你好', voice: 'alloy'),
+        referenceAudioPath: reference.path,
+      );
+
+      expect(
+        payload['voice'],
+        'data:audio/mp4;base64,${base64Encode([0, 1, 2, 3, 4])}',
+      );
+    });
+
+    test(
+      'voice clone uses the SimiRouter-compatible MP3 data URI subtype',
+      () async {
+        final tempDir = await Directory.systemTemp.createTemp(
+          'simichat-tts-clone-mp3-mime-test-',
+        );
+        addTearDown(() => tempDir.delete(recursive: true));
+        final reference = File('${tempDir.path}/reference.mp3');
+        await reference.writeAsBytes([0x49, 0x44, 0x33, 0x01]);
+
+        final payload = await captureMimoRequest(
+          'mimo-v2.5-tts-voiceclone',
+          const TextToSpeechInput(text: '你好', voice: 'alloy'),
+          referenceAudioPath: reference.path,
+        );
+
+        expect(
+          payload['voice'],
+          'data:audio/mp3;base64,${base64Encode([0x49, 0x44, 0x33, 0x01])}',
+          reason:
+              'SimiRouter legacy clone upload derives the temporary filename '
+              'from the data-URI subtype; audio/mpeg becomes .mpeg and the '
+              'live MiMo clone path stalls, while audio/mp3 preserves .mp3.',
+        );
+      },
+    );
 
     test('voice clone mode rejects missing reference audio', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

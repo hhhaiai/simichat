@@ -191,14 +191,26 @@ class SimiRouterTtsVoice {
 
 const kSimiRouterTtsVoices = [
   SimiRouterTtsVoice('冰糖 · 活泼少女', 'alloy'),
-  SimiRouterTtsVoice('茉莉 · 知性女生', 'echo'),
-  SimiRouterTtsVoice('mia · 活泼英文女生', 'nova'),
-  SimiRouterTtsVoice('Chioe · 甜美梦幻', 'shimmer'),
+  SimiRouterTtsVoice('茉莉 · 知性女声', 'echo'),
+  SimiRouterTtsVoice('Mia · 活泼英文女声', 'nova'),
+  SimiRouterTtsVoice('Chloe · 甜美梦幻', 'shimmer'),
   SimiRouterTtsVoice('苏打 · 阳光少年', 'onyx'),
-  SimiRouterTtsVoice('白桦 · 成熟男生', 'fable'),
-  SimiRouterTtsVoice('milo · 阳光英文男生', 'milo'),
+  SimiRouterTtsVoice('白桦 · 成熟男声', 'fable'),
+  SimiRouterTtsVoice('Milo · 阳光英文男声', 'milo'),
   SimiRouterTtsVoice('Dean · 沉稳温柔', 'dean'),
 ];
+
+/// Return the user-facing label for a known SimiRouter voice while preserving
+/// unknown/custom IDs verbatim. The wire value remains the second field in
+/// [SimiRouterTtsVoice] and is never replaced by the localized label.
+String simiRouterTtsVoiceLabel(String voice) {
+  final normalized = voice.trim().toLowerCase();
+  if (normalized.isEmpty) return '';
+  for (final option in kSimiRouterTtsVoices) {
+    if (option.value.toLowerCase() == normalized) return option.label;
+  }
+  return voice.trim();
+}
 
 /// mimo TTS 支持的速度范围与输出格式。
 const kSimiRouterTtsMinSpeed = 0.25;

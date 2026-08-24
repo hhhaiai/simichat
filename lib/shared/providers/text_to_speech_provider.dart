@@ -13,6 +13,7 @@ import '../../core/media/text_to_speech_service.dart';
 import '../../core/media/xai_custom_voice_adapter.dart';
 import '../../core/media/xai_speech_provider_profile.dart';
 import '../../core/media/xai_text_to_speech_engine.dart';
+import '../../core/database/dao/channel_dao.dart';
 
 const kTextToSpeechEnabledStorageKey = 'tts_enabled_v1';
 const kTextToSpeechProviderStorageKey = 'tts_provider_v1';
@@ -30,10 +31,44 @@ const kTextToSpeechProviderXai = kXaiSpeechProviderId;
 // Compatibility alias for callers that spell the vendor acronym in caps.
 const kTextToSpeechProviderXAI = kTextToSpeechProviderXai;
 const kTextToSpeechLanguageStorageKey = 'tts_language_v1';
+const kTextToSpeechChannelModelIdStorageKey = 'tts_channel_model_id_v1';
 
 const kTextToSpeechDefaultSpeed = '1.0';
 const kTextToSpeechDefaultResponseFormat = 'mp3';
 const kTextToSpeechDefaultLanguage = kXaiDefaultSpeechLanguage;
+
+typedef TextToSpeechVoiceLoader =
+    Future<List<TextToSpeechVoiceOption>> Function(TextToSpeechConfig config);
+
+/// Runtime voice catalog loader used by the chat task sheet.
+///
+/// Decryption stays in the provider layer; widgets only receive public voice
+/// IDs and labels. Tests can override this provider without placing a key on
+/// the wire or starting a real server.
+final textToSpeechVoiceLoaderProvider = Provider<TextToSpeechVoiceLoader>((
+  ref,
+) {
+  return (config) async {
+    final encrypted = config.apiKeyEncrypted?.trim() ?? '';
+    if (encrypted.isEmpty) {
+      throw const TextToSpeechException('TTS API Key 未配置');
+    }
+    String apiKey;
+    try {
+      apiKey = KeyEncryptor.decrypt(encrypted).trim();
+    } catch (_) {
+      throw const TextToSpeechException('TTS API Key 解密失败，请重新配置');
+    }
+    if (apiKey.isEmpty) {
+      throw const TextToSpeechException('TTS API Key 未配置');
+    }
+    return fetchTextToSpeechVoices(
+      baseUrl: config.baseUrl,
+      apiKey: apiKey,
+      model: config.model.trim().isEmpty ? null : config.model,
+    );
+  };
+});
 
 String _inferTextToSpeechProviderFromBaseUrl(String baseUrl) {
   try {
@@ -50,12 +85,22 @@ String _inferTextToSpeechProviderFromBaseUrl(String baseUrl) {
   return kTextToSpeechProviderOpenAiCompatible;
 }
 
+String _providerForChannelModel(ChannelModelWithChannel model) {
+  final id = model.channelModel.modelName.trim().toLowerCase();
+  final base = model.channel.baseUrl.toLowerCase();
+  if (id.startsWith('mimo-') || base.contains('dwchainless')) {
+    return kTextToSpeechProviderSimiRouter;
+  }
+  return _inferTextToSpeechProviderFromBaseUrl(model.channel.baseUrl);
+}
+
 class TextToSpeechConfig {
   const TextToSpeechConfig({
     this.enabled = false,
     this.provider = kTextToSpeechProviderOpenAiCompatible,
     this.baseUrl = kDefaultTextToSpeechBaseUrl,
     this.model = kDefaultTextToSpeechModel,
+    this.channelModelId,
     this.voice = kDefaultTextToSpeechVoice,
     this.apiKeyEncrypted,
     this.speed = kTextToSpeechDefaultSpeed,
@@ -69,6 +114,7 @@ class TextToSpeechConfig {
   final String provider;
   final String baseUrl;
   final String model;
+  final String? channelModelId;
   final String voice;
   final String? apiKeyEncrypted;
 
@@ -189,6 +235,7 @@ class TextToSpeechConfig {
     String? provider,
     String? baseUrl,
     String? model,
+    String? channelModelId,
     String? voice,
     String? apiKeyEncrypted,
     String? speed,
@@ -197,12 +244,16 @@ class TextToSpeechConfig {
     String? style,
     String? referenceAudioPath,
     bool clearApiKey = false,
+    bool clearChannelModelId = false,
   }) {
     return TextToSpeechConfig(
       enabled: enabled ?? this.enabled,
       provider: provider ?? this.provider,
       baseUrl: baseUrl ?? this.baseUrl,
       model: model ?? this.model,
+      channelModelId: clearChannelModelId
+          ? null
+          : (channelModelId ?? this.channelModelId),
       voice: voice ?? this.voice,
       apiKeyEncrypted: clearApiKey
           ? null
@@ -248,6 +299,9 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     final model =
         prefs.getString(kTextToSpeechModelStorageKey) ??
         kDefaultTextToSpeechModel;
+    final channelModelId = prefs
+        .getString(kTextToSpeechChannelModelIdStorageKey)
+        ?.trim();
     final voice =
         prefs.getString(kTextToSpeechVoiceStorageKey) ??
         kDefaultTextToSpeechVoice;
@@ -300,6 +354,9 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
       provider: provider,
       baseUrl: baseUrl,
       model: model,
+      channelModelId: channelModelId?.isNotEmpty == true
+          ? channelModelId
+          : null,
       voice: voice,
       apiKeyEncrypted: apiKeyEncrypted?.isEmpty == true
           ? null
@@ -318,12 +375,47 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     await ready;
     final trimmed = model.trim();
     if (trimmed.isEmpty || trimmed == state.model) return;
-    state = state.copyWith(model: trimmed);
+    state = state.copyWith(model: trimmed, clearChannelModelId: true);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(kTextToSpeechModelStorageKey, trimmed);
+      await prefs.remove(kTextToSpeechChannelModelIdStorageKey);
     } catch (_) {
       // 持久化失败不阻断本次使用。
+    }
+  }
+
+  /// Bind TTS to a model already configured in Settings.  The channel keeps
+  /// the source of truth for Base URL and encrypted API key; no duplicate
+  /// credential form is required in the voice workspace.
+  Future<void> applyChannelModel(ChannelModelWithChannel channelModel) async {
+    await ready;
+    final model = channelModel.channelModel.modelName.trim();
+    final id = channelModel.channelModel.id.trim();
+    if (model.isEmpty || id.isEmpty) return;
+    final provider = _providerForChannelModel(channelModel);
+    final next = state.copyWith(
+      enabled: true,
+      provider: provider,
+      baseUrl: channelModel.channel.baseUrl,
+      model: model,
+      channelModelId: id,
+      apiKeyEncrypted: channelModel.channel.apiKeyEncrypted,
+    );
+    state = next;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(kTextToSpeechEnabledStorageKey, true);
+      await prefs.setString(kTextToSpeechProviderStorageKey, provider);
+      await prefs.setString(kTextToSpeechBaseUrlStorageKey, next.baseUrl);
+      await prefs.setString(kTextToSpeechModelStorageKey, model);
+      await prefs.setString(kTextToSpeechChannelModelIdStorageKey, id);
+      await prefs.setString(
+        kTextToSpeechApiKeyStorageKey,
+        channelModel.channel.apiKeyEncrypted,
+      );
+    } catch (_) {
+      // The in-memory route remains usable if persistence is unavailable.
     }
   }
 
@@ -528,6 +620,14 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
       throw const TextToSpeechException('请填写 TTS API Key');
     }
     final mode = xai ? null : simiRouterTtsModeOf(normalizedModel);
+    final preservesChannelBinding =
+        state.channelModelId != null &&
+        state.model.trim() == normalizedModel &&
+        state.baseUrl.trim() == normalizedBaseUrl &&
+        state.provider ==
+            (xai
+                ? kTextToSpeechProviderXai
+                : (simiRouter ? kTextToSpeechProviderSimiRouter : provider));
     if (enabled &&
         mode == SimiRouterTtsMode.voiceDesign &&
         normalizedStyle.isEmpty) {
@@ -558,6 +658,7 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
           : (simiRouter ? kTextToSpeechProviderSimiRouter : provider),
       baseUrl: normalizedBaseUrl,
       model: normalizedModel,
+      channelModelId: preservesChannelBinding ? state.channelModelId : null,
       voice: normalizedVoice,
       apiKeyEncrypted: encryptedKey,
       speed: normalizedSpeed,
@@ -571,6 +672,14 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     await prefs.setString(kTextToSpeechProviderStorageKey, next.provider);
     await prefs.setString(kTextToSpeechBaseUrlStorageKey, next.baseUrl);
     await prefs.setString(kTextToSpeechModelStorageKey, next.model);
+    if (next.channelModelId == null) {
+      await prefs.remove(kTextToSpeechChannelModelIdStorageKey);
+    } else {
+      await prefs.setString(
+        kTextToSpeechChannelModelIdStorageKey,
+        next.channelModelId!,
+      );
+    }
     await prefs.setString(kTextToSpeechVoiceStorageKey, next.voice);
     await prefs.setString(kTextToSpeechSpeedStorageKey, next.speed);
     await prefs.setString(
@@ -612,6 +721,7 @@ class TextToSpeechConfigNotifier extends StateNotifier<TextToSpeechConfig> {
     await prefs.remove(kTextToSpeechProviderStorageKey);
     await prefs.remove(kTextToSpeechBaseUrlStorageKey);
     await prefs.remove(kTextToSpeechModelStorageKey);
+    await prefs.remove(kTextToSpeechChannelModelIdStorageKey);
     await prefs.remove(kTextToSpeechVoiceStorageKey);
     await prefs.remove(kTextToSpeechApiKeyStorageKey);
     await prefs.remove(kTextToSpeechSpeedStorageKey);
@@ -668,11 +778,11 @@ final textToSpeechServiceProvider = Provider<TextToSpeechService?>((ref) {
   final service = TextToSpeechService(
     engine: engine,
     player: ref.watch(audioPlayerProvider),
-    audioFileExtension: config.isXai
-        ? config.responseFormat
-        : simiRouterTtsModeOf(config.model) == null
-        ? 'mp3'
-        : config.responseFormat,
+    // The request engine sends `response_format` for every supported profile.
+    // Persisting a WAV/AAC/FLAC/Opus response with a stale `.mp3` suffix makes
+    // Android's player select the wrong decoder and presents as a silent play
+    // failure. Keep the saved file extension identical to the wire contract.
+    audioFileExtension: config.responseFormat,
   );
   ref.onDispose(service.dispose);
   return service;

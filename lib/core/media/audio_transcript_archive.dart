@@ -6,11 +6,17 @@ class AudioTranscriptDetails {
   final AudioTranscriptStatus status;
   final String? transcriptText;
   final String? statusMessage;
+  final String? modelId;
+  final String? language;
+  final String? resultMessageId;
 
   const AudioTranscriptDetails({
     required this.status,
     this.transcriptText,
     this.statusMessage,
+    this.modelId,
+    this.language,
+    this.resultMessageId,
   });
 
   bool get hasCopyableTranscript =>
@@ -73,6 +79,9 @@ class AudioTranscriptArchive {
     String? transcript,
     AudioTranscriptStatus? status,
     String? errorMessage,
+    String? modelId,
+    String? language,
+    String? resultMessageId,
     DateTime? createdAt,
   }) async {
     final file = transcriptFile(
@@ -89,6 +98,9 @@ class AudioTranscriptArchive {
         transcript: transcript,
         status: status,
         errorMessage: errorMessage,
+        modelId: modelId,
+        language: language,
+        resultMessageId: resultMessageId,
         createdAt: createdAt ?? DateTime.now(),
       ),
       flush: true,
@@ -146,7 +158,25 @@ class AudioTranscriptArchive {
       status: status,
       transcriptText: transcriptText,
       statusMessage: statusMessage,
+      modelId: _metadataValue(markdown, 'model_id'),
+      language: _metadataValue(markdown, 'language'),
+      resultMessageId: _metadataValue(markdown, 'result_message_id'),
     );
+  }
+
+  Future<void> deleteTranscript({
+    required String messageId,
+    required String attachmentId,
+  }) async {
+    final file = transcriptFile(
+      messageId: messageId,
+      attachmentId: attachmentId,
+    );
+    if (await file.exists()) await file.delete();
+    final parent = file.parent;
+    if (await parent.exists() && await parent.list().isEmpty) {
+      await parent.delete();
+    }
   }
 
   static String renderTranscript({
@@ -158,6 +188,9 @@ class AudioTranscriptArchive {
     String? transcript,
     AudioTranscriptStatus? status,
     String? errorMessage,
+    String? modelId,
+    String? language,
+    String? resultMessageId,
   }) {
     final normalizedTranscript = transcript?.trim();
     final resolvedStatus =
@@ -175,6 +208,21 @@ class AudioTranscriptArchive {
       ..writeln('- file_name: `${_escapeInline(fileName)}`')
       ..writeln('- file_size: `$fileSize`')
       ..writeln('- status: `${resolvedStatus.label}`')
+      ..write(
+        modelId?.trim().isNotEmpty == true
+            ? '- model_id: `${_escapeInline(modelId!.trim())}`\n'
+            : '',
+      )
+      ..write(
+        language?.trim().isNotEmpty == true
+            ? '- language: `${_escapeInline(language!.trim())}`\n'
+            : '',
+      )
+      ..write(
+        resultMessageId?.trim().isNotEmpty == true
+            ? '- result_message_id: `${_escapeInline(resultMessageId!.trim())}`\n'
+            : '',
+      )
       ..writeln('- created_at: `${_formatDateTime(createdAt)}`')
       ..writeln();
     if (resolvedStatus == AudioTranscriptStatus.failed) {
@@ -300,6 +348,15 @@ class AudioTranscriptArchive {
     }
     final value = buffer.toString().trim();
     return value.isEmpty ? null : value;
+  }
+
+  static String? _metadataValue(String markdown, String key) {
+    final match = RegExp(
+      '^\\s*-\\s*${RegExp.escape(key)}:\\s*`?([^`\\r\\n]+)`?\\s*\$',
+      multiLine: true,
+    ).firstMatch(markdown);
+    final value = match?.group(1)?.trim();
+    return value == null || value.isEmpty ? null : value;
   }
 
   static String _formatDateTime(DateTime value) {

@@ -80,28 +80,60 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
     final url = resolveOpenAiEndpoint(baseUrl, 'audio/transcriptions');
     final dio = createDio();
     try {
-      final response = await dio.post<dynamic>(
-        url,
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Accept': 'application/json',
-          },
+      final languageField = language.trim().toLowerCase();
+      final multipart = FormData.fromMap({
+        'model': normalizedModel,
+        'file': await MultipartFile.fromFile(
+          input.audioPath,
+          filename: input.fileName,
         ),
-        data: FormData.fromMap({
-          'model': normalizedModel,
-          'file': await MultipartFile.fromFile(
-            input.audioPath,
-            filename: input.fileName,
+        // OpenAI 兼容接口用“省略 language”表示自动检测；把字面值
+        // `auto` 作为 ISO-639-1 代码发送会被部分厂商拒绝。
+        if (languageField.isNotEmpty && languageField != 'auto')
+          'language': languageField,
+      });
+      Response<dynamic> response;
+      try {
+        response = await dio.post<dynamic>(
+          url,
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+            },
           ),
-          // OpenAI 兼容接口用“省略 language”表示自动检测；把字面值
-          // `auto` 作为 ISO-639-1 代码发送会被部分厂商拒绝。
-          if (language.trim().isNotEmpty &&
-              language.trim().toLowerCase() != 'auto')
-            'language': language.trim().toLowerCase(),
-        }),
-        cancelToken: cancelToken,
-      );
+          data: multipart,
+          cancelToken: cancelToken,
+        );
+      } on DioException catch (error) {
+        final status = error.response?.statusCode;
+        if (cancelToken?.isCancelled == true ||
+            (status != 400 && status != 415 && status != 422)) {
+          rethrow;
+        }
+        // A number of OpenAI-compatible relays implement the documented JSON
+        // `url` form instead of multipart.  Retry only after a validation/
+        // content-type rejection, never after auth/rate-limit/server errors.
+        final audioBytes = await file.readAsBytes();
+        final mime = _audioMimeType(input.fileName);
+        response = await dio.post<dynamic>(
+          url,
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+            },
+          ),
+          data: jsonEncode({
+            'model': normalizedModel,
+            'url': 'data:$mime;base64,${base64Encode(audioBytes)}',
+            if (languageField.isNotEmpty && languageField != 'auto')
+              'language': languageField,
+          }),
+          cancelToken: cancelToken,
+        );
+      }
       if (cancelToken?.isCancelled == true) {
         throw const AudioTranscriptionException('STT 请求已取消');
       }
@@ -115,6 +147,16 @@ class OpenAiCompatibleSpeechToTextEngine implements SpeechToTextEngine {
     } finally {
       dio.close(force: true);
     }
+  }
+
+  static String _audioMimeType(String fileName) {
+    final lower = fileName.trim().toLowerCase();
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.m4a')) return 'audio/mp4';
+    if (lower.endsWith('.ogg') || lower.endsWith('.oga')) return 'audio/ogg';
+    if (lower.endsWith('.webm')) return 'audio/webm';
+    return 'application/octet-stream';
   }
 
   static String _extractTranscriptText(dynamic data) {
