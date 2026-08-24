@@ -51,9 +51,20 @@ void refreshSessions(WidgetRef ref) {
 Future<String> createNewSession(WidgetRef ref, {String? defaultModelId}) async {
   final sessionDao = ref.read(sessionDaoProvider);
   final id = _uuid.v4();
+  var resolvedDefaultModelId = defaultModelId;
+  if (resolvedDefaultModelId == null) {
+    final chatModels = await ref.read(channelDaoProvider).getChatModels();
+    resolvedDefaultModelId = resolvePreferredChatModelId(
+      chatModels,
+      selectedModelId: ref.read(selectedModelIdProvider),
+    );
+    if (resolvedDefaultModelId != null) {
+      ref.read(selectedModelIdProvider.notifier).state = resolvedDefaultModelId;
+    }
+  }
   await sessionDao.createSession(
     id: id,
-    defaultChannelModelId: defaultModelId ?? ref.read(selectedModelIdProvider),
+    defaultChannelModelId: resolvedDefaultModelId,
   );
   ref.read(activeSessionIdProvider.notifier).state = id;
   refreshSessions(ref);

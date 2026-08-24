@@ -3,6 +3,37 @@ import '../../core/database/app_database.dart';
 import '../../core/database/dao/channel_dao.dart';
 import 'database_provider.dart';
 
+/// 用户没有显式选择聊天模型时使用的低成本默认模型。
+///
+/// 这里只选择已经存在于启用渠道中的模型，不会凭空创建渠道、模型或凭据。
+const kDefaultChatModelName = 'gpt-5.3-codex-spark';
+
+/// 解析本次聊天应使用的默认模型。
+///
+/// 已选择且仍可用的模型永远优先；只有选择为空或模型已经被删除时，才回退到
+/// [kDefaultChatModelName]。兼容网关返回的 `provider/model` 命名，但不会把
+/// 名字相似的其它 Codex 模型误认为默认值。
+String? resolvePreferredChatModelId(
+  List<ChannelModelWithChannel> models, {
+  required String? selectedModelId,
+}) {
+  final selected = selectedModelId?.trim();
+  if (selected != null &&
+      selected.isNotEmpty &&
+      models.any((model) => model.channelModel.id == selected)) {
+    return selected;
+  }
+
+  for (final model in models) {
+    final name = model.channelModel.modelName.trim().toLowerCase();
+    final leaf = name.split('/').last;
+    if (name == kDefaultChatModelName || leaf == kDefaultChatModelName) {
+      return model.channelModel.id;
+    }
+  }
+  return null;
+}
+
 /// 所有模型列表（跨渠道，不去重）
 final allModelsProvider = FutureProvider<List<ChannelModelWithChannel>>((ref) {
   return ref.watch(channelDaoProvider).getChatModels();

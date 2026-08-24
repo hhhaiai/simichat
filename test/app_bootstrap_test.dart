@@ -63,4 +63,44 @@ void main() {
     startupCompleter.complete();
     await tester.pump();
   });
+
+  testWidgets(
+    'post-frame media and chunked-content recovery both start without blocking UI',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+      final mediaRecovery = Completer<void>();
+      final chunkedRecovery = Completer<void>();
+      var mediaCalls = 0;
+      var chunkedCalls = 0;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(database)],
+          child: AppBootstrap(
+            startupTasksRunner: (_) async {},
+            mediaRecoveryRunner: () {
+              mediaCalls += 1;
+              return mediaRecovery.future;
+            },
+            chunkedContentRecoveryRunner: () {
+              chunkedCalls += 1;
+              return chunkedRecovery.future;
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(AiChatApp), findsOneWidget);
+      expect(mediaCalls, 1);
+      expect(chunkedCalls, 1);
+
+      mediaRecovery.complete();
+      chunkedRecovery.complete();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

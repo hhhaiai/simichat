@@ -6,11 +6,16 @@ import 'package:flutter/services.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/attachments/attachment_policy.dart';
 import '../../core/context/token_estimator.dart';
 import '../../core/media/attachment_export_service.dart';
+import '../../core/media/large_paste_policy.dart';
+import '../../core/media/pasted_text_attachment_service.dart';
 import '../../core/media/voice_recorder.dart';
 import '../providers/universal_media_provider.dart';
+
+const _composerDraftUuid = Uuid();
 
 class PendingAttachment {
   /// 选择阶段的稳定 ID。发送后数据库会生成 message-owned attachment ID；
@@ -21,21 +26,34 @@ class PendingAttachment {
   final String type; // image | video | pdf | audio | document
   final int fileSize;
 
+  /// 仅由“大粘贴自动归档”创建时携带的私有文本元数据。普通文件附件保持
+  /// null，避免把大文本的内容、hash 或本机路径误写入通用请求 JSON。
+  final PastedTextAttachment? pastedText;
+
   const PendingAttachment({
     this.id,
     required this.path,
     required this.name,
     required this.type,
     this.fileSize = 0,
+    this.pastedText,
   });
 
-  PendingAttachment copyWith({String? id, int? fileSize}) {
+  PendingAttachment copyWith({
+    String? id,
+    String? path,
+    String? name,
+    int? fileSize,
+    PastedTextAttachment? pastedText,
+    bool clearPastedText = false,
+  }) {
     return PendingAttachment(
       id: id ?? this.id,
-      path: path,
-      name: name,
+      path: path ?? this.path,
+      name: name ?? this.name,
       type: type,
       fileSize: fileSize ?? this.fileSize,
+      pastedText: clearPastedText ? null : pastedText ?? this.pastedText,
     );
   }
 
@@ -76,6 +94,39 @@ class ChatComposerDraft {
   }
 }
 
+/// Unified Composer submission result.
+///
+/// A boolean is not enough for a multimodal Composer: TTS consumes only text,
+/// image/video tasks may consume a selected subset of the draft files, while
+/// a normal chat turn consumes every attachment it sends.  Keeping the exact
+/// stable IDs in the result prevents a successful media task from deleting
+/// unrelated files that the user prepared for the next request.
+class ComposerSendOutcome {
+  const ComposerSendOutcome._({
+    required this.succeeded,
+    this.consumedAttachmentIds = const <String>{},
+  });
+
+  const ComposerSendOutcome.success({
+    Set<String> consumedAttachmentIds = const <String>{},
+  }) : this._(succeeded: true, consumedAttachmentIds: consumedAttachmentIds);
+
+  const ComposerSendOutcome.failure()
+    : this._(succeeded: false, consumedAttachmentIds: const <String>{});
+
+  final bool succeeded;
+  final Set<String> consumedAttachmentIds;
+}
+
+class _InsertedTextRange {
+  const _InsertedTextRange(this.start, this.end);
+
+  final int start;
+  final int end;
+}
+
+enum _PastedTextAttachmentAction { preview, rename, restore, delete }
+
 /// ChatGPT-style bottom composer.
 class ChatInputBar extends StatefulWidget {
   final TextEditingController controller;
@@ -86,6 +137,16 @@ class ChatInputBar extends StatefulWidget {
   final ValueNotifier<bool> hasTextNotifier;
   final Future<bool> Function(String text, List<PendingAttachment> attachments)
   onSend;
+
+  /// Exact-consumption variant used by the production multimodal page.
+  ///
+  /// [onSend] remains available for older callers and tests. When both are
+  /// supplied, this callback wins so a task can retain unrelated attachments.
+  final Future<ComposerSendOutcome> Function(
+    String text,
+    List<PendingAttachment> attachments,
+  )?
+  onSendWithOutcome;
 
   /// 独立于发送 busy guard 的停止动作。流式聊天和音频转写阶段都走这里。
   final Future<void> Function()? onStop;
@@ -100,6 +161,15 @@ class ChatInputBar extends StatefulWidget {
   final Future<bool> Function(String text, List<PendingAttachment> attachments)?
   onGenerateImageWithAttachments;
 
+  /// 完整图片任务面板回调。与旧版图片回调不同，这个入口把 Composer 中
+  /// 的全部图片参考附件交给页面，由页面打开本次任务参数面板并创建不可变
+  /// 的请求快照；未配置时继续使用旧版单参考图兼容路径。
+  final Future<Set<String>?> Function(
+    String text,
+    List<PendingAttachment> attachments,
+  )?
+  onOpenImageGenerationTask;
+
   /// 通用媒体动作。它们都采用 ChatGPT Composer 的“工具菜单”交互：
   /// 输入提示词，必要时附带参考文件，再把结果作为 assistant 媒体消息写回。
   /// 视频生成 extra 携带用户在弹窗中选择的时长 / 分辨率等请求参数。
@@ -110,9 +180,32 @@ class ChatInputBar extends StatefulWidget {
   )?
   onGenerateVideo;
 
+  /// 完整的视频任务面板回调。相比旧的 [onGenerateVideo]，这个入口保留
+  /// 首帧图、多个参考图、参考音频、时长、比例和分辨率的角色语义，避免
+  /// 页面层再从自由字段 Map 猜测附件用途。
+  final Future<bool> Function(String text, VideoGenerationConfig config)?
+  onOpenVideoGenerationTask;
+
+  /// Production configuration sheet shared with the top video-model send
+  /// path. Supplying this removes the historical split where the `+` menu and
+  /// the main send button exposed different durations, ratios and attachment
+  /// roles. Older embedders can omit it and keep the local compatibility
+  /// dialog.
+  final Future<VideoGenerationConfig?> Function(
+    String text,
+    List<PendingAttachment> attachments,
+  )?
+  onConfigureVideoGenerationTask;
+
   /// 语音识别语言单次选择（麦克风长按）：auto / zh / en。
   final void Function(String language)? onSpeechLanguageSelected;
+  final Future<Set<String>?> Function(List<PendingAttachment> attachments)?
+  onOpenSpeechRecognitionTask;
   final Future<bool> Function(String text)? onSynthesizeSpeech;
+
+  /// 打开一次性的语音合成任务面板。配置后由页面把音色、语速和输出
+  /// 格式作为本次请求参数传递给 provider；为空时兼容旧的直接合成入口。
+  final Future<bool> Function(String text)? onOpenSpeechSynthesisTask;
 
   /// 声音克隆回调。默认要求 Composer 中存在一个 audio 附件，并把第一条
   /// 音频作为参考音频传出；如果上游已经在设置中持久化并校验参考音频，
@@ -120,9 +213,15 @@ class ChatInputBar extends StatefulWidget {
   final Future<bool> Function(String text, List<PendingAttachment> attachments)?
   onCloneVoice;
 
+  /// 打开一次性的声音克隆任务面板。面板可以在提交前确认参考音频、语速和
+  /// 输出格式；为空时兼容旧的直接克隆入口。
+  final Future<bool> Function(String text, List<PendingAttachment> attachments)?
+  onOpenVoiceCloneTask;
+
   /// 声音设计回调：输入框文字作为声音设计描述传出。具体 provider / 云端
   /// 能力由上游回调决定，Composer 不伪造任何远端能力。
   final Future<bool> Function(String text)? onDesignVoice;
+  final Future<bool> Function(String text)? onOpenVoiceDesignTask;
   final Future<bool> Function(String text)? onGenerateMusic;
 
   /// 当前会话的视频 / 音乐能力不可用时仍保留工具菜单入口，但以禁用
@@ -173,6 +272,14 @@ class ChatInputBar extends StatefulWidget {
   /// 提供预览层时可以关闭，但不会影响图片附件发送或参考图编辑。
   final bool showImageAttachmentPreviews;
 
+  /// 大粘贴判定策略。默认采用产品定义的 16000 字符 / 64 KiB / 8000
+  /// token 任一阈值；测试或设置页可以注入覆盖，不能在 TextField 内散落阈值。
+  final LargePastePolicy largePastePolicy;
+
+  /// 可注入私有文本附件服务。默认和 [draftArchive] 共用同一 Composer
+  /// 私有目录，以保证删除、重命名和草稿恢复使用相同的目录边界。
+  final PastedTextAttachmentService? pastedTextAttachmentService;
+
   const ChatInputBar({
     super.key,
     required this.controller,
@@ -182,15 +289,23 @@ class ChatInputBar extends StatefulWidget {
     this.isSubmitting = false,
     required this.hasTextNotifier,
     required this.onSend,
+    this.onSendWithOutcome,
     this.onStop,
     this.onDraftChanged,
     this.onGenerateImage,
     this.onGenerateImageWithAttachments,
+    this.onOpenImageGenerationTask,
     this.onGenerateVideo,
+    this.onOpenVideoGenerationTask,
+    this.onConfigureVideoGenerationTask,
     this.onSpeechLanguageSelected,
+    this.onOpenSpeechRecognitionTask,
     this.onSynthesizeSpeech,
+    this.onOpenSpeechSynthesisTask,
     this.onCloneVoice,
+    this.onOpenVoiceCloneTask,
     this.onDesignVoice,
+    this.onOpenVoiceDesignTask,
     this.onGenerateMusic,
     this.videoActionDisabledReason,
     this.musicActionDisabledReason,
@@ -210,6 +325,8 @@ class ChatInputBar extends StatefulWidget {
     this.showVoiceInput,
     this.initialAttachments = const [],
     this.showImageAttachmentPreviews = true,
+    this.largePastePolicy = const LargePastePolicy(),
+    this.pastedTextAttachmentService,
   });
 
   @override
@@ -220,7 +337,11 @@ class _ChatInputBarState extends State<ChatInputBar>
     with WidgetsBindingObserver {
   final _imagePicker = ImagePicker();
   late final AttachmentDraftArchive _draftArchive;
+  late final PastedTextAttachmentService _pastedTextAttachmentService;
+  late String _draftId;
+  late TextEditingValue _lastEditingValue;
   final List<PendingAttachment> _pendingAttachments = [];
+  bool _isReplacingLargePaste = false;
   bool _isRecordingVoice = false;
   bool _isVoiceBusy = false;
   bool _isDraggingFiles = false;
@@ -231,7 +352,12 @@ class _ChatInputBarState extends State<ChatInputBar>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _draftArchive = widget.draftArchive ?? const AttachmentDraftArchive();
-    widget.controller.addListener(_syncHasTextNotifier);
+    _pastedTextAttachmentService =
+        widget.pastedTextAttachmentService ??
+        PastedTextAttachmentService(archive: _draftArchive);
+    _draftId = _newDraftId(widget.sessionId);
+    _lastEditingValue = widget.controller.value;
+    widget.controller.addListener(_handleComposerTextChanged);
     _syncHasTextNotifier();
     _pendingAttachments.addAll(widget.initialAttachments);
     unawaited(_recoverLostImagePickerData());
@@ -241,12 +367,15 @@ class _ChatInputBarState extends State<ChatInputBar>
   void didUpdateWidget(covariant ChatInputBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_syncHasTextNotifier);
-      widget.controller.addListener(_syncHasTextNotifier);
+      oldWidget.controller.removeListener(_handleComposerTextChanged);
+      widget.controller.addListener(_handleComposerTextChanged);
+      _lastEditingValue = widget.controller.value;
     }
     _syncHasTextNotifier();
     if (oldWidget.sessionId == widget.sessionId) return;
 
+    _draftId = _newDraftId(widget.sessionId);
+    _lastEditingValue = widget.controller.value;
     // 会话替换时先终止录音，再装载新会话的附件草稿；不能把旧会话的
     // recording result 或附件列表带到新会话。
     unawaited(_cancelVoiceRecording());
@@ -258,7 +387,9 @@ class _ChatInputBarState extends State<ChatInputBar>
       _isRecordingVoice = false;
       _isVoiceBusy = false;
     });
-    _notifyDraftChanged();
+    // 会话切换时附件由外部的 session-scoped draft 提供。这里的状态同步
+    // 不是用户编辑，不能把刚切入会话的持久化草稿误写为空草稿；真正的
+    // 附件增删、文本修改和深度思考切换仍会通过 [_notifyDraftChanged] 上报。
   }
 
   @override
@@ -273,7 +404,7 @@ class _ChatInputBarState extends State<ChatInputBar>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    widget.controller.removeListener(_syncHasTextNotifier);
+    widget.controller.removeListener(_handleComposerTextChanged);
     // dispose 不能等待平台调用，但必须告诉原生录音通道结束当前 session。
     unawaited(_cancelVoiceRecording(updateUi: false));
     super.dispose();
@@ -286,6 +417,144 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
   }
 
+  String _newDraftId(String? sessionId) =>
+      '${sessionId?.trim().isNotEmpty == true ? sessionId!.trim() : 'new'}-${_composerDraftUuid.v4()}';
+
+  /// 对 TextEditingValue 的相邻状态做最小 diff，只取本次插入片段评估。
+  ///
+  /// Flutter 没有跨所有 Android 输入法的一致 paste callback；大段剪贴板
+  /// 粘贴最终都会形成一次 EditingValue 插入。因此在 controller 边界处理，
+  /// 不依赖某个厂商键盘的菜单实现。连续逐字输入不会达到单次 delta 阈值。
+  void _handleComposerTextChanged() {
+    final current = widget.controller.value;
+    final previous = _lastEditingValue;
+    _lastEditingValue = current;
+    _syncHasTextNotifier();
+    if (_isReplacingLargePaste || current.text == previous.text) return;
+
+    final diff = _findInsertedRange(previous.text, current.text);
+    if (diff == null) return;
+    final inserted = current.text.substring(diff.start, diff.end);
+    if (inserted.isEmpty) return;
+    final decision = widget.largePastePolicy.evaluate(inserted);
+    if (!decision.shouldArchive) return;
+
+    // 先同步移除 delta；异步写文件期间用户仍可继续编辑剩余草稿。若归档失败，
+    // _restoreLargePasteAfterFailure 会把原始文本放回当前编辑位置。
+    _replaceComposerText(
+      removeInsertedText(
+        current.text,
+        insertionStart: diff.start,
+        insertionEnd: diff.end,
+      ),
+      selectionOffset: diff.start,
+    );
+    final sessionId = widget.sessionId;
+    unawaited(
+      _archiveLargePaste(
+        sessionId: sessionId,
+        insertionOffset: diff.start,
+        text: inserted,
+        decision: decision,
+      ),
+    );
+  }
+
+  _InsertedTextRange? _findInsertedRange(String previous, String current) {
+    // 替换选区的粘贴可能比被替换文本短，因此不能仅比较全文长度。纯删除的
+    // diff 会得到空 inserted range 并由调用方跳过，不会误归档现有草稿。
+    var prefix = 0;
+    final commonLimit = previous.length < current.length
+        ? previous.length
+        : current.length;
+    while (prefix < commonLimit &&
+        previous.codeUnitAt(prefix) == current.codeUnitAt(prefix)) {
+      prefix++;
+    }
+    var suffix = 0;
+    while (suffix < previous.length - prefix &&
+        suffix < current.length - prefix &&
+        previous.codeUnitAt(previous.length - 1 - suffix) ==
+            current.codeUnitAt(current.length - 1 - suffix)) {
+      suffix++;
+    }
+    final end = current.length - suffix;
+    if (end <= prefix) return null;
+    return _InsertedTextRange(prefix, end);
+  }
+
+  void _replaceComposerText(String text, {required int selectionOffset}) {
+    final safeOffset = selectionOffset.clamp(0, text.length).toInt();
+    _isReplacingLargePaste = true;
+    try {
+      widget.controller.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: safeOffset),
+        composing: TextRange.empty,
+      );
+    } finally {
+      _isReplacingLargePaste = false;
+    }
+  }
+
+  Future<void> _archiveLargePaste({
+    required String? sessionId,
+    required int insertionOffset,
+    required String text,
+    required LargePasteDecision decision,
+  }) async {
+    PastedTextAttachment? pasted;
+    try {
+      pasted = await _pastedTextAttachmentService.create(
+        conversationId: sessionId?.trim().isNotEmpty == true
+            ? sessionId!.trim()
+            : 'new-conversation',
+        draftId: _draftId,
+        text: text,
+        decision: decision,
+      );
+      if (!_isCurrentOperationSession(sessionId)) {
+        await _pastedTextAttachmentService.delete(pasted);
+        return;
+      }
+      _addAttachmentWithValidation(
+        PendingAttachment(
+          id: pasted.id,
+          path: pasted.localPath,
+          name: pasted.displayName,
+          type: 'document',
+          fileSize: pasted.utf8ByteCount,
+          pastedText: pasted,
+        ),
+        fileSize: pasted.utf8ByteCount,
+      );
+      if (mounted && _isCurrentOperationSession(sessionId)) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(const SnackBar(content: Text('粘贴内容较长，已转换为附件')));
+      }
+    } catch (_) {
+      if (pasted != null) {
+        try {
+          await _pastedTextAttachmentService.delete(pasted);
+        } catch (_) {
+          // 归档失败时原始文本恢复优先，清理失败交由下一次 draft 清理收敛。
+        }
+      }
+      if (mounted && _isCurrentOperationSession(sessionId)) {
+        final current = widget.controller.value;
+        final safeOffset = insertionOffset
+            .clamp(0, current.text.length)
+            .toInt();
+        _replaceComposerText(
+          current.text.replaceRange(safeOffset, safeOffset, text),
+          selectionOffset: safeOffset + text.length,
+        );
+        _showAttachmentError('粘贴内容归档失败，已保留在输入框中');
+      }
+    }
+  }
+
   void _notifyDraftChanged() {
     widget.onDraftChanged?.call(
       ChatComposerDraft(
@@ -294,6 +563,15 @@ class _ChatInputBarState extends State<ChatInputBar>
         deepThink: widget.deepThinkNotifier?.value ?? false,
       ),
     );
+  }
+
+  /// Clear only the exact text revision submitted by an older async action.
+  /// Users may type their next prompt while image/audio/video work is running;
+  /// that newer text must survive completion of the previous task.
+  void _clearSubmittedTextIfUnchanged(String submittedText) {
+    if (!mounted || widget.controller.text != submittedText) return;
+    widget.controller.clear();
+    widget.hasTextNotifier.value = false;
   }
 
   bool _isCurrentOperationSession(String? operationSessionId) {
@@ -327,22 +605,39 @@ class _ChatInputBarState extends State<ChatInputBar>
       _showAttachmentError('请先结束当前录音');
       return;
     }
-    final content = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final content = submittedText.trim();
     if (content.isEmpty && _pendingAttachments.isEmpty) return;
     final attachments = List<PendingAttachment>.from(_pendingAttachments);
-    bool sent;
+    late final ComposerSendOutcome outcome;
     try {
-      sent = await widget.onSend(content, attachments);
+      final exactCallback = widget.onSendWithOutcome;
+      if (exactCallback != null) {
+        outcome = await exactCallback(content, attachments);
+      } else {
+        final sent = await widget.onSend(content, attachments);
+        outcome = sent
+            ? ComposerSendOutcome.success(
+                consumedAttachmentIds: attachments
+                    .map((attachment) => attachment.stableId)
+                    .toSet(),
+              )
+            : const ComposerSendOutcome.failure();
+      }
     } catch (_) {
       if (mounted && _isCurrentOperationSession(operationSessionId)) {
         _showActionFailure('发送');
       }
       return;
     }
-    if (!sent || !mounted || !_isCurrentOperationSession(operationSessionId)) {
+    if (!outcome.succeeded ||
+        !mounted ||
+        !_isCurrentOperationSession(operationSessionId)) {
       return;
     }
-    _removeConsumedAttachments(attachments);
+    _clearSubmittedTextIfUnchanged(submittedText);
+    _removeConsumedAttachmentIds(outcome.consumedAttachmentIds);
+    _notifyDraftChanged();
   }
 
   Future<void> _handleStop() async {
@@ -354,7 +649,12 @@ class _ChatInputBarState extends State<ChatInputBar>
         return;
       }
       // 保持旧调用方兼容；新页面始终提供显式 onStop。
-      await widget.onSend('', const []);
+      final exactCallback = widget.onSendWithOutcome;
+      if (exactCallback != null) {
+        await exactCallback('', const []);
+      } else {
+        await widget.onSend('', const []);
+      }
     } catch (_) {
       if (mounted) _showActionFailure('停止');
     }
@@ -398,11 +698,13 @@ class _ChatInputBarState extends State<ChatInputBar>
   }
 
   Future<void> _handleGenerateImage() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
     if (text.isEmpty ||
         (widget.onGenerateImage == null &&
-            widget.onGenerateImageWithAttachments == null) ||
+            widget.onGenerateImageWithAttachments == null &&
+            widget.onOpenImageGenerationTask == null) ||
         widget.isStreaming ||
         widget.isSubmitting ||
         widget.mediaTask?.isBusy == true) {
@@ -414,17 +716,28 @@ class _ChatInputBarState extends State<ChatInputBar>
     }
     // /v1/images/edits 当前只使用第一张图片作为参考图；其它附件不是这次
     // 工具动作的输入，成功后必须保留在 Composer 中供用户后续使用。
-    final consumedAttachments = widget.onGenerateImageWithAttachments != null
+    final offeredAttachments = widget.onOpenImageGenerationTask != null
+        ? _allImageReferenceAttachments()
+        : widget.onGenerateImageWithAttachments != null
         ? _firstImageReferenceAttachments()
         : const <PendingAttachment>[];
     bool ok;
+    Set<String>? consumedIds;
     try {
-      ok = widget.onGenerateImageWithAttachments != null
-          ? await widget.onGenerateImageWithAttachments!(
-              text,
-              consumedAttachments,
-            )
-          : await widget.onGenerateImage!(text);
+      if (widget.onOpenImageGenerationTask != null) {
+        consumedIds = await widget.onOpenImageGenerationTask!(
+          text,
+          offeredAttachments,
+        );
+        ok = consumedIds != null;
+      } else {
+        ok = widget.onGenerateImageWithAttachments != null
+            ? await widget.onGenerateImageWithAttachments!(
+                text,
+                offeredAttachments,
+              )
+            : await widget.onGenerateImage!(text);
+      }
     } catch (_) {
       if (mounted && _isCurrentOperationSession(operationSessionId)) {
         _showActionFailure('图片生成');
@@ -432,9 +745,13 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (ok && _isCurrentOperationSession(operationSessionId)) {
-      widget.controller.clear();
-      widget.hasTextNotifier.value = false;
-      _removeConsumedAttachments(consumedAttachments);
+      _clearSubmittedTextIfUnchanged(submittedText);
+      if (consumedIds != null) {
+        _removeConsumedAttachmentIds(consumedIds);
+      } else {
+        _removeConsumedAttachments(offeredAttachments);
+      }
+      _notifyDraftChanged();
     }
   }
 
@@ -445,6 +762,12 @@ class _ChatInputBarState extends State<ChatInputBar>
       }
     }
     return const <PendingAttachment>[];
+  }
+
+  List<PendingAttachment> _allImageReferenceAttachments() {
+    return _pendingAttachments
+        .where((attachment) => attachment.type == 'image')
+        .toList(growable: false);
   }
 
   List<PendingAttachment> _firstAudioReferenceAttachments() {
@@ -506,11 +829,16 @@ class _ChatInputBarState extends State<ChatInputBar>
         (compactActions &&
             (widget.onGenerateImage != null ||
                 widget.onGenerateImageWithAttachments != null ||
+                widget.onOpenImageGenerationTask != null ||
                 widget.deepThinkNotifier != null)) ||
-        widget.onGenerateVideo != null ||
-        widget.onSynthesizeSpeech != null ||
-        widget.onCloneVoice != null ||
-        widget.onDesignVoice != null ||
+        (widget.onGenerateVideo != null ||
+            widget.onOpenVideoGenerationTask != null) ||
+        (widget.onSynthesizeSpeech != null ||
+            widget.onOpenSpeechSynthesisTask != null) ||
+        (widget.onCloneVoice != null || widget.onOpenVoiceCloneTask != null) ||
+        (widget.onDesignVoice != null ||
+            widget.onOpenVoiceDesignTask != null) ||
+        widget.onOpenSpeechRecognitionTask != null ||
         widget.onGenerateMusic != null;
 
     showModalBottomSheet(
@@ -587,9 +915,49 @@ class _ChatInputBarState extends State<ChatInputBar>
                   ],
                   if (hasCreationActions) ...[
                     _buildAttachmentMenuSectionHeader(ctx, '生成与工具'),
+                    if (widget.onOpenSpeechRecognitionTask != null)
+                      ListTile(
+                        key: const ValueKey('recognize-speech-menu-item'),
+                        leading: const Icon(Icons.transcribe_outlined),
+                        title: const Text('识别语音'),
+                        subtitle: Text(
+                          _firstAudioReferenceAttachments().isEmpty
+                              ? '先通过“选择文件”附加语音文件'
+                              : '选择识别语言并生成转写结果',
+                        ),
+                        enabled:
+                            _firstAudioReferenceAttachments().isNotEmpty &&
+                            !widget.isStreaming &&
+                            !widget.isSubmitting &&
+                            widget.mediaTask?.isBusy != true &&
+                            !_isRecordingVoice,
+                        onTap:
+                            _firstAudioReferenceAttachments().isNotEmpty &&
+                                !widget.isStreaming &&
+                                !widget.isSubmitting &&
+                                widget.mediaTask?.isBusy != true &&
+                                !_isRecordingVoice
+                            ? () async {
+                                Navigator.pop(ctx);
+                                final callback =
+                                    widget.onOpenSpeechRecognitionTask;
+                                if (callback == null) return;
+                                final consumedIds = await callback(
+                                  _firstAudioReferenceAttachments(),
+                                );
+                                if (consumedIds != null &&
+                                    _isCurrentOperationSession(
+                                      widget.sessionId,
+                                    )) {
+                                  _removeConsumedAttachmentIds(consumedIds);
+                                }
+                              }
+                            : null,
+                      ),
                     if (compactActions &&
                         (widget.onGenerateImage != null ||
-                            widget.onGenerateImageWithAttachments != null))
+                            widget.onGenerateImageWithAttachments != null ||
+                            widget.onOpenImageGenerationTask != null))
                       ValueListenableBuilder<bool>(
                         valueListenable: widget.hasTextNotifier,
                         builder: (_, hasText, _) => ListTile(
@@ -644,7 +1012,8 @@ class _ChatInputBarState extends State<ChatInputBar>
                                 },
                         ),
                       ),
-                    if (widget.onGenerateVideo != null)
+                    if (widget.onGenerateVideo != null ||
+                        widget.onOpenVideoGenerationTask != null)
                       ValueListenableBuilder<bool>(
                         valueListenable: widget.hasTextNotifier,
                         builder: (_, hasText, _) => ListTile(
@@ -676,7 +1045,8 @@ class _ChatInputBarState extends State<ChatInputBar>
                               : null,
                         ),
                       ),
-                    if (widget.onSynthesizeSpeech != null)
+                    if (widget.onSynthesizeSpeech != null ||
+                        widget.onOpenSpeechSynthesisTask != null)
                       ValueListenableBuilder<bool>(
                         valueListenable: widget.hasTextNotifier,
                         builder: (_, hasText, _) => ListTile(
@@ -708,7 +1078,8 @@ class _ChatInputBarState extends State<ChatInputBar>
                               : null,
                         ),
                       ),
-                    if (widget.onCloneVoice != null)
+                    if (widget.onCloneVoice != null ||
+                        widget.onOpenVoiceCloneTask != null)
                       ValueListenableBuilder<bool>(
                         valueListenable: widget.hasTextNotifier,
                         builder: (_, hasText, _) {
@@ -759,7 +1130,8 @@ class _ChatInputBarState extends State<ChatInputBar>
                           );
                         },
                       ),
-                    if (widget.onDesignVoice != null)
+                    if (widget.onDesignVoice != null ||
+                        widget.onOpenVoiceDesignTask != null)
                       ValueListenableBuilder<bool>(
                         valueListenable: widget.hasTextNotifier,
                         builder: (_, hasText, _) => ListTile(
@@ -1255,11 +1627,13 @@ class _ChatInputBarState extends State<ChatInputBar>
   }
 
   Future<void> _handleGenerateVideo() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
     final callback = widget.onGenerateVideo;
+    final typedCallback = widget.onOpenVideoGenerationTask;
     if (text.isEmpty ||
-        callback == null ||
+        (callback == null && typedCallback == null) ||
         widget.isStreaming ||
         widget.isSubmitting ||
         widget.videoActionDisabledReason != null ||
@@ -1270,16 +1644,33 @@ class _ChatInputBarState extends State<ChatInputBar>
       _showAttachmentError('请先结束当前录音');
       return;
     }
-    final imageAttachments = _pendingAttachments
-        .where((attachment) => attachment.type == 'image')
-        .toList();
-    final config = await _showVideoConfigDialog(text, imageAttachments);
+    final configure = widget.onConfigureVideoGenerationTask;
+    final config = configure != null
+        ? await configure(
+            text,
+            List<PendingAttachment>.unmodifiable(_pendingAttachments),
+          )
+        : await _showVideoConfigDialog(
+            text,
+            _pendingAttachments
+                .where((attachment) => attachment.type == 'image')
+                .toList(growable: false),
+          );
     if (!_isCurrentOperationSession(operationSessionId)) return;
     if (config == null) return;
-    final consumedAttachments = config.referenceAttachments;
+    // The typed page callback receives every selected role. Older integrations
+    // still get their historical single-reference contract, so a legacy
+    // callback never silently changes from one image to N images.
+    final consumedAttachments = typedCallback != null
+        ? config.allAttachments
+        : config.referenceAttachments.isEmpty
+        ? const <PendingAttachment>[]
+        : <PendingAttachment>[config.referenceAttachments.first];
     bool ok;
     try {
-      ok = await callback(text, consumedAttachments, config.extra);
+      ok = typedCallback != null
+          ? await typedCallback(text, config)
+          : await callback!(text, consumedAttachments, config.extra);
     } catch (_) {
       if (mounted && _isCurrentOperationSession(operationSessionId)) {
         _showActionFailure('视频生成');
@@ -1287,16 +1678,17 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (ok && _isCurrentOperationSession(operationSessionId)) {
-      widget.controller.clear();
-      widget.hasTextNotifier.value = false;
+      _clearSubmittedTextIfUnchanged(submittedText);
       _removeConsumedAttachments(consumedAttachments);
     }
   }
 
   Future<void> _handleSynthesizeSpeech() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
-    final callback = widget.onSynthesizeSpeech;
+    final callback =
+        widget.onOpenSpeechSynthesisTask ?? widget.onSynthesizeSpeech;
     if (text.isEmpty ||
         callback == null ||
         widget.isStreaming ||
@@ -1319,17 +1711,17 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (ok && _isCurrentOperationSession(operationSessionId)) {
-      widget.controller.clear();
-      widget.hasTextNotifier.value = false;
+      _clearSubmittedTextIfUnchanged(submittedText);
       // TTS 只消费文本；保留 composer 中未消费的附件草稿。
       _notifyDraftChanged();
     }
   }
 
   Future<void> _handleCloneVoice() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
-    final callback = widget.onCloneVoice;
+    final callback = widget.onOpenVoiceCloneTask ?? widget.onCloneVoice;
     if (text.isEmpty ||
         callback == null ||
         widget.isStreaming ||
@@ -1364,8 +1756,7 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (!ok || !_isCurrentOperationSession(operationSessionId)) return;
-    widget.controller.clear();
-    widget.hasTextNotifier.value = false;
+    _clearSubmittedTextIfUnchanged(submittedText);
     if (referenceAudio.isEmpty) {
       // 上游消费的是已配置的参考音频，不是 Composer 草稿附件。
       _notifyDraftChanged();
@@ -1375,9 +1766,10 @@ class _ChatInputBarState extends State<ChatInputBar>
   }
 
   Future<void> _handleDesignVoice() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
-    final callback = widget.onDesignVoice;
+    final callback = widget.onOpenVoiceDesignTask ?? widget.onDesignVoice;
     if (text.isEmpty ||
         callback == null ||
         widget.isStreaming ||
@@ -1400,15 +1792,15 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (ok && _isCurrentOperationSession(operationSessionId)) {
-      widget.controller.clear();
-      widget.hasTextNotifier.value = false;
+      _clearSubmittedTextIfUnchanged(submittedText);
       // 声音设计只消费文本；保留 Composer 中其它附件草稿。
       _notifyDraftChanged();
     }
   }
 
   Future<void> _handleGenerateMusic() async {
-    final text = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final text = submittedText.trim();
     final operationSessionId = widget.sessionId;
     final callback = widget.onGenerateMusic;
     if (text.isEmpty ||
@@ -1433,8 +1825,7 @@ class _ChatInputBarState extends State<ChatInputBar>
       return;
     }
     if (ok && mounted && widget.sessionId == operationSessionId) {
-      widget.controller.clear();
-      widget.hasTextNotifier.value = false;
+      _clearSubmittedTextIfUnchanged(submittedText);
       // 音乐生成只消费文本；不能借成功状态清空其它附件。
       _notifyDraftChanged();
     }
@@ -1797,8 +2188,7 @@ class _ChatInputBarState extends State<ChatInputBar>
                                         ? null
                                         : _toggleVoiceRecording,
                                     onLongPress:
-                                        widget.onSpeechLanguageSelected ==
-                                                null
+                                        widget.onSpeechLanguageSelected == null
                                         ? null
                                         : _pickSpeechLanguage,
                                     icon: Icon(
@@ -1823,6 +2213,8 @@ class _ChatInputBarState extends State<ChatInputBar>
                                 if (!compactActions &&
                                     (widget.onGenerateImage != null ||
                                         widget.onGenerateImageWithAttachments !=
+                                            null ||
+                                        widget.onOpenImageGenerationTask !=
                                             null))
                                   ValueListenableBuilder<bool>(
                                     valueListenable: widget.hasTextNotifier,
@@ -2161,7 +2553,11 @@ class _ChatInputBarState extends State<ChatInputBar>
                           style: const TextStyle(fontSize: 12),
                         ),
                         Text(
-                          formatAttachmentSize(att.fileSize),
+                          att.pastedText == null
+                              ? formatAttachmentSize(att.fileSize)
+                              : '${formatAttachmentSize(att.fileSize)} · ${att.pastedText!.characterCount} 字符 · ~${att.pastedText!.estimatedTokens} tokens',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11,
                             color: Theme.of(
@@ -2172,17 +2568,50 @@ class _ChatInputBarState extends State<ChatInputBar>
                       ],
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => _removePendingAttachmentAt(index),
-                    icon: const Icon(Icons.close, size: 16),
-                    tooltip: '移除附件',
-                    visualDensity: VisualDensity.standard,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 44,
-                      height: 44,
+                  if (att.pastedText != null)
+                    PopupMenuButton<_PastedTextAttachmentAction>(
+                      tooltip: '大粘贴附件操作',
+                      icon: const Icon(Icons.more_horiz, size: 18),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      onSelected: (action) => unawaited(
+                        _handlePastedTextAttachmentAction(index, action),
+                      ),
+                      itemBuilder: (menuContext) => const [
+                        PopupMenuItem(
+                          value: _PastedTextAttachmentAction.preview,
+                          child: Text('预览'),
+                        ),
+                        PopupMenuItem(
+                          value: _PastedTextAttachmentAction.rename,
+                          child: Text('重命名'),
+                        ),
+                        PopupMenuItem(
+                          value: _PastedTextAttachmentAction.restore,
+                          child: Text('还原为文本'),
+                        ),
+                        PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: _PastedTextAttachmentAction.delete,
+                          child: Text('删除附件'),
+                        ),
+                      ],
+                    )
+                  else
+                    IconButton(
+                      onPressed: () => _removePendingAttachmentAt(index),
+                      icon: const Icon(Icons.close, size: 16),
+                      tooltip: '移除附件',
+                      visualDensity: VisualDensity.standard,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
                     ),
-                  ),
                 ],
               ),
             );
@@ -2200,6 +2629,140 @@ class _ChatInputBarState extends State<ChatInputBar>
     // 只尝试删除这个明确被用户移除的 draft 路径；MessageAttachmentArchive
     // 路径不在 composer_drafts 根目录内，deleteFile 会安全地忽略它。
     unawaited(_draftArchive.deleteFile(removed.path).catchError((_) {}));
+  }
+
+  Future<void> _handlePastedTextAttachmentAction(
+    int index,
+    _PastedTextAttachmentAction action,
+  ) async {
+    if (!mounted || index < 0 || index >= _pendingAttachments.length) return;
+    final attachment = _pendingAttachments[index];
+    final pasted = attachment.pastedText;
+    if (pasted == null) return;
+    switch (action) {
+      case _PastedTextAttachmentAction.preview:
+        await _previewPastedTextAttachment(pasted);
+      case _PastedTextAttachmentAction.rename:
+        await _renamePastedTextAttachment(index, attachment, pasted);
+      case _PastedTextAttachmentAction.restore:
+        await _restorePastedTextAttachment(index, pasted);
+      case _PastedTextAttachmentAction.delete:
+        _removePendingAttachmentAt(index);
+    }
+  }
+
+  Future<void> _previewPastedTextAttachment(
+    PastedTextAttachment attachment,
+  ) async {
+    try {
+      final text = await _pastedTextAttachmentService.readText(attachment);
+      if (!mounted) return;
+      // 预览只读取首段，避免一个几十万行附件把对话页的 overlay 撑爆；原始
+      // 文件没有被截断或改写，用户仍可通过“还原为文本”取得完整内容。
+      const previewLimit = 12000;
+      final truncated = text.length > previewLimit;
+      final preview = truncated ? text.substring(0, previewLimit) : text;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(attachment.displayName),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 420, minWidth: 280),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                truncated ? '$preview\n\n（预览仅显示前 $previewLimit 个字符）' : preview,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      if (mounted) _showAttachmentError('无法读取该大粘贴附件，请删除后重新粘贴');
+    }
+  }
+
+  Future<void> _renamePastedTextAttachment(
+    int index,
+    PendingAttachment attachment,
+    PastedTextAttachment pasted,
+  ) async {
+    final controller = TextEditingController(text: pasted.displayName);
+    String? requestedName;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('重命名附件'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 120,
+            decoration: const InputDecoration(hintText: '文件名'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                requestedName = controller.text;
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      final normalized = requestedName?.trim();
+      if (normalized == null || normalized.isEmpty || !mounted) return;
+      final renamed = await _pastedTextAttachmentService.rename(
+        pasted,
+        normalized,
+      );
+      if (!mounted || index >= _pendingAttachments.length) return;
+      if (_pendingAttachments[index].stableId != attachment.stableId) return;
+      setState(
+        () => _pendingAttachments[index] = attachment.copyWith(
+          path: renamed.localPath,
+          name: renamed.displayName,
+          pastedText: renamed,
+        ),
+      );
+      _notifyDraftChanged();
+    } catch (_) {
+      if (mounted) _showAttachmentError('附件重命名失败，已保留原文件名');
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _restorePastedTextAttachment(
+    int index,
+    PastedTextAttachment attachment,
+  ) async {
+    try {
+      final source = await _pastedTextAttachmentService.readText(attachment);
+      if (!mounted || index >= _pendingAttachments.length) return;
+      final current = widget.controller.value;
+      final selection = current.selection.isValid
+          ? current.selection
+          : TextSelection.collapsed(offset: current.text.length);
+      final start = selection.start.clamp(0, current.text.length).toInt();
+      final end = selection.end.clamp(start, current.text.length).toInt();
+      final nextText = current.text.replaceRange(start, end, source);
+      _replaceComposerText(nextText, selectionOffset: start + source.length);
+      _removePendingAttachmentAt(index);
+    } catch (_) {
+      if (mounted) _showAttachmentError('无法还原该大粘贴附件，请先检查文件是否存在');
+    }
   }
 
   Widget _buildFooter(BuildContext context) {
@@ -2230,23 +2793,66 @@ class _ChatInputBarState extends State<ChatInputBar>
 
 /// 视频生成弹窗的确认结果。
 class VideoGenerationConfig {
-  const VideoGenerationConfig({
-    required this.referenceAttachments,
-    required this.extra,
-  });
+  VideoGenerationConfig({
+    required List<PendingAttachment> referenceAttachments,
+    this.firstFrameAttachment,
+    this.referenceAudioAttachment,
+    this.duration,
+    this.aspectRatio,
+    this.resolution,
+    Map<String, dynamic> extra = const <String, dynamic>{},
+  }) : referenceAttachments = List<PendingAttachment>.unmodifiable(
+         referenceAttachments.where(
+           (attachment) =>
+               attachment.stableId != firstFrameAttachment?.stableId,
+         ),
+       ),
+       extra = Map<String, dynamic>.unmodifiable(extra);
 
   final List<PendingAttachment> referenceAttachments;
+  final PendingAttachment? firstFrameAttachment;
+  final PendingAttachment? referenceAudioAttachment;
+  final int? duration;
+  final String? aspectRatio;
+  final String? resolution;
   final Map<String, dynamic> extra;
+
+  /// All files consumed by this task, preserving their explicit role while
+  /// allowing the legacy composer callback to remove them after success.
+  List<PendingAttachment> get allAttachments {
+    final result = <PendingAttachment>[];
+    final seen = <String>{};
+    void add(PendingAttachment? attachment) {
+      if (attachment == null || !seen.add(attachment.stableId)) return;
+      result.add(attachment);
+    }
+
+    for (final attachment in referenceAttachments) {
+      add(attachment);
+    }
+    add(firstFrameAttachment);
+    add(referenceAudioAttachment);
+    return List<PendingAttachment>.unmodifiable(result);
+  }
 }
 
-/// 视频生成 per-request 弹窗：显式参考图选择 + 时长 / 分辨率可选参数。
+/// 视频生成 per-request 弹窗：首帧图、多参考图、参考音频 + 时长 / 比例 /
+/// 分辨率均在本次任务中选择，不写入全局设置。
 extension on _ChatInputBarState {
   Future<VideoGenerationConfig?> _showVideoConfigDialog(
     String prompt,
     List<PendingAttachment> imageAttachments,
   ) {
-    var selectedIndex = imageAttachments.isNotEmpty ? 0 : -1;
+    final audioAttachments = _pendingAttachments
+        .where((attachment) => attachment.type == 'audio')
+        .toList(growable: false);
+    final selectedReferenceIndexes = <int>{
+      for (var index = 0; index < imageAttachments.length; index++) index,
+    };
+    var firstFrameIndex = -1;
+    var referenceAudioIndex = -1;
     var durationText = '';
+    var aspectRatio = '16:9';
     var resolution = '';
     return showDialog<VideoGenerationConfig>(
       context: context,
@@ -2274,7 +2880,7 @@ extension on _ChatInputBarState {
                     if (imageAttachments.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       Text(
-                        '参考图（可选，默认第一张）',
+                        '参考图（可多选）',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -2289,18 +2895,23 @@ extension on _ChatInputBarState {
                           itemCount: imageAttachments.length,
                           itemBuilder: (_, index) {
                             final attachment = imageAttachments[index];
-                            final selected = index == selectedIndex;
+                            final selected = selectedReferenceIndexes.contains(
+                              index,
+                            );
                             return Padding(
                               padding: const EdgeInsets.only(right: 8),
                               child: InkWell(
-                                key: ValueKey(
-                                  'video-ref-image-$index',
-                                ),
+                                key: ValueKey('video-ref-image-$index'),
                                 onTap: () {
                                   setDialogState(() {
-                                    selectedIndex = selectedIndex == index
-                                        ? -1
-                                        : index;
+                                    if (selected) {
+                                      selectedReferenceIndexes.remove(index);
+                                    } else {
+                                      if (firstFrameIndex == index) {
+                                        firstFrameIndex = -1;
+                                      }
+                                      selectedReferenceIndexes.add(index);
+                                    }
                                   });
                                 },
                                 child: Container(
@@ -2326,12 +2937,15 @@ extension on _ChatInputBarState {
                                             File(attachment.path),
                                             fit: BoxFit.cover,
                                             errorBuilder: (_, _, _) =>
-                                                const Icon(Icons.image, size: 24),
+                                                const Icon(
+                                                  Icons.image,
+                                                  size: 24,
+                                                ),
                                           ),
                                         ),
                                       ),
                                       Text(
-                                        selected ? '已选' : '可选',
+                                        selected ? '参考图' : '可选',
                                         style: TextStyle(
                                           fontSize: 10,
                                           color: selected
@@ -2348,6 +2962,83 @@ extension on _ChatInputBarState {
                         ),
                       ),
                     ],
+                    if (imageAttachments.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        key: const ValueKey('video-first-frame-field'),
+                        initialValue: firstFrameIndex,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: '首帧图（可选）',
+                          isDense: true,
+                        ),
+                        items: [
+                          const DropdownMenuItem<int>(
+                            value: -1,
+                            child: Text('不指定'),
+                          ),
+                          for (
+                            var index = 0;
+                            index < imageAttachments.length;
+                            index++
+                          )
+                            DropdownMenuItem<int>(
+                              value: index,
+                              child: Text(
+                                imageAttachments[index].name.isEmpty
+                                    ? '图片 ${index + 1}'
+                                    : imageAttachments[index].name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          setDialogState(() {
+                            firstFrameIndex = value ?? -1;
+                            if (firstFrameIndex >= 0) {
+                              selectedReferenceIndexes.remove(firstFrameIndex);
+                            }
+                          });
+                        },
+                      ),
+                    ],
+                    if (audioAttachments.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<int>(
+                        key: const ValueKey('video-reference-audio-field'),
+                        initialValue: referenceAudioIndex,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: '参考音频（可选）',
+                          isDense: true,
+                        ),
+                        items: [
+                          const DropdownMenuItem<int>(
+                            value: -1,
+                            child: Text('不指定'),
+                          ),
+                          for (
+                            var index = 0;
+                            index < audioAttachments.length;
+                            index++
+                          )
+                            DropdownMenuItem<int>(
+                              value: index,
+                              child: Text(
+                                audioAttachments[index].name.isEmpty
+                                    ? '音频 ${index + 1}'
+                                    : audioAttachments[index].name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          setDialogState(() {
+                            referenceAudioIndex = value ?? -1;
+                          });
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     TextField(
                       key: const ValueKey('video-duration-field'),
@@ -2360,6 +3051,29 @@ extension on _ChatInputBarState {
                       ),
                       onChanged: (value) {
                         durationText = value.trim();
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('video-aspect-ratio-field'),
+                      initialValue: aspectRatio,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: '宽高比（可选）',
+                        isDense: true,
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: '', child: Text('不指定')),
+                        DropdownMenuItem(value: '1:1', child: Text('1:1')),
+                        DropdownMenuItem(value: '16:9', child: Text('16:9')),
+                        DropdownMenuItem(value: '9:16', child: Text('9:16')),
+                        DropdownMenuItem(value: '4:3', child: Text('4:3')),
+                        DropdownMenuItem(value: '3:4', child: Text('3:4')),
+                      ],
+                      onChanged: (value) {
+                        setDialogState(() {
+                          aspectRatio = value ?? '';
+                        });
                       },
                     ),
                     const SizedBox(height: 12),
@@ -2403,12 +3117,33 @@ extension on _ChatInputBarState {
                   if (resolution.isNotEmpty) {
                     extra['resolution'] = resolution;
                   }
+                  if (aspectRatio.isNotEmpty) {
+                    extra['aspect_ratio'] = aspectRatio;
+                  }
+                  final selectedReferences = imageAttachments
+                      .asMap()
+                      .entries
+                      .where(
+                        (entry) => selectedReferenceIndexes.contains(entry.key),
+                      )
+                      .map((entry) => entry.value)
+                      .toList(growable: false);
                   Navigator.of(dialogContext).pop(
                     VideoGenerationConfig(
-                      referenceAttachments: selectedIndex >= 0 &&
-                              selectedIndex < imageAttachments.length
-                          ? [imageAttachments[selectedIndex]]
-                          : const <PendingAttachment>[],
+                      referenceAttachments: selectedReferences,
+                      firstFrameAttachment:
+                          firstFrameIndex >= 0 &&
+                              firstFrameIndex < imageAttachments.length
+                          ? imageAttachments[firstFrameIndex]
+                          : null,
+                      referenceAudioAttachment:
+                          referenceAudioIndex >= 0 &&
+                              referenceAudioIndex < audioAttachments.length
+                          ? audioAttachments[referenceAudioIndex]
+                          : null,
+                      duration: seconds,
+                      aspectRatio: aspectRatio.isEmpty ? null : aspectRatio,
+                      resolution: resolution.isEmpty ? null : resolution,
                       extra: extra,
                     ),
                   );

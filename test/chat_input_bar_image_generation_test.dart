@@ -460,6 +460,84 @@ void main() {
     expect(find.byKey(const ValueKey('generate-image-button')), findsNothing);
   });
 
+  testWidgets('image task panel callback receives all selected references', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = TextEditingController(text: '生成一张森林图片');
+    addTearDown(controller.dispose);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    final hasText = ValueNotifier<bool>(true);
+    addTearDown(hasText.dispose);
+    const first = PendingAttachment(
+      id: 'image-task-first',
+      path: '/drafts/first.png',
+      name: 'first.png',
+      type: 'image',
+    );
+    const second = PendingAttachment(
+      id: 'image-task-second',
+      path: '/drafts/second.png',
+      name: 'second.png',
+      type: 'image',
+    );
+    const retained = PendingAttachment(
+      id: 'image-task-retained',
+      path: '/drafts/notes.txt',
+      name: 'notes.txt',
+      type: 'document',
+    );
+    List<PendingAttachment>? received;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatInputBar(
+            controller: controller,
+            focusNode: focusNode,
+            isStreaming: false,
+            hasTextNotifier: hasText,
+            initialAttachments: const [first, second, retained],
+            onSend: (_, _) async => true,
+            onOpenImageGenerationTask: (text, attachments) async {
+              received = attachments;
+              return <String>{attachments.first.stableId};
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('添加附件'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('生成图片'));
+    await tester.pumpAndSettle();
+
+    expect(received, hasLength(2));
+    expect(received!.map((attachment) => attachment.stableId), [
+      first.stableId,
+      second.stableId,
+    ]);
+    expect(
+      find.byKey(ValueKey('pending-attachment-${first.stableId}')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(ValueKey('pending-attachment-${second.stableId}')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pending-attachment-image-task-retained')),
+      findsOneWidget,
+    );
+    expect(controller.text, isEmpty);
+    expect(hasText.value, isFalse);
+  });
+
   testWidgets('attachment menu exposes edit image entry', (tester) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);

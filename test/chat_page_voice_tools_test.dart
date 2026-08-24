@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:dio/dio.dart' show CancelToken;
+import 'package:dio/dio.dart';
+import 'package:ai_chat_app/core/ai/http_helper.dart';
 import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/core/media/audio_player.dart';
@@ -57,6 +58,7 @@ void main() {
       expect(standard['model'], 'tts-1');
       expect(standard['voice'], 'alloy');
       expect(standard['input'], '普通合成');
+      expect(standard['speed'], 1);
       expect(standard['response_format'], 'mp3');
       expect(standard.containsKey('style'), isFalse);
 
@@ -169,9 +171,9 @@ void main() {
     );
     expect(emptyResponseError, contains('声音合成未返回音频'));
 
-    final messages = await tester.runAsync(
+    final messages = (await tester.runAsync(
       () => fixture.db.messageDao.getMessagesBySession(fixture.sessionId),
-    );
+    ))!;
     final attachments = await tester.runAsync(
       () => fixture.db.attachmentDao.getAllAttachments(),
     );
@@ -182,6 +184,123 @@ void main() {
       isFalse,
     );
   });
+
+  testWidgets('generated TTS message keeps the bound media model id', (
+    tester,
+  ) async {
+    final fixture = await _createFixture(
+      tester,
+      _config(
+        baseUrl: 'http://127.0.0.1:1/v1',
+        provider: kTextToSpeechProviderOpenAiCompatible,
+        model: 'mimo-v2.5-tts',
+        channelModelId: 'tts-channel-model',
+      ),
+      serviceOverride: TextToSpeechService(
+        engine: const _FakeSpeechEngine([0x49, 0x44, 0x33]),
+        player: _FakeAudioPlayer(),
+      ),
+    );
+    addTearDown(fixture.dispose);
+
+    final error = await tester.runAsync(
+      () => synthesizeSpeechMessage(
+        ref: fixture.ref,
+        sessionId: fixture.sessionId,
+        text: '使用顶部绑定的 TTS 模型',
+      ),
+    );
+    expect(error, isNull);
+
+    final messages = (await tester.runAsync(
+      () => fixture.db.messageDao.getMessagesBySession(fixture.sessionId),
+    ))!;
+    expect(messages, hasLength(2));
+    expect(
+      messages
+          .where((message) => message.role == 'assistant')
+          .map((message) => message.channelModelId),
+      contains('tts-channel-model'),
+    );
+    // Conversation Markdown archiving is intentionally fire-and-forget in
+    // production; let that best-effort write finish before fixture cleanup.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+  });
+
+  testWidgets('voice clone keeps its reference audio in the user timeline', (
+    tester,
+  ) async {
+    final adapter = _CapturingSpeechAdapter();
+    debugDioFactory = (_) {
+      final dio = Dio();
+      dio.httpClientAdapter = adapter;
+      return dio;
+    };
+    addTearDown(() {
+      debugDioFactory = null;
+      adapter.close(force: true);
+    });
+    final fixture = await _createFixture(
+      tester,
+      _config(
+        baseUrl: 'https://voice.example.test/v1',
+        provider: kTextToSpeechProviderSimiRouter,
+        model: 'mimo-v2.5-tts-voiceclone',
+        channelModelId: 'voice-clone-model',
+      ),
+    );
+    addTearDown(fixture.dispose);
+    final reference = File(p.join(fixture.root.path, 'clone-reference.wav'));
+    reference.writeAsBytesSync(<int>[0x52, 0x49, 0x46, 0x46], flush: true);
+
+    final error = await tester.runAsync(
+      () => synthesizeSpeechMessage(
+        ref: fixture.ref,
+        sessionId: fixture.sessionId,
+        text: '保留参考音频',
+        referenceAudioPath: reference.path,
+      ),
+    );
+    expect(error, isNull);
+    expect(adapter.payload?['model'], 'mimo-v2.5-tts-voiceclone');
+    expect(
+      adapter.payload?['voice'],
+      'data:audio/wav;base64,${base64Encode(reference.readAsBytesSync())}',
+    );
+
+    final messages = (await tester.runAsync(
+      () => fixture.db.messageDao.getMessagesBySession(fixture.sessionId),
+    ))!;
+    final attachments = (await tester.runAsync(
+      fixture.db.attachmentDao.getAllAttachments,
+    ))!;
+    final userMessage = messages.singleWhere(
+      (message) => message.role == 'user',
+    );
+    final assistantMessage = messages.singleWhere(
+      (message) => message.role == 'assistant',
+    );
+    final userAttachments = attachments
+        .where((attachment) => attachment.messageId == userMessage.id)
+        .toList(growable: false);
+    final assistantAttachments = attachments
+        .where((attachment) => attachment.messageId == assistantMessage.id)
+        .toList(growable: false);
+    expect(userAttachments, hasLength(1));
+    expect(userAttachments.single.fileType, 'audio');
+    expect(userAttachments.single.fileName, 'clone-reference.wav');
+    expect(File(userAttachments.single.localPath).existsSync(), isTrue);
+    expect(assistantAttachments, hasLength(1));
+    expect(assistantAttachments.single.fileType, 'audio');
+    // Conversation Markdown archiving is intentionally best-effort and
+    // fire-and-forget in production. Let that write leave the shared fixture
+    // directory before teardown removes it.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+  });
 }
 
 TextToSpeechConfig _config({
@@ -190,12 +309,14 @@ TextToSpeechConfig _config({
   required String model,
   String style = '',
   String? referenceAudioPath,
+  String? channelModelId,
 }) {
   return TextToSpeechConfig(
     enabled: true,
     provider: provider,
     baseUrl: baseUrl,
     model: model,
+    channelModelId: channelModelId,
     voice: 'alloy',
     apiKeyEncrypted: KeyEncryptor.encrypt('voice-tools-test-key'),
     speed: '1.0',
@@ -395,6 +516,32 @@ class _FakeSpeechServer {
   }
 
   Future<void> close() => server.close(force: true);
+}
+
+class _CapturingSpeechAdapter implements HttpClientAdapter {
+  Map<String, dynamic>? payload;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final data = options.data;
+    payload = data is String
+        ? jsonDecode(data) as Map<String, dynamic>
+        : (data as Map).cast<String, dynamic>();
+    return ResponseBody.fromBytes(
+      const <int>[0x49, 0x44, 0x33],
+      200,
+      headers: const <String, List<String>>{
+        'content-type': <String>['audio/mpeg'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 void _requestCountIncrement(_FakeSpeechServer server) {

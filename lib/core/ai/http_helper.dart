@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import 'http_client_adapter_factory.dart';
 
-/// 测试注入点：非 null 时 `getDio` 返回该工厂构造的实例，
+/// 测试注入点：非 null 时 `getDio` / `createDio` 返回该工厂构造的实例，
 /// 不再走真实网络与缓存。widget 测试的 FakeAsync 环境无法完成
 /// 真实 socket 事件，相关协议测试统一用 fake adapter 回环。
 @visibleForTesting
@@ -83,6 +83,8 @@ void disposeAllDio() {
 
 /// 创建带超时的 Dio 实例（不缓存，用于模型获取等一次性请求）
 Dio createDio() {
+  final factory = debugDioFactory;
+  if (factory != null) return factory('');
   final dio = Dio(
     BaseOptions(
       connectTimeout: const Duration(seconds: 30),

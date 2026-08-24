@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:ai_chat_app/core/database/app_database.dart';
-import 'package:ai_chat_app/core/ai/model_switch_record.dart';
 import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/memory/dreaming_service.dart';
 import 'package:ai_chat_app/core/memory/reflection_service.dart';
@@ -1434,7 +1433,7 @@ void main() {
     },
   );
 
-  testWidgets('mobile model switch smoke: records timeline event', (
+  testWidgets('mobile model switch smoke: keeps switch out of timeline', (
     tester,
   ) async {
     final db = await pumpMobileApp(
@@ -1464,9 +1463,11 @@ void main() {
       },
     );
 
-    expect(find.text('OpenAI / gpt-4o'), findsOneWidget);
+    // Mobile header deliberately keeps the compact model name visible; the
+    // channel prefix remains available in the menu and message metadata.
+    expect(find.text('gpt-4o'), findsOneWidget);
 
-    await tester.tap(find.text('OpenAI / gpt-4o'));
+    await tester.tap(find.text('gpt-4o'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('gpt-4o-mini').last);
     await tester.pumpAndSettle();
@@ -1475,11 +1476,7 @@ void main() {
     expect(session?.defaultChannelModelId, 'model-gpt-4o-mini');
 
     final messages = await db.messageDao.getMessagesBySession('session-1');
-    expect(messages, hasLength(1));
-    expect(messages.single.messageType, kModelSwitchMessageType);
-    expect(messages.single.role, 'system');
-    expect(messages.single.content, contains('OpenAI / gpt-4o'));
-    expect(messages.single.content, contains('OpenAI / gpt-4o-mini'));
+    expect(messages, isEmpty);
     expect(find.textContaining('已切换模型'), findsWidgets);
     expect(tester.takeException(), isNull);
   });

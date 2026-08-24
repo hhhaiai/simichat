@@ -408,6 +408,26 @@ void simiRouterTtsAndAsrUiTests() {
     // 标准模式：8 种音色下拉 + 语速滑条 + 输出格式。
     expect(find.text('音色'), findsOneWidget);
     expect(find.text('冰糖 · 活泼少女'), findsOneWidget);
+    // The dialog also contains the provider preset dropdown; the order is
+    // provider, model, voice, output format.
+    final voiceDropdown = find.byType(DropdownButtonFormField<String>).at(2);
+    await tester.ensureVisible(voiceDropdown);
+    await tester.tap(voiceDropdown);
+    await tester.pumpAndSettle();
+    for (final label in const [
+      '冰糖 · 活泼少女',
+      '茉莉 · 知性女声',
+      'Mia · 活泼英文女声',
+      'Chloe · 甜美梦幻',
+      '苏打 · 阳光少年',
+      '白桦 · 成熟男声',
+      'Milo · 阳光英文男声',
+      'Dean · 沉稳温柔',
+    ]) {
+      expect(find.text(label), findsWidgets);
+    }
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
     expect(find.byType(Slider), findsOneWidget);
     expect(find.text('输出格式'), findsOneWidget);
   });

@@ -41,6 +41,7 @@ import 'shared/providers/session_provider.dart';
 import 'shared/providers/settings_provider.dart';
 import 'shared/providers/reflection_provider.dart';
 import 'shared/providers/user_profile_provider.dart';
+import 'shared/providers/creation_mode_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -145,6 +146,7 @@ class AppBootstrap extends ConsumerStatefulWidget {
     super.key,
     this.startupTasksRunner,
     this.mediaRecoveryRunner,
+    this.chunkedContentRecoveryRunner,
   });
 
   @visibleForTesting
@@ -154,6 +156,11 @@ class AppBootstrap extends ConsumerStatefulWidget {
   /// database/notifier，并在首帧后异步启动，不阻塞聊天页面。
   @visibleForTesting
   final Future<void> Function()? mediaRecoveryRunner;
+
+  /// 长文本任务恢复只收敛进程死亡前的 active 行为“已中断，可继续”；它
+  /// 不会在首帧后自动重发消耗型 chunk 请求。
+  @visibleForTesting
+  final Future<void> Function()? chunkedContentRecoveryRunner;
 
   @override
   ConsumerState<AppBootstrap> createState() => _AppBootstrapState();
@@ -171,6 +178,7 @@ class _AppBootstrapState extends ConsumerState<AppBootstrap> {
       // AppDatabase，否则首次会话创建可能与 Skills 植入竞争同一个 SQLite 文件。
       unawaited(runStartupTasks(ref.read(databaseProvider)));
       unawaited(_runMediaRecovery());
+      unawaited(_runChunkedContentRecovery());
     });
   }
 
@@ -180,6 +188,15 @@ class _AppBootstrapState extends ConsumerState<AppBootstrap> {
           () => startUniversalMediaRecovery(ref))();
     } catch (error) {
       debugPrint('Universal media recovery failed: $error');
+    }
+  }
+
+  Future<void> _runChunkedContentRecovery() async {
+    try {
+      await (widget.chunkedContentRecoveryRunner ??
+          () => startChunkedContentTaskRecovery(ref))();
+    } catch (error) {
+      debugPrint('Chunked content recovery failed: $error');
     }
   }
 
@@ -320,16 +337,107 @@ class _CancelStreamingIntent extends Intent {
   const _CancelStreamingIntent();
 }
 
+/// Apply one configured channel model to its task route.  The same helper is
+/// used by the top selector and the bottom creation-mode switcher so the
+/// displayed model, task options and actual request route cannot diverge.
+Future<void> applyCreationModelRoute(
+  WidgetRef ref,
+  ChannelModelWithChannel model,
+) async {
+  final name = model.channelModel.modelName.trim();
+  final capability = model.channelModel.capability;
+  final capabilities = model.capabilities;
+  if (capabilities.contains(ModelCapability.image) ||
+      ModelCapability.isImage(capability)) {
+    await ref
+        .read(imageGenerationConfigProvider.notifier)
+        .applyChannelModel(model);
+    return;
+  }
+  if (capabilities.contains(ModelCapability.video) ||
+      ModelCapability.isVideo(capability)) {
+    await ref
+        .read(universalMediaConfigProvider.notifier)
+        .applyMediaModel(
+          UniversalMediaKind.video,
+          name,
+          channelModelId: model.channelModel.id,
+          endpoint: name.toLowerCase().contains('grok-imagine-video')
+              ? '/v1/videos/generations'
+              : '/v1/videos',
+          // Always write a profile snapshot when selecting a model.  Passing
+          // null would leave a previously selected xAI/Sora profile and send
+          // the new model with stale wire fields.
+          profile: findUniversalMediaProviderProfile(
+            name.toLowerCase().contains('grok-imagine-video')
+                ? kUniversalMediaProfileXaiGrokVideo
+                : kUniversalMediaProfileOpenAiCompatibleVideo,
+            kind: UniversalMediaKind.video,
+          ),
+        );
+    return;
+  }
+  if (capabilities.contains(ModelCapability.music) ||
+      ModelCapability.isMusic(capability)) {
+    await ref
+        .read(universalMediaConfigProvider.notifier)
+        .applyMediaModel(
+          UniversalMediaKind.music,
+          name,
+          channelModelId: model.channelModel.id,
+          profile: findUniversalMediaProviderProfile(
+            kUniversalMediaProfileMusicOpenAiCompatible,
+            kind: UniversalMediaKind.music,
+          ),
+        );
+    ref.read(voiceCreationToolProvider.notifier).state =
+        VoiceCreationTool.music;
+    await ref
+        .read(voiceCreationRoutePreferencesProvider.notifier)
+        .setPreferred(VoiceCreationTool.music, model.channelModel.id);
+    return;
+  }
+  final voiceCapability = ModelCapability.voiceCapabilityForModel(
+    modelId: name,
+    capabilities: capabilities,
+  );
+  if (voiceCapability == ModelCapability.asr) {
+    await ref
+        .read(speechToTextConfigProvider.notifier)
+        .applyChannelModel(model);
+    ref.read(voiceCreationToolProvider.notifier).state =
+        VoiceCreationTool.recognition;
+    await ref
+        .read(voiceCreationRoutePreferencesProvider.notifier)
+        .setPreferred(VoiceCreationTool.recognition, model.channelModel.id);
+    return;
+  }
+  await ref.read(textToSpeechConfigProvider.notifier).applyChannelModel(model);
+  final tool = switch (voiceCapability) {
+    ModelCapability.voiceDesign => VoiceCreationTool.design,
+    ModelCapability.voiceClone => VoiceCreationTool.clone,
+    _ => VoiceCreationTool.synthesis,
+  };
+  ref.read(voiceCreationToolProvider.notifier).state = tool;
+  await ref
+      .read(voiceCreationRoutePreferencesProvider.notifier)
+      .setPreferred(tool, model.channelModel.id);
+}
+
 /// 顶部模型选择器：移动端和桌面端共用同一套可访问的模型切换入口。
 ///
 /// 这里的列表只来自本地已配置渠道，不把测试模型或模型名称当成云端能力。
-/// 持久化和会话记录仍由 [switchConversationModel] 负责；本组件只负责把
-/// 选择状态、加载状态和失败反馈稳定地呈现在聊天顶部。
+/// 会话默认模型的持久化仍由 [switchConversationModel] 负责；顶部工作区切换
+/// 使用无消息记录的事务模式，本组件只负责把选择、能力任务和失败反馈稳定地
+/// 呈现在聊天顶部。
 class ChatModelSelector extends ConsumerWidget {
   const ChatModelSelector({super.key});
 
   static const selectorKey = ValueKey<String>('chat-model-selector');
-  static const _maxControlWidth = 268.0;
+  static const _returnToChatValue = '__simichat_return_to_chat__';
+  // Keep enough room for the full media model id plus the task badge and
+  // arrow. The parent title still caps the control on very narrow phones.
+  static const _maxControlWidth = 320.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -337,6 +445,9 @@ class ChatModelSelector extends ConsumerWidget {
     final allConfiguredAsync = ref.watch(allConfiguredModelsProvider);
     final selectedId = ref.watch(selectedModelIdProvider);
     final activeSession = ref.watch(activeSessionProvider);
+    final creationMode = ref.watch(creationModeProvider);
+    final activeCreationModelId = ref.watch(activeCreationModelIdProvider);
+    final voiceCreationTool = ref.watch(voiceCreationToolProvider);
     final preferredModelId = _preferredModelId(activeSession, selectedId);
 
     return modelsAsync.when(
@@ -358,7 +469,7 @@ class ChatModelSelector extends ConsumerWidget {
         },
       ),
       data: (models) {
-        if (models.isEmpty) {
+        if (models.isEmpty && creationMode == CreationMode.chat) {
           return _buildStateControl(
             context,
             icon: Icons.add_circle_outline_rounded,
@@ -368,54 +479,336 @@ class ChatModelSelector extends ConsumerWidget {
           );
         }
 
-        final current = _findModel(models, preferredModelId);
-        final currentLabel = current?.displayLabel ?? '未选择模型';
+        final configuredModels = allConfiguredAsync.valueOrNull ?? models;
+        final workspaceModels = _modelsForCreationMode(
+          configuredModels,
+          creationMode,
+        );
+        final resolvedChatModelId = resolvePreferredChatModelId(
+          models,
+          selectedModelId: preferredModelId,
+        );
+        final current = creationMode == CreationMode.chat
+            ? _findModel(models, resolvedChatModelId)
+            : _resolveCreationModel(
+                workspaceModels,
+                activeCreationModelId: activeCreationModelId,
+              );
+        // 顶部窄屏控件只展示真正可切换的模型名。渠道名保留在弹出的分组
+        // 菜单和消息元数据中；否则长渠道名会先占满胶囊宽度，用户看不到
+        // 自己实际选中的模型。
+        final currentModelName =
+            current?.channelModel.modelName ??
+            (creationMode == CreationMode.chat
+                ? '未选择模型'
+                : '未配置${creationMode.label}模型');
+        final effectiveVoiceTool =
+            creationMode == CreationMode.voice &&
+                current != null &&
+                !_voiceToolSupportedByModel(current, voiceCreationTool)
+            ? _voiceToolForModel(current)
+            : voiceCreationTool;
+        final taskLabel = creationMode == CreationMode.chat
+            ? null
+            : creationMode == CreationMode.voice
+            ? effectiveVoiceTool.label
+            : creationMode.label;
         return Semantics(
           button: true,
           container: true,
-          label: '模型选择器，当前模型：$currentLabel',
+          label:
+              '模型选择器，当前模型：$currentModelName${taskLabel == null ? '' : '，当前任务：$taskLabel'}',
           hint: '点击打开模型列表',
-          child: PopupMenuButton<String>(
-            key: selectorKey,
-            tooltip: '切换模型',
-            padding: EdgeInsets.zero,
-            position: PopupMenuPosition.under,
-            constraints: const BoxConstraints(
-              minWidth: 220,
-              maxWidth: 340,
-              maxHeight: 480,
-            ),
-            onSelected: (modelId) {
-              final target = _findModel(
-                allConfiguredAsync.valueOrNull ?? models,
-                modelId,
-              );
-              if (target == null) return;
-              if (!models.any((m) => m.channelModel.id == modelId)) {
-                // 媒体模型：点击不是切换聊天模型，而是把该模型配置到
-                // 对应的生成 / 语音工具上。
-                unawaited(_applyMediaModel(context, ref, target));
-                return;
-              }
-              unawaited(
-                _switchModel(context, ref, target: target, previous: current),
-              );
-            },
-            itemBuilder: (_) => _buildMenuItems(
-              context,
-              // 菜单展示全部已配置模型（含 TTS / STT / 生图等媒体模型，
-              // 以能力标签标注且不可选）；聊天选择仍只允许聊天类模型。
-              allConfiguredAsync.valueOrNull ?? models,
-              selectedId: current?.channelModel.id,
-              selectableIds: models
-                  .map((m) => m.channelModel.id)
-                  .toSet(),
-            ),
-            child: _buildModelControl(context, currentLabel),
+          child: _buildModelPickerTrigger(
+            context: context,
+            ref: ref,
+            creationMode: creationMode,
+            chatModels: models,
+            configuredModels: configuredModels,
+            workspaceModels: workspaceModels,
+            current: current,
+            currentModelName: currentModelName,
+            taskLabel: taskLabel,
           ),
         );
       },
     );
+  }
+
+  Widget _buildModelPickerTrigger({
+    required BuildContext context,
+    required WidgetRef ref,
+    required CreationMode creationMode,
+    required List<ChannelModelWithChannel> chatModels,
+    required List<ChannelModelWithChannel> configuredModels,
+    required List<ChannelModelWithChannel> workspaceModels,
+    required ChannelModelWithChannel? current,
+    required String currentModelName,
+    required String? taskLabel,
+  }) {
+    final child = _buildModelControl(
+      context,
+      currentModelName,
+      taskLabel: taskLabel,
+    );
+    // In a media workspace the picker is a task-specific selector, not the
+    // global model catalog. Showing chat / embedding / rerank rows here makes
+    // them look like valid image or video targets. Chat mode intentionally
+    // keeps the full catalog so a media row can still configure that tool.
+    final visibleModels = creationMode == CreationMode.chat
+        ? configuredModels
+        : workspaceModels;
+    final selectableIds =
+        (creationMode == CreationMode.chat ? chatModels : visibleModels)
+            .map((model) => model.channelModel.id)
+            .toSet();
+    void onSelected(String modelId) {
+      if (modelId == _returnToChatValue) {
+        _returnToChat(context, ref);
+        return;
+      }
+      final target = _findModel(configuredModels, modelId);
+      if (target == null) return;
+      final canSelect = selectableIds.contains(modelId);
+      if (!canSelect) {
+        // 跨任务点击媒体模型时，选择、任务和配置作为一次原子工作区切换。
+        final targetMode = _creationModeForModel(target);
+        if (targetMode == CreationMode.chat) {
+          unawaited(_applyMediaModel(context, ref, target));
+        } else {
+          unawaited(_selectCreationModel(context, ref, target));
+        }
+        return;
+      }
+      if (creationMode == CreationMode.chat) {
+        unawaited(
+          _switchModel(context, ref, target: target, previous: current),
+        );
+      } else {
+        unawaited(_selectCreationModel(context, ref, target));
+      }
+    }
+
+    // 390dp 左右的移动端使用底部抽屉，320dp 的窄屏 / 旧桌面测试保留
+    // PopupMenu 作为紧凑降级，避免模型列表遮挡整个输入区。
+    if (MediaQuery.sizeOf(context).width < 360) {
+      return PopupMenuButton<String>(
+        key: selectorKey,
+        tooltip: '切换模型',
+        padding: EdgeInsets.zero,
+        position: PopupMenuPosition.under,
+        constraints: const BoxConstraints(
+          minWidth: 220,
+          maxWidth: 340,
+          maxHeight: 480,
+        ),
+        onSelected: onSelected,
+        itemBuilder: (_) => _buildMenuItems(
+          context,
+          visibleModels,
+          selectedId: current?.channelModel.id,
+          selectableIds: selectableIds,
+          includeReturnToChat: creationMode != CreationMode.chat,
+        ),
+        child: child,
+      );
+    }
+
+    return InkWell(
+      key: selectorKey,
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => _showModelSelectionSheet(
+        context: context,
+        creationMode: creationMode,
+        chatModels: chatModels,
+        configuredModels: visibleModels,
+        workspaceModels: workspaceModels,
+        current: current,
+        onSelected: onSelected,
+      ),
+      child: Tooltip(message: '切换模型', child: child),
+    );
+  }
+
+  Future<void> _showModelSelectionSheet({
+    required BuildContext context,
+    required CreationMode creationMode,
+    required List<ChannelModelWithChannel> chatModels,
+    required List<ChannelModelWithChannel> configuredModels,
+    required List<ChannelModelWithChannel> workspaceModels,
+    required ChannelModelWithChannel? current,
+    required void Function(String modelId) onSelected,
+  }) async {
+    var query = '';
+    final searchController = TextEditingController();
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        showDragHandle: true,
+        builder: (sheetContext) => StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            final normalized = query.trim().toLowerCase();
+            final filtered = configuredModels
+                .where((model) {
+                  if (normalized.isEmpty) return true;
+                  final haystack =
+                      '${model.channel.name} ${model.channelModel.modelName} ${ModelCapability.label(model.channelModel.capability)}'
+                          .toLowerCase();
+                  return haystack.contains(normalized);
+                })
+                .toList(growable: false);
+            final selectableIds =
+                (creationMode == CreationMode.chat
+                        ? chatModels
+                        : workspaceModels)
+                    .map((model) => model.channelModel.id)
+                    .toSet();
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 16,
+                right: 16,
+                bottom: MediaQuery.viewInsetsOf(sheetContext).bottom + 16,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 620),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '选择模型',
+                      style: Theme.of(sheetContext).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: searchController,
+                      onChanged: (value) => setSheetState(() => query = value),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: '搜索模型、任务或能力',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (_, index) {
+                          final model = filtered[index];
+                          final selected =
+                              model.channelModel.id == current?.channelModel.id;
+                          final selectable =
+                              selectableIds.contains(model.channelModel.id) ||
+                              (creationMode == CreationMode.chat &&
+                                  _creationModeForModel(model) !=
+                                      CreationMode.chat);
+                          return ListTile(
+                            key: ValueKey(
+                              'model-sheet-${model.channelModel.id}',
+                            ),
+                            enabled: selectable,
+                            leading: Icon(
+                              selected
+                                  ? Icons.check_circle
+                                  : Icons.auto_awesome_outlined,
+                              color: selected
+                                  ? Theme.of(sheetContext).colorScheme.primary
+                                  : null,
+                            ),
+                            title: Text(model.channelModel.modelName),
+                            subtitle: Text(
+                              '${model.channel.name} · ${ModelCapability.label(model.channelModel.capability)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: !selectable
+                                ? null
+                                : () {
+                                    Navigator.of(sheetContext).pop();
+                                    onSelected(model.channelModel.id);
+                                  },
+                          );
+                        },
+                      ),
+                    ),
+                    if (creationMode != CreationMode.chat) ...[
+                      OutlinedButton.icon(
+                        key: const ValueKey<String>(
+                          'model-sheet-return-to-chat',
+                        ),
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          onSelected(_returnToChatValue);
+                        },
+                        icon: const Icon(Icons.chat_bubble_outline_rounded),
+                        label: const Text('返回文字对话'),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(sheetContext).pop();
+                        Navigator.of(context).pushNamed('/settings');
+                      },
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('管理模型'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      searchController.dispose();
+    }
+  }
+
+  List<ChannelModelWithChannel> _modelsForCreationMode(
+    List<ChannelModelWithChannel> models,
+    CreationMode mode,
+  ) {
+    if (mode == CreationMode.chat) return models;
+    return models
+        .where((model) {
+          final capabilities = model.capabilities;
+          return switch (mode) {
+            CreationMode.image =>
+              capabilities.contains(ModelCapability.image) ||
+                  ModelCapability.isImage(model.channelModel.capability),
+            CreationMode.video =>
+              capabilities.contains(ModelCapability.video) ||
+                  ModelCapability.isVideo(model.channelModel.capability),
+            CreationMode.voice =>
+              capabilities.contains(ModelCapability.audio) ||
+                  capabilities.contains(ModelCapability.tts) ||
+                  capabilities.contains(ModelCapability.asr) ||
+                  capabilities.contains(ModelCapability.voiceDesign) ||
+                  capabilities.contains(ModelCapability.voiceClone) ||
+                  capabilities.contains(ModelCapability.music) ||
+                  ModelCapability.isAudio(model.channelModel.capability) ||
+                  ModelCapability.isTts(model.channelModel.capability) ||
+                  ModelCapability.isAsr(model.channelModel.capability) ||
+                  ModelCapability.isVoiceDesign(
+                    model.channelModel.capability,
+                  ) ||
+                  ModelCapability.isVoiceClone(model.channelModel.capability) ||
+                  ModelCapability.isMusic(model.channelModel.capability),
+            CreationMode.chat => true,
+          };
+        })
+        .toList(growable: false);
+  }
+
+  ChannelModelWithChannel? _resolveCreationModel(
+    List<ChannelModelWithChannel> models, {
+    required String? activeCreationModelId,
+  }) {
+    if (models.isEmpty) return null;
+    return _findModel(models, activeCreationModelId) ?? models.first;
   }
 
   String? _preferredModelId(
@@ -481,7 +874,11 @@ class ChatModelSelector extends ConsumerWidget {
     );
   }
 
-  Widget _buildModelControl(BuildContext context, String label) {
+  Widget _buildModelControl(
+    BuildContext context,
+    String label, {
+    String? taskLabel,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: _maxControlWidth),
@@ -499,17 +896,49 @@ class ChatModelSelector extends ConsumerWidget {
             Icon(Icons.auto_awesome_rounded, size: 15, color: scheme.primary),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: scheme.onSurface,
+              // Keep the selected model name readable instead of replacing
+              // it with an ellipsis.  Long media ids scale down only inside
+              // this flexible slot, while the trailing arrow remains fixed
+              // and visible as the picker affordance.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurface,
+                  ),
                 ),
               ),
             ),
+            if (taskLabel != null) ...[
+              const SizedBox(width: 6),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    taskLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(width: 2),
             Icon(
               Icons.keyboard_arrow_down_rounded,
@@ -527,6 +956,7 @@ class ChatModelSelector extends ConsumerWidget {
     List<ChannelModelWithChannel> models, {
     required String? selectedId,
     required Set<String> selectableIds,
+    bool includeReturnToChat = false,
   }) {
     // 旧版"按能力+名称"去重曾给同一模型写入重复行（chat 与媒体能力各一），
     // 菜单按 (渠道, 模型名) 去重：优先保留媒体能力行，避免同名重复与
@@ -547,7 +977,20 @@ class ChatModelSelector extends ConsumerWidget {
       grouped.putIfAbsent(model.channel.name, () => []).add(model);
     }
 
-    final items = <PopupMenuEntry<String>>[];
+    final items = <PopupMenuEntry<String>>[
+      if (includeReturnToChat)
+        const PopupMenuItem<String>(
+          value: _returnToChatValue,
+          child: Row(
+            children: [
+              Icon(Icons.chat_bubble_outline_rounded, size: 18),
+              SizedBox(width: 10),
+              Text('返回文字对话'),
+            ],
+          ),
+        ),
+      if (includeReturnToChat) const PopupMenuDivider(height: 1),
+    ];
     for (final entry in grouped.entries) {
       if (items.isNotEmpty) {
         items.add(const PopupMenuDivider(height: 1));
@@ -654,8 +1097,9 @@ class ChatModelSelector extends ConsumerWidget {
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme
-                                .surfaceContainerHighest,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
@@ -683,55 +1127,134 @@ class ChatModelSelector extends ConsumerWidget {
 
   /// 媒体模型点击：把模型配置到对应工具（生图 / TTS / STT / 视频 / 音乐），
   /// 不修改会话默认聊天模型。
-  Future<void> _applyMediaModel(
+  Future<void> _selectCreationModel(
     BuildContext context,
     WidgetRef ref,
     ChannelModelWithChannel model,
   ) async {
-    final name = model.channelModel.modelName;
-    final capability = model.channelModel.capability;
-    final label = ModelCapability.label(capability);
-    String message;
-    switch (capability) {
-      case ModelCapability.image:
-        await ref
-            .read(imageGenerationConfigProvider.notifier)
-            .setModel(name);
-        message = '已把 $name 设为图片生成模型（生成图片 / 编辑图片工具使用）';
-      case ModelCapability.audio:
-        final lower = name.toLowerCase();
-        final isTts =
-            lower.contains('tts') ||
-            lower.contains('text-to-speech') ||
-            lower.contains('voice') ||
-            lower.contains('speech') &&
-                !lower.contains('to-text');
-        if (isTts) {
-          await ref
-              .read(textToSpeechConfigProvider.notifier)
-              .applyModel(name);
-          message = '已把 $name 设为语音合成（TTS）模型';
-        } else {
-          await ref
-              .read(speechToTextConfigProvider.notifier)
-              .applyModel(name);
-          message = '已把 $name 设为语音识别（STT）模型';
-        }
-      case ModelCapability.video:
-        await ref
-            .read(universalMediaConfigProvider.notifier)
-            .applyMediaModel(UniversalMediaKind.video, name);
-        message = '已把 $name 设为视频生成模型';
-      case ModelCapability.music:
-        await ref
-            .read(universalMediaConfigProvider.notifier)
-            .applyMediaModel(UniversalMediaKind.music, name);
-        message = '已把 $name 设为音乐生成模型';
-      default:
-        message = '$name（$label）请在对应功能中配置使用';
+    final mode = _creationModeForModel(model);
+    final nextVoiceTool = mode == CreationMode.voice
+        ? _voiceToolForModel(model)
+        : null;
+    try {
+      // Apply the request route first.  The AppBar must not advertise a model
+      // until its channel/profile/endpoint configuration is usable; otherwise
+      // a persistence/configuration failure leaves the visible model and the
+      // actual request route pointing at different providers.
+      await _applyMediaModel(context, ref, model, showMessage: false);
+      ref.read(activeCreationModelIdProvider.notifier).state =
+          model.channelModel.id;
+      ref.read(creationModeProvider.notifier).state = mode;
+      if (nextVoiceTool != null) {
+        ref.read(voiceCreationToolProvider.notifier).state = nextVoiceTool;
+      }
+      if (context.mounted) {
+        _showMessage(context, _mediaModelAppliedMessage(model));
+      }
+    } catch (_) {
+      if (context.mounted) {
+        _showMessage(context, '媒体模型切换失败，已保持原模型和输入');
+      }
     }
-    if (!context.mounted) return;
-    _showMessage(context, message);
+  }
+
+  void _returnToChat(BuildContext context, WidgetRef ref) {
+    final sessionModelId = ref
+        .read(activeSessionProvider)
+        .valueOrNull
+        ?.defaultChannelModelId;
+    final chatModelId = sessionModelId ?? ref.read(selectedModelIdProvider);
+    ref.read(activeCreationModelIdProvider.notifier).state = chatModelId;
+    ref.read(creationModeProvider.notifier).state = CreationMode.chat;
+    _showMessage(context, '已返回文字对话');
+  }
+
+  CreationMode _creationModeForModel(ChannelModelWithChannel model) {
+    final capabilities = model.capabilities;
+    if (capabilities.contains(ModelCapability.image) ||
+        ModelCapability.isImage(model.channelModel.capability)) {
+      return CreationMode.image;
+    }
+    if (capabilities.contains(ModelCapability.video) ||
+        ModelCapability.isVideo(model.channelModel.capability)) {
+      return CreationMode.video;
+    }
+    if (capabilities.contains(ModelCapability.audio) ||
+        capabilities.contains(ModelCapability.tts) ||
+        capabilities.contains(ModelCapability.asr) ||
+        capabilities.contains(ModelCapability.voiceDesign) ||
+        capabilities.contains(ModelCapability.voiceClone) ||
+        capabilities.contains(ModelCapability.music) ||
+        ModelCapability.isAudio(model.channelModel.capability) ||
+        ModelCapability.isMusic(model.channelModel.capability)) {
+      return CreationMode.voice;
+    }
+    return CreationMode.chat;
+  }
+
+  VoiceCreationTool _voiceToolForModel(ChannelModelWithChannel model) {
+    final capabilities = model.capabilities;
+    return switch (ModelCapability.voiceCapabilityForModel(
+      modelId: model.channelModel.modelName,
+      capabilities: capabilities,
+    )) {
+      ModelCapability.asr => VoiceCreationTool.recognition,
+      ModelCapability.music => VoiceCreationTool.music,
+      ModelCapability.voiceDesign => VoiceCreationTool.design,
+      ModelCapability.voiceClone => VoiceCreationTool.clone,
+      _ => VoiceCreationTool.synthesis,
+    };
+  }
+
+  bool _voiceToolSupportedByModel(
+    ChannelModelWithChannel model,
+    VoiceCreationTool tool,
+  ) {
+    final capabilities = model.capabilities;
+    final explicit = switch (tool) {
+      VoiceCreationTool.synthesis => ModelCapability.tts,
+      VoiceCreationTool.recognition => ModelCapability.asr,
+      VoiceCreationTool.music => ModelCapability.music,
+      VoiceCreationTool.design => ModelCapability.voiceDesign,
+      VoiceCreationTool.clone => ModelCapability.voiceClone,
+    };
+    if (capabilities.contains(explicit)) return true;
+    // An umbrella `audio` row has no task metadata. Treat the central
+    // capability resolver as its single compatibility source so the model
+    // capsule cannot claim TTS while the selected legacy model is ASR.
+    if (capabilities.contains(ModelCapability.audio)) {
+      return _voiceToolForModel(model) == tool;
+    }
+    return false;
+  }
+
+  Future<void> _applyMediaModel(
+    BuildContext context,
+    WidgetRef ref,
+    ChannelModelWithChannel model, {
+    bool showMessage = true,
+  }) async {
+    await applyCreationModelRoute(ref, model);
+    final message = _mediaModelAppliedMessage(model);
+    if (showMessage && context.mounted) _showMessage(context, message);
+  }
+
+  String _mediaModelAppliedMessage(ChannelModelWithChannel model) {
+    final name = model.channelModel.modelName;
+    final capabilities = model.capabilities;
+    return capabilities.contains(ModelCapability.image)
+        ? '已把 $name 设为图片生成模型（生成图片 / 编辑图片工具使用）'
+        : capabilities.contains(ModelCapability.video)
+        ? '已把 $name 设为视频生成模型'
+        : capabilities.contains(ModelCapability.asr)
+        ? '已把 $name 设为语音识别（STT）模型'
+        : capabilities.contains(ModelCapability.music)
+        ? '已把 $name 设为音乐生成模型'
+        : capabilities.contains(ModelCapability.voiceDesign)
+        ? '已把 $name 设为声音设计模型'
+        : capabilities.contains(ModelCapability.voiceClone)
+        ? '已把 $name 设为声音克隆模型'
+        : '已把 $name 设为语音合成（TTS）模型';
   }
 
   Future<void> _switchModel(
@@ -747,12 +1270,13 @@ class ChatModelSelector extends ConsumerWidget {
         modelLabel: target.displayLabel,
         previousModelId: previous?.channelModel.id,
         previousModelLabel: previous?.displayLabel,
+        recordInConversation: false,
       );
       if (!context.mounted || !result.changed) return;
-      _showMessage(
-        context,
-        result.recorded ? '已切换模型，记录已写入当前对话' : result.message,
-      );
+      ref.read(activeCreationModelIdProvider.notifier).state =
+          target.channelModel.id;
+      ref.read(creationModeProvider.notifier).state = CreationMode.chat;
+      _showMessage(context, result.recorded ? '已切换模型，记录已写入当前对话' : '已切换模型');
     } catch (_) {
       if (!context.mounted) return;
       _showMessage(context, '模型切换失败，当前会话保持不变，请重试');
@@ -946,6 +1470,12 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
 
   Future<void> _runStartupTasks() async {
     await _autoSelectOrCreateSession();
+    // Restore a persisted creation workspace immediately.  Without this
+    // pass, reopening the app in 图片/视频/语音 mode left the capsule visible
+    // but kept the previous Chat route until the user toggled the mode again.
+    // Selecting here reuses the first configured capability model and binds
+    // its channel credentials before the first creation request.
+    await _selectDefaultCreationModel(ref.read(creationModeProvider));
     await _restorePersistedBackgroundInterruptedRetryIfNeeded();
     unawaited(
       _runDueDreamingIfNeeded().whenComplete(
@@ -1442,6 +1972,43 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
     );
   }
 
+  Future<void> _selectDefaultCreationModel(CreationMode mode) async {
+    if (mode == CreationMode.chat) {
+      final sessionId = ref.read(activeSessionIdProvider);
+      final session = sessionId == null
+          ? null
+          : await ref.read(sessionDaoProvider).getSession(sessionId);
+      ref.read(activeCreationModelIdProvider.notifier).state =
+          session?.defaultChannelModelId;
+      return;
+    }
+    final models = await ref.read(allConfiguredModelsProvider.future);
+    ChannelModelWithChannel? candidate;
+    for (final item in models) {
+      final caps = item.capabilities;
+      final matches = switch (mode) {
+        CreationMode.image => caps.contains(ModelCapability.image),
+        CreationMode.video => caps.contains(ModelCapability.video),
+        CreationMode.voice =>
+          caps.contains(ModelCapability.audio) ||
+              caps.contains(ModelCapability.tts) ||
+              caps.contains(ModelCapability.asr) ||
+              caps.contains(ModelCapability.voiceDesign) ||
+              caps.contains(ModelCapability.voiceClone) ||
+              caps.contains(ModelCapability.music),
+        CreationMode.chat => false,
+      };
+      if (matches) {
+        candidate = item;
+        break;
+      }
+    }
+    if (candidate == null) return;
+    await applyCreationModelRoute(ref, candidate);
+    ref.read(activeCreationModelIdProvider.notifier).state =
+        candidate.channelModel.id;
+  }
+
   /// AppBar 标题：会话名 + 当前模型（桌面端与移动端统一可切换）。
   /// 标题宽度继承 AppBar 的可用空间，模型胶囊本身有上限，避免窄屏被
   /// 长渠道名或模型名撑出横向溢出。
@@ -1480,8 +2047,10 @@ class _ResponsiveShellState extends ConsumerState<ResponsiveShell>
     final activeSessionId = ref.watch(activeSessionIdProvider);
 
     return AppBar(
-      // 会话名位于 44dp 模型控件上方，保留 ChatGPT 风格的两行顶部区域，
-      // 同时不压缩移动端模型选择器的可访问触达范围。
+      // 顶部只展示会话名和当前模型；图片、视频、音频等任务通过底部
+      // Composer 的“+”菜单选择，避免在 AppBar 再维护一套模式导航。
+      // Keep the two-line title / model capsule hit target; the former mode
+      // strip is gone, but the toolbar still needs room for both rows.
       toolbarHeight: 72,
       leading: showMenuButton
           ? Builder(

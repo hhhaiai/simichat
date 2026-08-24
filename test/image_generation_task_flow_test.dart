@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:ai_chat_app/core/ai/image_generation_service.dart';
+import 'package:ai_chat_app/core/ai/image_generation_task.dart';
 import 'package:ai_chat_app/core/crypto/key_encryptor.dart';
 import 'package:ai_chat_app/core/database/app_database.dart';
 import 'package:ai_chat_app/shared/providers/chat_provider.dart';
@@ -41,6 +43,8 @@ class _FakeImageService extends ImageGenerationService {
   Future<GeneratedImage> generate(
     String prompt, {
     String? referenceImagePath,
+    List<String> referenceImagePaths = const <String>[],
+    int count = 1,
     Map<String, dynamic> extra = const <String, dynamic>{},
     CancelToken? cancelToken,
     String size = kImageGenerationSize,
@@ -128,9 +132,7 @@ class _FakeImageService extends ImageGenerationService {
         final pending = Completer<GeneratedImage>();
         cancelToken?.whenCancel.then((_) {
           if (!pending.isCompleted) {
-            pending.completeError(
-              const ImageGenerationException('请求已取消'),
-            );
+            pending.completeError(const ImageGenerationException('请求已取消'));
           }
         });
         return pending.future;
@@ -148,9 +150,7 @@ Future<WidgetRef> _pumpBase(
 }) async {
   final appDirectory = Directory.systemTemp.createTempSync('img-flow-');
   addTearDown(() => appDirectory.deleteSync(recursive: true));
-  final pathProviderChannel = MethodChannel(
-    'plugins.flutter.io/path_provider',
-  );
+  final pathProviderChannel = MethodChannel('plugins.flutter.io/path_provider');
   tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
     pathProviderChannel,
     (call) async {
@@ -201,6 +201,120 @@ Future<WidgetRef> _pumpBase(
 }
 
 void main() {
+  test('image task snapshots restore interrupted work as retryable', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = ImageGenerationTaskSnapshotStore();
+    final first = ImageGenerationTasksNotifier(
+      store: store,
+      taskExists: (_) async => true,
+    );
+    await first.ready;
+    first.start(
+      ImageGenerationTask(
+        messageId: 'persisted-image-placeholder',
+        sessionId: 'persisted-image-session',
+        prompt: '保留完整的多图重试参数',
+        modelName: 'grok-imagine-image-quality',
+        channelId: 'image-channel',
+        routeModelId: 'image-model-id',
+        providerProfileId: 'xai_grok_images',
+        referenceImagePaths: const ['/private/composer_drafts/reference-a.png'],
+        referenceImageNames: const ['reference-a.png'],
+        count: 3,
+        aspectRatio: '16:9',
+        resolution: '2K',
+        size: '1536x1024',
+        quality: 'high',
+        typedOptions: true,
+      ),
+    );
+    await store.flush();
+
+    final restoredStore = ImageGenerationTaskSnapshotStore();
+    final restored = ImageGenerationTasksNotifier(
+      store: restoredStore,
+      taskExists: (_) async => true,
+    );
+    await restored.ready;
+    final task = restored.state['persisted-image-placeholder'];
+    expect(task, isNotNull);
+    expect(task!.isFailed, isTrue);
+    expect(task.error, contains('应用重启'));
+    expect(task.routeModelId, 'image-model-id');
+    expect(task.providerProfileId, 'xai_grok_images');
+    expect(task.referenceImagePaths, [
+      '/private/composer_drafts/reference-a.png',
+    ]);
+    expect(task.count, 3);
+    expect(task.aspectRatio, '16:9');
+    expect(task.resolution, '2K');
+    expect(task.size, '1536x1024');
+    expect(task.quality, 'high');
+
+    restored.markFailed(
+      task.messageId,
+      'Bearer secret-token https://example.test /Users/private/key',
+    );
+    await restoredStore.flush();
+    final preferences = await SharedPreferences.getInstance();
+    final encoded = preferences.getString(
+      kImageGenerationTaskSnapshotsStorageKey,
+    );
+    expect(encoded, isNotNull);
+    expect(jsonDecode(encoded!), isA<Map>());
+    expect(encoded, contains('"resolution":"2K"'));
+    expect(encoded, contains('"size":"1536x1024"'));
+    expect(encoded, isNot(contains('secret-token')));
+    expect(encoded, isNot(contains('https://example.test')));
+    expect(encoded, isNot(contains('/Users/private/key')));
+
+    restored.finish(task.messageId);
+    await restoredStore.flush();
+    expect(
+      preferences.getString(kImageGenerationTaskSnapshotsStorageKey),
+      isNull,
+    );
+  });
+
+  test(
+    'image task recovery drops snapshots without a placeholder message',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final store = ImageGenerationTaskSnapshotStore();
+      final first = ImageGenerationTasksNotifier(
+        store: store,
+        taskExists: (_) async => true,
+      );
+      await first.ready;
+      first.start(
+        ImageGenerationTask(
+          messageId: 'deleted-placeholder',
+          sessionId: 'deleted-session',
+          prompt: '不应恢复为幽灵任务',
+          modelName: 'gpt-image-2',
+          channelId: 'deleted-channel',
+          providerProfileId: 'openai_images',
+        ),
+      );
+      await store.flush();
+
+      final restoredStore = ImageGenerationTaskSnapshotStore();
+      final restored = ImageGenerationTasksNotifier(
+        store: restoredStore,
+        taskExists: (_) async => false,
+      );
+      await restored.ready;
+      await restoredStore.flush();
+
+      expect(restored.state, isEmpty);
+      final preferences = await SharedPreferences.getInstance();
+      expect(
+        preferences.getString(kImageGenerationTaskSnapshotsStorageKey),
+        isNull,
+      );
+    },
+  );
+
   testWidgets('image generation inserts placeholder then replaces on success', (
     tester,
   ) async {
@@ -237,9 +351,9 @@ void main() {
           .where((m) => m.content == '正在生成图片…')
           .toList();
       expect(placeholders.length, 1);
-      final task = ref.read(imageGenerationTasksProvider)[
-        placeholders.first.id
-      ];
+      final task = ref.read(
+        imageGenerationTasksProvider,
+      )[placeholders.first.id];
       expect(task, isNotNull);
       expect(task!.isRunning, true);
 
@@ -256,6 +370,60 @@ void main() {
       expect(ref.read(imageGenerationTasksProvider), isEmpty);
     });
     debugImageServiceFactory = null;
+  });
+
+  testWidgets('image result save failure keeps placeholder and retry snapshot', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    debugImageServiceFactory =
+        ({required baseUrl, required apiKey, required model}) =>
+            _FakeImageService(behaviour: 'success');
+    addTearDown(() => debugImageServiceFactory = null);
+
+    final ref = await _pumpBase(
+      tester,
+      db,
+      channelId: 'img-save-failure-channel',
+      sessionId: 'img-save-failure-session',
+    );
+    final blockedRoot = File(
+      '${Directory.systemTemp.path}/simichat-image-blocked-root-${DateTime.now().microsecondsSinceEpoch}',
+    )..writeAsStringSync('not a directory');
+    addTearDown(() {
+      if (blockedRoot.existsSync()) blockedRoot.deleteSync();
+    });
+    const pathProviderChannel = MethodChannel(
+      'plugins.flutter.io/path_provider',
+    );
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      pathProviderChannel,
+      (call) async => blockedRoot.path,
+    );
+
+    final error = await tester.runAsync(
+      () => generateImage(
+        ref: ref,
+        sessionId: 'img-save-failure-session',
+        prompt: '保存失败后仍可重试',
+      ),
+    );
+
+    expect(error, contains('图片结果保存失败'));
+    final messages = (await tester.runAsync(
+      () => db.messageDao.getMessagesBySession('img-save-failure-session'),
+    ))!;
+    expect(messages, hasLength(1));
+    final placeholder = messages.single;
+    expect(placeholder.role, 'assistant');
+    expect(placeholder.content, contains('图片结果保存失败'));
+    final task = ref.read(imageGenerationTasksProvider)[placeholder.id];
+    expect(task, isNotNull);
+    expect(task!.isFailed, isTrue);
+    expect(task.prompt, '保存失败后仍可重试');
+    expect(task.routeModelId, 'img-save-failure-channel-model');
   });
 
   testWidgets('image generation failure keeps placeholder with retry task', (
@@ -295,6 +463,7 @@ void main() {
       expect(task, isNotNull);
       expect(task!.isFailed, true);
       expect(task.prompt, '一只猫');
+      expect(task.routeModelId, 'img-fail-channel-model');
       expect(task.compactError, isNot(contains('test-key')));
     });
     debugImageServiceFactory = null;
@@ -325,10 +494,7 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      await cancelImageGeneration(
-        ref: ref,
-        sessionId: 'img-cancel-session',
-      );
+      await cancelImageGeneration(ref: ref, sessionId: 'img-cancel-session');
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final error = await resultFuture;

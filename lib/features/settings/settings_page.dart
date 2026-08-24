@@ -37,6 +37,7 @@ import '../../core/memory/user_profile.dart';
 import '../../core/twin/persona_profile.dart';
 import '../../core/twin/live_stream_service.dart';
 import '../../core/media/media_job.dart';
+import '../../core/media/openai_text_to_speech_engine.dart';
 import '../../core/media/speech_provider_preset.dart';
 import '../../core/media/text_to_speech_service.dart';
 import '../../core/media/xai_custom_voice_adapter.dart';
@@ -64,6 +65,7 @@ import '../../core/archive/notion_sync_service.dart';
 import '../../core/archive/yuque_sync_service.dart';
 import '../../core/archive/siyuan_sync_service.dart';
 import '../../shared/providers/channel_provider.dart';
+import '../../shared/providers/channel_quota_provider.dart';
 import '../../shared/providers/simirouter_billing_provider.dart';
 import '../../shared/providers/chat_provider.dart';
 import '../../shared/providers/conversation_archive_provider.dart';
@@ -477,8 +479,8 @@ class SettingsPage extends ConsumerWidget {
     final threshold = ref.watch(compressThresholdProvider);
 
     return ListTile(
-      title: const Text('压缩阈值'),
-      subtitle: Text('当前: $threshold tokens · 超过此值自动压缩历史'),
+      title: const Text('客户端长上下文'),
+      subtitle: Text('基础阈值 $threshold tokens · 实际按模型窗口动态滚动压缩'),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => _showThresholdDialog(context, ref, threshold),
     );
@@ -491,7 +493,7 @@ class SettingsPage extends ConsumerWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('压缩阈值'),
+          title: const Text('客户端长上下文'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -504,7 +506,7 @@ class SettingsPage extends ConsumerWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                '未压缩消息的 token 数超过此值时，自动调用 AI 生成摘要压缩历史上下文。',
+                '完整对话原文始终保存在本地。达到模型窗口的动态阈值后，客户端把旧摘要和旧轮次合并成一个滚动摘要，保留最新 10 条原文；单次上游请求仍受模型窗口限制。',
                 style: TextStyle(fontSize: 13, color: Colors.grey),
               ),
               const SizedBox(height: 16),
@@ -3101,6 +3103,16 @@ class SettingsPage extends ConsumerWidget {
         ],
       ),
       children: [
+        // CCSwitch / Claude OAuth and new-api compatible providers expose an
+        // account-level quota endpoint. Keep this action at channel scope so
+        // it is not confused with a single model connectivity test.
+        if (!_isSimiRouterChannel(channel))
+          _ChannelQuotaRow(
+            channelId: channel.id,
+            protocol: channel.protocol,
+            baseUrl: channel.baseUrl,
+            apiKeyEncrypted: channel.apiKeyEncrypted,
+          ),
         // 模型列表
         ref
             .watch(modelsByChannelProvider(channel.id))
@@ -3163,56 +3175,58 @@ class SettingsPage extends ConsumerWidget {
                                   color: Theme.of(context).colorScheme.primary,
                                 ),
                               ),
-                            Consumer(builder: (rowContext, rowRef, _) {
-                              final testing = testingModelIds.contains(m.id);
-                              final history = modelTestHistory[m.id];
-                              return IconButton(
-                                key: ValueKey('test-model-${m.id}'),
-                                style: IconButton.styleFrom(
-                                  minimumSize: const Size.square(40),
-                                ),
-                                tooltip: testing
-                                    ? '测试中…'
-                                    : history == null
-                                    ? '测试连接'
-                                    : history.success
-                                    ? '最近测试成功，点击重新测试'
-                                    : '最近测试失败，点击重新测试',
-                                icon: testing
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
+                            Consumer(
+                              builder: (rowContext, rowRef, _) {
+                                final testing = testingModelIds.contains(m.id);
+                                final history = modelTestHistory[m.id];
+                                return IconButton(
+                                  key: ValueKey('test-model-${m.id}'),
+                                  style: IconButton.styleFrom(
+                                    minimumSize: const Size.square(40),
+                                  ),
+                                  tooltip: testing
+                                      ? '测试中…'
+                                      : history == null
+                                      ? '测试连接'
+                                      : history.success
+                                      ? '最近测试成功，点击重新测试'
+                                      : '最近测试失败，点击重新测试',
+                                  icon: testing
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : history == null
+                                      ? const Icon(
+                                          Icons.play_circle_outline,
+                                          size: 20,
+                                          color: Colors.green,
+                                        )
+                                      : history.success
+                                      ? const Icon(
+                                          Icons.check_circle,
+                                          size: 20,
+                                          color: Colors.green,
+                                        )
+                                      : const Icon(
+                                          Icons.cancel,
+                                          size: 20,
+                                          color: Colors.red,
                                         ),
-                                      )
-                                    : history == null
-                                    ? const Icon(
-                                        Icons.play_circle_outline,
-                                        size: 20,
-                                        color: Colors.green,
-                                      )
-                                    : history.success
-                                    ? const Icon(
-                                        Icons.check_circle,
-                                        size: 20,
-                                        color: Colors.green,
-                                      )
-                                    : const Icon(
-                                        Icons.cancel,
-                                        size: 20,
-                                        color: Colors.red,
-                                      ),
-                                onPressed: testing
-                                    ? null
-                                    : () => _testModel(
-                                        rowContext,
-                                        ref,
-                                        channel,
-                                        m,
-                                      ),
-                              );
-                            }),
+                                  onPressed: testing
+                                      ? null
+                                      : () => _testModel(
+                                          rowContext,
+                                          ref,
+                                          channel,
+                                          m,
+                                        ),
+                                );
+                              },
+                            ),
                             IconButton(
                               icon: const Icon(
                                 Icons.remove_circle_outline,
@@ -3279,6 +3293,11 @@ class SettingsPage extends ConsumerWidget {
             ),
       ],
     );
+  }
+
+  bool _isSimiRouterChannel(ModelChannel channel) {
+    final host = Uri.tryParse(channel.baseUrl.trim())?.host.toLowerCase();
+    return host == 'api.dwchainless.com' || channel.id == 'dwchainless';
   }
 
   Widget? _buildModelTestHistorySubtitle(
@@ -4014,9 +4033,7 @@ class SettingsPage extends ConsumerWidget {
       // 不再以"能力+名称"为键重复插入同一模型。
       final channelDao = ref.read(channelDaoProvider);
       final existingModels = await channelDao.getModelsByChannel(channel.id);
-      final existingByName = {
-        for (final m in existingModels) m.modelName: m,
-      };
+      final existingByName = {for (final m in existingModels) m.modelName: m};
       final remoteIds = models.map((m) => m.id).toSet();
 
       // 过滤出新模型
@@ -4086,9 +4103,7 @@ class SettingsPage extends ConsumerWidget {
         final hasMedia = entry.value.any((r) => r.capability != 'chat');
         if (hasMedia) {
           duplicateIds.addAll(
-            entry.value
-                .where((r) => r.capability == 'chat')
-                .map((r) => r.id),
+            entry.value.where((r) => r.capability == 'chat').map((r) => r.id),
           );
         }
       }
@@ -4113,9 +4128,9 @@ class SettingsPage extends ConsumerWidget {
           if (missingNames.isNotEmpty) {
             message.write('；远端已无 ${missingNames.length} 个本地模型（未删除）');
           }
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message.toString())),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message.toString())));
         }
         return;
       }
@@ -4125,6 +4140,7 @@ class SettingsPage extends ConsumerWidget {
         _showFetchResultDialog(
           context,
           ref,
+          channel,
           channel.id,
           newModels,
           missingNames: missingNames,
@@ -4144,6 +4160,7 @@ class SettingsPage extends ConsumerWidget {
   void _showFetchResultDialog(
     BuildContext context,
     WidgetRef ref,
+    ModelChannel channel,
     String channelId,
     List<FetchedModel> models, {
     List<String> missingNames = const [],
@@ -4178,10 +4195,7 @@ class SettingsPage extends ConsumerWidget {
                       '（${missingNames.take(3).join('、')}'
                       '${missingNames.length > 3 ? ' 等' : ''}），'
                       '本次不删除，可稍后用一键测试剔除。',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.orange[800],
-                      ),
+                      style: TextStyle(fontSize: 11, color: Colors.orange[800]),
                     ),
                   ),
                 Expanded(
@@ -4228,6 +4242,7 @@ class SettingsPage extends ConsumerWidget {
               onPressed: () async {
                 final channelDao = ref.read(channelDaoProvider);
                 final byId = {for (final model in models) model.id: model};
+                final addedNames = <String>[];
                 for (final modelName in selected) {
                   final model = byId[modelName];
                   await channelDao.addModel(
@@ -4237,13 +4252,23 @@ class SettingsPage extends ConsumerWidget {
                     capability: model?.capability ?? ModelCapability.chat,
                     capabilities: model?.capabilities ?? const <String>{},
                   );
+                  addedNames.add(modelName);
                 }
+                final addedRows =
+                    (await channelDao.getModelsByChannel(channelId))
+                        .where((row) => addedNames.contains(row.modelName))
+                        .toList(growable: false);
                 refreshChannelModels(ref, channelId);
                 if (ctx.mounted) Navigator.pop(ctx);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('已添加 ${selected.length} 个模型')),
                   );
+                  if (addedRows.isNotEmpty) {
+                    unawaited(
+                      _autoTestFetchedModels(context, ref, channel, addedRows),
+                    );
+                  }
                 }
               },
               child: Text('添加选中的 ${selected.length} 个'),
@@ -4282,6 +4307,66 @@ class SettingsPage extends ConsumerWidget {
             child: const Text('删除'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Fetching a provider model catalogue is followed by one capability-aware
+  /// probe per newly persisted model.  Results are recorded in the same
+  /// history used by the per-row test button; no automatic pruning is done.
+  Future<void> _autoTestFetchedModels(
+    BuildContext context,
+    WidgetRef ref,
+    ModelChannel channel,
+    List<ChannelModel> models,
+  ) async {
+    if (models.isEmpty) return;
+    if (context.mounted) {
+      // Keep the "已添加" confirmation visible.  The capability-aware probe
+      // runs in the background and queues its progress message instead of
+      // clearing the confirmation that the user just acted on.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('正在按模型能力自动测试 ${models.length} 个模型…')),
+      );
+    }
+    final apiKey = KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted);
+    var success = 0;
+    var skipped = 0;
+    var failed = 0;
+    for (final model in models) {
+      final result = await _runModelTest(
+        protocol: channel.protocol,
+        baseUrl: channel.baseUrl,
+        apiKey: apiKey,
+        model: model.modelName,
+        capability: model.capability,
+      );
+      if (result.skipped) {
+        skipped++;
+      } else {
+        if (result.success) {
+          success++;
+        } else {
+          failed++;
+        }
+        await ref
+            .read(modelTestHistoryProvider.notifier)
+            .recordResult(
+              modelId: model.id,
+              modelName: model.modelName,
+              channelId: channel.id,
+              channelName: channel.name,
+              result: result,
+            );
+      }
+    }
+    if (!context.mounted) return;
+    // Do not clear earlier confirmations (including "已添加 N 个模型");
+    // queue the aggregate result behind them so both actions remain visible.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('自动测试完成：$success 成功，$failed 失败，$skipped 个高成本/需输入模型保留未测'),
+        duration: const Duration(seconds: 5),
       ),
     );
   }
@@ -4394,118 +4479,121 @@ class SettingsPage extends ConsumerWidget {
       builder: (ctx) {
         progressDialogContext = ctx;
         return ValueListenableBuilder<int>(
-        valueListenable: progressNotifier,
-        builder: (context, progress, child) => ValueListenableBuilder<String?>(
-          valueListenable: globalErrorNotifier,
-          builder: (context, globalError, child) => AlertDialog(
-            title: const Text('测试并剔除不可用模型'),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 400,
-              child: Column(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      '逐个测试当前渠道模型；只有认证失败、模型不存在等永久性错误会弹出确认后删除，网络类临时失败与媒体模型一律保留。',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                  ),
-                  if (globalError != null)
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+          valueListenable: progressNotifier,
+          builder: (context, progress, child) => ValueListenableBuilder<String?>(
+            valueListenable: globalErrorNotifier,
+            builder: (context, globalError, child) => AlertDialog(
+              title: const Text('测试并剔除不可用模型'),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 400,
+                child: Column(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
                       child: Text(
-                        globalError,
-                        style: const TextStyle(fontSize: 12, color: Colors.red),
+                        '逐个测试当前渠道模型；只有认证失败、模型不存在等永久性错误会弹出确认后删除，网络类临时失败与媒体模型一律保留。',
+                        style: TextStyle(fontSize: 12),
                       ),
                     ),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: models.length,
-                      itemBuilder: (_, i) {
-                        final m = models[i];
-                        final done = i < progress;
-                        final testing = i == progress && globalError == null;
-                        final result = results[m.id];
-                        final success = result?.success == true;
-                        final skipped = result?.skipped == true;
-                        return ListTile(
-                          dense: true,
-                          leading: done
-                              ? (skipped
-                                    ? const Icon(
-                                        Icons.remove_circle_outline,
-                                        color: Colors.grey,
-                                        size: 20,
-                                      )
-                                    : success
-                                    ? const Icon(
-                                        Icons.check_circle,
-                                        color: Colors.green,
-                                        size: 20,
-                                      )
-                                    : const Icon(
-                                        Icons.cancel,
-                                        color: Colors.red,
-                                        size: 20,
-                                      ))
-                              : testing
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.radio_button_unchecked,
-                                  color: Colors.grey,
-                                  size: 20,
-                                ),
-                          title: Text(
-                            m.modelName,
-                            style: const TextStyle(fontSize: 13),
+                    if (globalError != null)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          globalError,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.red,
                           ),
-                          subtitle: done && result != null && !result.success
-                              ? Text(
-                                  result.compactMessage,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: skipped
-                                        ? Colors.grey
-                                        : result.isPermanentFailure
-                                        ? Colors.red
-                                        : Colors.orange[800],
+                        ),
+                      ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: models.length,
+                        itemBuilder: (_, i) {
+                          final m = models[i];
+                          final done = i < progress;
+                          final testing = i == progress && globalError == null;
+                          final result = results[m.id];
+                          final success = result?.success == true;
+                          final skipped = result?.skipped == true;
+                          return ListTile(
+                            dense: true,
+                            leading: done
+                                ? (skipped
+                                      ? const Icon(
+                                          Icons.remove_circle_outline,
+                                          color: Colors.grey,
+                                          size: 20,
+                                        )
+                                      : success
+                                      ? const Icon(
+                                          Icons.check_circle,
+                                          color: Colors.green,
+                                          size: 20,
+                                        )
+                                      : const Icon(
+                                          Icons.cancel,
+                                          color: Colors.red,
+                                          size: 20,
+                                        ))
+                                : testing
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.radio_button_unchecked,
+                                    color: Colors.grey,
+                                    size: 20,
                                   ),
-                                )
-                              : null,
-                        );
-                      },
+                            title: Text(
+                              m.modelName,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            subtitle: done && result != null && !result.success
+                                ? Text(
+                                    result.compactMessage,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: skipped
+                                          ? Colors.grey
+                                          : result.isPermanentFailure
+                                          ? Colors.red
+                                          : Colors.orange[800],
+                                    ),
+                                  )
+                                : null,
+                          );
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
+              actions: [
+                FilledButton(
+                  onPressed: () {
+                    if (progress < models.length) {
+                      cancelled = true;
+                    }
+                    Navigator.pop(ctx);
+                  },
+                  child: Text(progress >= models.length ? '完成' : '跳过'),
+                ),
+              ],
             ),
-            actions: [
-              FilledButton(
-                onPressed: () {
-                  if (progress < models.length) {
-                    cancelled = true;
-                  }
-                  Navigator.pop(ctx);
-                },
-                child: Text(progress >= models.length ? '完成' : '跳过'),
-              ),
-            ],
           ),
-        ),
-      );
+        );
       },
     );
 
@@ -4565,9 +4653,7 @@ class SettingsPage extends ConsumerWidget {
       if (cancelled || !context.mounted) return;
 
       final permanentFailed = models
-          .where(
-            (model) => results[model.id]?.isPermanentFailure == true,
-          )
+          .where((model) => results[model.id]?.isPermanentFailure == true)
           .toList(growable: false);
       final transientFailed = models
           .where((model) {
@@ -4589,7 +4675,10 @@ class SettingsPage extends ConsumerWidget {
                   '${transientFailed.length} 个临时失败请稍后重试'
                   '${skippedCount > 0 ? '，$skippedCount 个媒体模型跳过测试' : ''}）';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 4),
+          ),
         );
         return;
       }
@@ -4622,10 +4711,7 @@ class SettingsPage extends ConsumerWidget {
                   const SizedBox(height: 8),
                   Text(
                     '另有 ${transientFailed.length} 个模型是网络类临时失败，本次保留。',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.orange,
-                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.orange),
                   ),
                 ],
               ],
@@ -4647,7 +4733,10 @@ class SettingsPage extends ConsumerWidget {
       if (confirmed != true || !context.mounted) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('已保留全部模型'), duration: Duration(seconds: 2)),
+            const SnackBar(
+              content: Text('已保留全部模型'),
+              duration: Duration(seconds: 2),
+            ),
           );
         }
         return;
@@ -4667,7 +4756,10 @@ class SettingsPage extends ConsumerWidget {
             '已剔除 ${permanentFailed.length} 个不可用模型，保留 $kept 个'
             '${transientFailed.isNotEmpty ? '（${transientFailed.length} 个临时失败建议稍后重试）' : ''}';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     } catch (e) {
@@ -4695,7 +4787,10 @@ class SettingsPage extends ConsumerWidget {
   }) {
     // 媒体模型（视频 / 音乐 / ASR）无论注入 runner 与否都直接跳过，
     // 保证一键剔除的行为与测试路径一致。
-    final skipped = ModelTester.skippedForCapability(capability, modelId: model);
+    final skipped = ModelTester.skippedForCapability(
+      capability,
+      modelId: model,
+    );
     if (skipped != null) return Future.value(skipped);
 
     final runner = modelTestRunner;
@@ -6113,6 +6208,8 @@ class SettingsPage extends ConsumerWidget {
     var responseFormat = config.responseFormat;
     String? referenceAudioPath = config.referenceAudioPath;
     String? referenceAudioName = config.referenceAudioPath?.split('/').last;
+    var isLoadingVoices = false;
+    List<TextToSpeechVoiceOption> availableVoices = const [];
     var selectedPresetId = config.isXai
         ? kXaiSpeechProviderId
         : inferTextToSpeechPreset(
@@ -6124,6 +6221,64 @@ class SettingsPage extends ConsumerWidget {
     if (selectedPresetId == kXaiSpeechProviderId &&
         !kXaiTextToSpeechPlaybackFormats.contains(responseFormat)) {
       responseFormat = 'mp3';
+    }
+
+    Future<void> loadVoices(
+      StateSetter setState,
+      BuildContext dialogContext,
+    ) async {
+      if (isLoadingVoices) return;
+      final key = apiKeyController.text.trim().isNotEmpty
+          ? apiKeyController.text.trim()
+          : KeyEncryptor.decryptOrEmpty(config.apiKeyEncrypted ?? '');
+      final model = modelController.text.trim();
+      if (key.isEmpty ||
+          (model.isEmpty && selectedPresetId != kXaiSpeechProviderId)) {
+        setState(() => errorText = '请先填写模型和 API Key，再获取音色');
+        return;
+      }
+      setState(() {
+        isLoadingVoices = true;
+        errorText = null;
+      });
+      try {
+        final voices = await fetchTextToSpeechVoices(
+          baseUrl: baseUrlController.text,
+          apiKey: key,
+          model: model.isEmpty ? null : model,
+        );
+        if (!dialogContext.mounted) return;
+        setState(() {
+          availableVoices = voices;
+          isLoadingVoices = false;
+        });
+        final selected = await showModalBottomSheet<String>(
+          context: dialogContext,
+          showDragHandle: true,
+          builder: (sheetContext) => SafeArea(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: voices.length,
+              itemBuilder: (_, index) {
+                final voice = voices[index];
+                return ListTile(
+                  leading: const Icon(Icons.record_voice_over_outlined),
+                  title: Text(voice.displayLabel),
+                  onTap: () => Navigator.of(sheetContext).pop(voice.id),
+                );
+              },
+            ),
+          ),
+        );
+        if (!dialogContext.mounted || selected == null) return;
+        setState(() => voiceController.text = selected);
+      } catch (error) {
+        if (!dialogContext.mounted) return;
+        setState(() {
+          isLoadingVoices = false;
+          errorText = _safeTtsDialogError(error);
+        });
+      }
     }
 
     showDialog(
@@ -6502,6 +6657,35 @@ class SettingsPage extends ConsumerWidget {
                           : '仅允许字母、数字、点、下划线和短横线',
                     ),
                   ),
+                if (simiRouterTtsModeOf(modelController.text) == null ||
+                    simiRouterTtsModeOf(modelController.text) ==
+                        SimiRouterTtsMode.standard) ...[
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      icon: isLoadingVoices
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.download_outlined, size: 17),
+                      label: Text(isLoadingVoices ? '获取音色中…' : '从当前渠道获取音色'),
+                      onPressed: isSaving || isLoadingVoices
+                          ? null
+                          : () => loadVoices(setState, ctx),
+                    ),
+                  ),
+                  if (availableVoices.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        '已获取 ${availableVoices.length} 个音色，可再次点击切换',
+                        style: Theme.of(ctx).textTheme.bodySmall,
+                      ),
+                    ),
+                ],
                 // 声音设计模式：风格描述。
                 if (simiRouterTtsModeOf(modelController.text) ==
                     SimiRouterTtsMode.voiceDesign) ...[
@@ -10077,6 +10261,9 @@ class _SimiRouterUsageRowState extends ConsumerState<_SimiRouterUsageRow> {
       await ref
           .read(simiRouterBillingProvider.notifier)
           .refresh(baseUrl: widget.baseUrl, apiKey: apiKey);
+      await ref
+          .read(simiRouterBillingProvider.notifier)
+          .refreshAccount(baseUrl: widget.baseUrl, apiKey: apiKey);
     } catch (_) {
       // 解密失败静默：不打扰设置页。
     }
@@ -10088,32 +10275,130 @@ class _SimiRouterUsageRowState extends ConsumerState<_SimiRouterUsageRow> {
     final state = ref.watch(simiRouterBillingProvider);
     final snapshot = state.snapshot;
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (snapshot != null)
-          Text(
-            '已用 ${snapshot.usedLabel} · ${snapshot.limitLabel}',
-            style: TextStyle(
-              fontSize: 11,
-              color: scheme.onSurfaceVariant,
-            ),
-          )
-        else if (state.error != null)
-          Text(
-            '用量加载失败，点击刷新重试',
-            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
-          )
-        else
-          Text(
-            '点击刷新查看用量',
-            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                snapshot == null
+                    ? (state.error ?? '消耗额度：点击刷新查询')
+                    : '消耗额度：已用 ${snapshot.usedLabel} · ${snapshot.limitLabel}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                state.account == null
+                    ? (state.accountError ?? '账号额度：点击刷新查询')
+                    : '账号额度：${state.account!.compactLabel}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ],
           ),
-        const Spacer(),
+        ),
         SizedBox(
           width: 28,
           height: 28,
           child: IconButton(
             key: const ValueKey('simirouter-billing-refresh'),
             padding: EdgeInsets.zero,
+            icon: state.loading || state.accountLoading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh, size: 16),
+            tooltip: '刷新消耗额度和账号额度',
+            onPressed: state.loading || state.accountLoading ? null : _load,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Channel-level quota action used for Claude OAuth (the contract used by
+/// CCSwitch) and new-api compatible providers. It is deliberately manual:
+/// opening Settings must not issue a request for every configured channel.
+class _ChannelQuotaRow extends ConsumerStatefulWidget {
+  const _ChannelQuotaRow({
+    required this.channelId,
+    required this.protocol,
+    required this.baseUrl,
+    required this.apiKeyEncrypted,
+  });
+
+  final String channelId;
+  final String protocol;
+  final String baseUrl;
+  final String apiKeyEncrypted;
+
+  @override
+  ConsumerState<_ChannelQuotaRow> createState() => _ChannelQuotaRowState();
+}
+
+class _ChannelQuotaRowState extends ConsumerState<_ChannelQuotaRow> {
+  Future<void> _refresh() async {
+    String apiKey;
+    try {
+      apiKey = KeyEncryptor.decryptOrEmpty(widget.apiKeyEncrypted);
+    } catch (_) {
+      if (!mounted) return;
+      ref
+          .read(channelQuotaProvider(widget.channelId).notifier)
+          .setError('API Key 无法解密，请重新保存渠道');
+      return;
+    }
+    await ref
+        .read(channelQuotaProvider(widget.channelId).notifier)
+        .refresh(
+          protocol: widget.protocol,
+          baseUrl: widget.baseUrl,
+          apiKey: apiKey,
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(channelQuotaProvider(widget.channelId));
+    final scheme = Theme.of(context).colorScheme;
+    final snapshot = state.snapshot;
+    final detail =
+        snapshot?.compactLabel ??
+        (state.error ?? '支持 CCSwitch Claude OAuth / new-api 额度接口');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 8, 2),
+      child: Row(
+        children: [
+          Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 17,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              detail,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: state.error == null
+                    ? scheme.onSurfaceVariant
+                    : scheme.error,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            key: ValueKey('channel-quota-${widget.channelId}'),
+            onPressed: state.loading ? null : _refresh,
             icon: state.loading
                 ? const SizedBox(
                     width: 14,
@@ -10121,11 +10406,15 @@ class _SimiRouterUsageRowState extends ConsumerState<_SimiRouterUsageRow> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.refresh, size: 16),
-            tooltip: '刷新用量',
-            onPressed: state.loading ? null : _load,
+            label: Text(snapshot == null ? '查询额度' : '刷新'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

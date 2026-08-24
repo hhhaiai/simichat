@@ -249,6 +249,71 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'attachment completion from a canonical path alias clears stop state',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      await db.sessionDao.createSession(id: 'session-audio-alias');
+      await db.messageDao.insertMessage(
+        id: 'message-audio-alias',
+        sessionId: 'session-audio-alias',
+        role: 'user',
+        content: '别名音频附件',
+      );
+      final root = Directory.systemTemp.createTempSync(
+        'simichat-audio-path-alias-',
+      );
+      addTearDown(() async {
+        if (await root.exists()) await root.delete(recursive: true);
+      });
+      final realFile = File('${root.path}/real/generated-audio.mp3');
+      realFile.parent.createSync(recursive: true);
+      realFile.writeAsBytesSync(<int>[0x49, 0x44, 0x33]);
+      final aliasDirectory = Link('${root.path}/alias')
+        ..createSync(realFile.parent.path);
+      final aliasPath = '${aliasDirectory.path}/generated-audio.mp3';
+      await db.attachmentDao.insertAttachment(
+        id: 'attachment-audio-alias',
+        messageId: 'message-audio-alias',
+        fileType: 'audio',
+        localPath: aliasPath,
+        fileName: 'generated-audio.mp3',
+        fileSize: 3,
+      );
+
+      final player = _ImmediateCompletionAudioPlayer(canonicalizeEvent: true);
+      final container = ProviderContainer(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          activeSessionIdProvider.overrideWith((ref) => 'session-audio-alias'),
+          isOnlineProvider.overrideWithValue(true),
+          audioPlayerProvider.overrideWithValue(player),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: Scaffold(body: ChatPage())),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.tap(find.byIcon(Icons.play_circle_outline));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(player.playedPath, aliasPath);
+      expect(find.byIcon(Icons.stop_circle_outlined), findsNothing);
+      expect(find.byIcon(Icons.play_circle_outline), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 class _FakeTextToSpeechService extends TextToSpeechService {
@@ -315,7 +380,10 @@ class _CompletingAudioPlayer implements AudioPlayerPlatform {
 }
 
 class _ImmediateCompletionAudioPlayer implements AudioPlayerPlatform {
+  _ImmediateCompletionAudioPlayer({this.canonicalizeEvent = false});
+
   final _events = StreamController<AudioPlaybackEvent>.broadcast();
+  final bool canonicalizeEvent;
   String? playedPath;
 
   @override
@@ -327,7 +395,9 @@ class _ImmediateCompletionAudioPlayer implements AudioPlayerPlatform {
     _events.add(
       AudioPlaybackEvent(
         type: AudioPlaybackEventType.completed,
-        path: audioPath,
+        path: canonicalizeEvent
+            ? File(audioPath).resolveSymbolicLinksSync()
+            : audioPath,
       ),
     );
   }

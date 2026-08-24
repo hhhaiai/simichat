@@ -21,6 +21,8 @@ import '../../core/ai/model_switch_record.dart';
 import '../../core/ai/openai_chat_protocol.dart' as ai_openai_chat;
 import '../../core/ai/ai_service.dart';
 import '../../core/context/context_budget_trimmer.dart';
+import '../../core/context/chunked_content_task.dart';
+import '../../core/context/chunked_content_task_runner.dart';
 import '../../core/context/context_builder.dart';
 import '../../core/context/context_compressor.dart';
 import '../../core/context/model_context_budget.dart';
@@ -30,11 +32,14 @@ import '../../core/media/audio_file_archive.dart';
 import '../../core/media/baidu_cdn_image_uploader.dart';
 import '../../core/media/attachment_export_service.dart';
 import '../../core/media/inline_base64_audio.dart';
+import '../../core/media/media_provider_profile.dart';
+import '../../core/media/media_request_options.dart';
 import '../../core/media/audio_transcription_service.dart';
 import '../../core/media/audio_transcript_archive.dart';
 import '../../core/media/native_speech_to_text_engine.dart';
 import '../../core/media/openai_speech_to_text_engine.dart';
 import '../../core/media/openai_text_to_speech_engine.dart';
+import '../../core/media/xai_text_to_speech_engine.dart';
 import '../../core/media/speech_provider_preset.dart';
 import '../../core/media/text_to_speech_service.dart';
 import '../../core/storage/atomic_file_writer.dart';
@@ -48,12 +53,14 @@ import 'persona_provider.dart';
 import 'user_profile_provider.dart';
 import '../../core/database/app_database.dart';
 import '../../core/database/dao/channel_dao.dart';
+import '../../core/database/dao/chunked_content_task_dao.dart';
 import '../../core/database/dao/message_dao.dart';
 import '../../core/database/dao/media_job_dao.dart' as media_database;
 import '../../core/database/dao/persona_audit_log_dao.dart';
 import '../../core/database/dao/session_dao.dart';
 import '../../core/notification/notification_service.dart';
-import '../widgets/chat_input_bar.dart' show PendingAttachment;
+import '../widgets/chat_input_bar.dart'
+    show PendingAttachment, VideoGenerationConfig;
 import 'audio_transcription_provider.dart';
 import 'channel_provider.dart';
 import 'database_provider.dart';
@@ -67,6 +74,7 @@ import 'session_provider.dart';
 import 'settings_provider.dart';
 import 'image_generation_tasks_provider.dart';
 import 'text_to_speech_provider.dart';
+import 'creation_mode_provider.dart';
 
 const _uuid = Uuid();
 const kAudioOnlyMessagePrompt = '语音转文字未得到可用结果。请提示用户检查 STT 音频接口配置，或重新录制更清晰的语音。';
@@ -111,6 +119,27 @@ String audioAwareMessageContent({
 
 const _fileContentContextInstruction = '以下是用户附加的文本文件实际内容：';
 
+/// 文件不能原样上传时，为单次文本降级预留的最大 token 数。
+///
+/// [ContextBuilder] 会把系统提示词控制在整个输入预算的最多四分之一，并从
+/// 最新用户消息向前保留历史。文本附件若占满全部窗口会被通用裁剪器静默截断；
+/// 这里固定只使用一半，给系统提示、历史消息、序列化开销和模型 token 估算
+/// 误差留下明确余量。超过该值的内容必须进入后续可恢复分批任务，不能发送
+/// 一个用户看不出来的半截文件。
+@visibleForTesting
+int singleTextFallbackTokenBudget(int maxInputTokens) {
+  if (maxInputTokens <= 0) return 0;
+  return maxInputTokens ~/ 2;
+}
+
+@visibleForTesting
+bool isSingleTextFallbackWithinBudget({
+  required String content,
+  required int maxInputTokens,
+}) =>
+    TokenEstimator.estimate(content) <=
+    singleTextFallbackTokenBudget(maxInputTokens);
+
 /// Binds successfully extracted document text to this request only.
 ///
 /// The persisted user message remains the user's original text, so extracted
@@ -148,6 +177,35 @@ String fileAwareMessageContent({
       ..write('---');
   }
   return buffer.toString();
+}
+
+bool _isSingleTextFallbackSafe({
+  required String content,
+  required Iterable<String> extractedContents,
+  required int maxInputTokens,
+}) => isSingleTextFallbackWithinBudget(
+  content: fileAwareMessageContent(
+    content: content,
+    extractedContents: extractedContents,
+  ),
+  maxInputTokens: maxInputTokens,
+);
+
+bool _canStartChunkedContentTask(Iterable<String> attachmentTypes) {
+  final normalized = attachmentTypes
+      .map((type) => type.trim().toLowerCase())
+      .where((type) => type.isNotEmpty)
+      .toList(growable: false);
+  return normalized.isNotEmpty &&
+      normalized.every((type) => type == 'document');
+}
+
+void _setTextFallbackBudgetError(WidgetRef ref, String sessionId) {
+  _setSendPreflightError(
+    ref,
+    sessionId,
+    '文本附件超过当前模型的单次安全输入预算。当前附件组合不能安全分批，未发送；已保留输入和附件。请仅保留文本附件后重试，或切换更大上下文模型。',
+  );
 }
 
 @visibleForTesting
@@ -476,6 +534,14 @@ void _invalidateAudioTranscriptStatus(
 final _streamSubscriptions = <String, StreamSubscription<ai.AiChunk>>{};
 final _cancelTokens = <String, CancelToken>{};
 final _responseCompletions = <String, Completer<void>>{};
+// 分批长内容不复用聊天 SSE subscription；每个会话在同一时刻最多有一个
+// active task，Stop 会同时取消其 CancelToken 和 SQLite 任务状态。
+final _activeChunkedContentTaskIdBySession = <String, String>{};
+final _chunkedContentCancelTokens = <String, CancelToken>{};
+
+/// 单测可注入无网络 sender；生产仍走当前渠道的 AiService 流。
+@visibleForTesting
+ChunkedContentRequestSender? debugChunkedContentRequestSender;
 final _interruptedStreamCancellationErrors = <String, String>{};
 // sendMessage 在真正建立 SSE 之前还可能处于 STT / context preparation 阶段，
 // 因此单靠 StreamSubscription.cancel() 不足以阻止它继续启动聊天请求。
@@ -530,6 +596,13 @@ Future<String?> _runUniversalMediaTask({
   UniversalMediaTaskOptions taskOptions = const UniversalMediaTaskOptions(),
   Map<String, dynamic> extra = const <String, dynamic>{},
   String? referenceImagePath,
+  List<String> referenceImagePaths = const <String>[],
+  String? firstFrameImagePath,
+  String? referenceAudioPath,
+  String? referenceImageField,
+  String? firstFrameField,
+  String? referenceAudioField,
+  Map<String, dynamic> requestFields = const <String, dynamic>{},
   required Future<String?> Function(
     UniversalMediaAsset asset,
     UniversalMediaJob job,
@@ -540,12 +613,23 @@ Future<String?> _runUniversalMediaTask({
   String? deliveryUserContent,
   String? deliveryAssistantContent,
   String? deliveryFileType,
+  List<_GeneratedSourceAttachment> deliverySourceAttachments =
+      const <_GeneratedSourceAttachment>[],
 }) async {
   final operationId = _uuid.v4();
   final taskNotifier = ref.read(universalMediaTaskProvider(sessionId).notifier);
   taskNotifier.begin(operationId: operationId, kind: kind);
 
   try {
+    _StoredSourceManifest? sourceManifest;
+    if (deliverySourceAttachments.isNotEmpty) {
+      final ids = UniversalMediaDeliveryIds.forOperationId(operationId);
+      sourceManifest = await _archiveGeneratedSourceManifest(
+        deliverySourceAttachments,
+        operationId: operationId,
+        baseAttachmentId: ids.sourceAttachmentId,
+      );
+    }
     final result = await ref
         .read(universalMediaJobProvider.notifier)
         .run(
@@ -556,13 +640,23 @@ Future<String?> _runUniversalMediaTask({
           prompt: prompt,
           endpoint: endpoint,
           extra: extra,
+          requestFields: requestFields,
           taskOptions: taskOptions,
           referenceImagePath: referenceImagePath,
+          referenceImagePaths: referenceImagePaths,
+          firstFrameImagePath: firstFrameImagePath,
+          referenceAudioPath: referenceAudioPath,
+          referenceImageField: referenceImageField,
+          firstFrameField: firstFrameField,
+          referenceAudioField: referenceAudioField,
           sessionId: sessionId,
           channelModelId: channelModelId,
           deliveryUserContent: deliveryUserContent,
           deliveryAssistantContent: deliveryAssistantContent,
           deliveryFileType: deliveryFileType,
+          deliverySourcePath: sourceManifest?.marker.localPath,
+          deliverySourceFileName: sourceManifest?.marker.fileName,
+          deliverySourceFileType: sourceManifest?.marker.fileType,
           onJobUpdate: taskNotifier.updateJob,
         );
     final job = result.job;
@@ -649,10 +743,291 @@ void cancelStreaming(WidgetRef ref, String sessionId, {String? error}) {
   if (subscription != null) {
     unawaited(subscription.cancel().catchError((_) {}));
   }
+  unawaited(cancelActiveChunkedContentTask(ref, sessionId));
   ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
     isStreaming: false,
     error: error,
   );
+}
+
+/// 停止当前会话的长内容 task。它不依赖聊天 SSE 是否已建立，因此在“切块中”
+/// 或“最终整合中”按 Stop 都会阻止后续请求和最终 assistant 落库。
+Future<void> cancelActiveChunkedContentTask(
+  WidgetRef ref,
+  String sessionId,
+) async {
+  final taskDao = ref.read(databaseProvider).chunkedContentTaskDao;
+  final activeIds = <String>{};
+  final local = _activeChunkedContentTaskIdBySession[sessionId];
+  if (local != null) activeIds.add(local);
+  if (activeIds.isEmpty) {
+    for (final task in await taskDao.listRecoverableTasks()) {
+      if (task.sessionId == sessionId) activeIds.add(task.id);
+    }
+  }
+  for (final id in activeIds) {
+    _chunkedContentCancelTokens.remove(id)?.cancel('用户取消长内容任务');
+    final task = await taskDao.getTask(id);
+    await taskDao.cancelTask(id, leaseId: task?.leaseId);
+    if (_activeChunkedContentTaskIdBySession[sessionId] == id) {
+      _activeChunkedContentTaskIdBySession.remove(sessionId);
+    }
+  }
+  ref.invalidate(chunkedContentTasksProvider(sessionId));
+}
+
+/// 冷启动时将没有远端 resume 语义的 active task 收敛为“已中断，可继续”。
+/// 中间 chunk 结果和源附件引用均保留，用户随后可选择继续未完成部分或从头
+/// 重试；不能把进程死亡前的网络请求误报为已成功。
+Future<void> startChunkedContentTaskRecovery(WidgetRef ref) async {
+  final taskDao = ref.read(databaseProvider).chunkedContentTaskDao;
+  final recoverable = await taskDao.listRecoverableTasks();
+  final affectedSessions = <String>{};
+  for (final task in recoverable) {
+    await taskDao.markInterrupted(task.id);
+    affectedSessions.add(task.sessionId);
+  }
+  for (final sessionId in affectedSessions) {
+    ref.invalidate(messagesProvider(sessionId));
+    ref.invalidate(chunkedContentTasksProvider(sessionId));
+  }
+  if (affectedSessions.isNotEmpty) ref.invalidate(sessionsProvider);
+}
+
+/// 从 task 的已归档附件、原始渠道模型和持久化快照继续未完成分块。调用方可
+/// 传 `continueIncomplete=false` 从头重新处理；完成任务不会被重试覆盖。
+Future<bool> retryChunkedContentTask({
+  required WidgetRef ref,
+  required String taskId,
+  required bool continueIncomplete,
+}) async {
+  final database = ref.read(databaseProvider);
+  final taskDao = database.chunkedContentTaskDao;
+  final current = await taskDao.getTask(taskId);
+  if (current == null || current.status == chunkedContentCompletedStatus) {
+    return false;
+  }
+
+  // 先验证恢复所需的两项外部事实，再把 terminal task 改回 preparing / running。
+  // 否则模型已删除、附件丢失时会留下一个没有 worker 的“进行中”卡片；它既
+  // 不能自动恢复，也会误导用户以为请求仍在执行。
+  final model = await ref
+      .read(channelDaoProvider)
+      .getModelWithChannel(current.channelModelId);
+  if (model == null) {
+    _setSendPreflightError(ref, current.sessionId, '提交时使用的模型已不存在，无法继续该长内容任务。');
+    return false;
+  }
+  final source = await _loadChunkedContentSourceForTask(
+    database: database,
+    task: current,
+  );
+  if (source == null) {
+    _setSendPreflightError(ref, current.sessionId, '原始文本附件不可用，无法继续该长内容任务。');
+    return false;
+  }
+  final retried = await taskDao.retryTask(
+    taskId,
+    continueIncomplete: continueIncomplete,
+  );
+  if (retried == null ||
+      (retried.status != chunkedContentPreparingStatus &&
+          retried.status != chunkedContentRunningStatus)) {
+    return false;
+  }
+  final session = await ref
+      .read(sessionDaoProvider)
+      .getSession(retried.sessionId);
+  if (session == null) return false;
+  _runPersistedChunkedContentTask(
+    ref: ref,
+    task: retried,
+    session: session,
+    modelInfo: model,
+    source: source,
+  );
+  return true;
+}
+
+Future<String?> _createAndRunChunkedContentTask({
+  required WidgetRef ref,
+  required Session session,
+  required ChannelModelWithChannel modelInfo,
+  required String sourceMessageId,
+  required String originalPrompt,
+  required List<_StoredAttachment> storedAttachments,
+  required int maxInputTokens,
+}) async {
+  final source = await _buildChunkedContentSourceFromStoredAttachments(
+    storedAttachments,
+  );
+  if (source == null) return '原始文本附件不可用，未能创建分批任务。';
+  final strategy = resolveChunkedContentStrategy(originalPrompt);
+  final targetChunkTokens = resolveChunkedContentTargetChunkTokens(
+    maxInputTokens,
+  );
+  final overlapTokens = resolveChunkedContentOverlapTokens(strategy);
+  final snapshot = ChunkedContentRequestSnapshot(
+    protocol: modelInfo.channel.protocol,
+    modelName: modelInfo.channelModel.modelName,
+    maxInputTokens: maxInputTokens,
+    targetChunkTokens: targetChunkTokens,
+    overlapTokens: overlapTokens.clamp(0, targetChunkTokens - 1).toInt(),
+    sourceAttachmentIds: source.attachmentIds,
+  );
+  final task = await ref
+      .read(databaseProvider)
+      .chunkedContentTaskDao
+      .createTask(
+        id: _uuid.v4(),
+        sessionId: session.id,
+        sourceMessageId: sourceMessageId,
+        sourceAttachmentId: source.attachmentIds.first,
+        originalPrompt: originalPrompt,
+        channelModelId: modelInfo.channelModel.id,
+        providerId: modelInfo.channel.protocol,
+        strategy: strategy,
+        requestSnapshot: snapshot,
+      );
+  _runPersistedChunkedContentTask(
+    ref: ref,
+    task: task,
+    session: session,
+    modelInfo: modelInfo,
+    source: source,
+  );
+  return null;
+}
+
+void _runPersistedChunkedContentTask({
+  required WidgetRef ref,
+  required ChunkedContentTask task,
+  required Session session,
+  required ChannelModelWithChannel modelInfo,
+  required _ChunkedContentSource source,
+}) {
+  final previousTaskId = _activeChunkedContentTaskIdBySession[task.sessionId];
+  if (previousTaskId != null && previousTaskId != task.id) {
+    _chunkedContentCancelTokens.remove(previousTaskId)?.cancel('新任务替换旧任务');
+  }
+  final cancelToken = CancelToken();
+  _activeChunkedContentTaskIdBySession[task.sessionId] = task.id;
+  _chunkedContentCancelTokens[task.id] = cancelToken;
+  ref.read(streamStateProvider(task.sessionId).notifier).state = StreamState(
+    isStreaming: true,
+    modelId: task.channelModelId,
+    currentContent: '正在准备长内容',
+    isWaitingForFirstToken: false,
+  );
+
+  unawaited(() async {
+    ChunkedContentRunResult? result;
+    try {
+      final apiKey = KeyEncryptor.decryptOrEmpty(
+        modelInfo.channel.apiKeyEncrypted,
+      );
+      final runner = ChunkedContentTaskRunner(
+        dao: ref.read(databaseProvider).chunkedContentTaskDao,
+        send: (request, token) => _sendChunkedContentTaskRequest(
+          ref: ref,
+          sessionId: task.sessionId,
+          modelInfo: modelInfo,
+          apiKey: apiKey,
+          request: request,
+          cancelToken: token,
+        ),
+      );
+      result = await runner.run(
+        task.id,
+        source: source.content,
+        cancelToken: cancelToken,
+      );
+      final completed = result?.completed == true;
+      if (completed &&
+          result?.finalContent != null &&
+          result?.finalMessageId != null) {
+        unawaited(
+          _appendConversationArchiveMessage(
+            ref: ref,
+            sessionId: task.sessionId,
+            sessionTitle: session.title,
+            messageId: result!.finalMessageId!,
+            role: 'assistant',
+            content: result.finalContent!,
+            channelModelId: task.channelModelId,
+          ),
+        );
+      }
+      ref.invalidate(messagesProvider(task.sessionId));
+      ref.invalidate(chunkedContentTasksProvider(task.sessionId));
+      ref.invalidate(sessionsProvider);
+      final fresh =
+          result?.task ??
+          await ref
+              .read(databaseProvider)
+              .chunkedContentTaskDao
+              .getTask(task.id);
+      if (_activeChunkedContentTaskIdBySession[task.sessionId] != task.id) {
+        return;
+      }
+      _activeChunkedContentTaskIdBySession.remove(task.sessionId);
+      _chunkedContentCancelTokens.remove(task.id);
+      ref
+          .read(streamStateProvider(task.sessionId).notifier)
+          .state = StreamState(
+        isStreaming: false,
+        modelId: task.channelModelId,
+        error: fresh?.status == chunkedContentFailedStatus
+            ? (fresh?.error ?? '长内容任务失败，可继续或重试')
+            : null,
+      );
+    } on Object catch (error) {
+      if (_activeChunkedContentTaskIdBySession[task.sessionId] != task.id) {
+        return;
+      }
+      _activeChunkedContentTaskIdBySession.remove(task.sessionId);
+      _chunkedContentCancelTokens.remove(task.id);
+      ref
+          .read(streamStateProvider(task.sessionId).notifier)
+          .state = StreamState(
+        isStreaming: false,
+        modelId: task.channelModelId,
+        error: sanitizeChunkedContentDiagnostic(error),
+      );
+    }
+  }());
+}
+
+Future<String> _sendChunkedContentTaskRequest({
+  required WidgetRef ref,
+  required String sessionId,
+  required ChannelModelWithChannel modelInfo,
+  required String apiKey,
+  required ChunkedContentModelRequest request,
+  required CancelToken cancelToken,
+}) async {
+  final injected = debugChunkedContentRequestSender;
+  if (injected != null) return injected(request, cancelToken);
+  ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+    isStreaming: true,
+    modelId: modelInfo.channelModel.id,
+    currentContent: request.kind == 'reduce'
+        ? '正在生成最终回答'
+        : '正在处理 ${(request.chunkIndex ?? 0) + 1}/${request.totalChunks}',
+    isWaitingForFirstToken: false,
+  );
+  final buffer = StringBuffer();
+  await for (final chunk in AiService.sendMessage(
+    protocol: modelInfo.channel.protocol,
+    baseUrl: modelInfo.channel.baseUrl,
+    apiKey: apiKey,
+    model: modelInfo.channelModel.modelName,
+    messages: [ai.AiMessage(role: 'user', content: request.content)],
+    cancelToken: cancelToken,
+  )) {
+    if (chunk.content != null) buffer.write(chunk.content);
+  }
+  return buffer.toString();
 }
 
 Future<void> _appendConversationArchiveMessage({
@@ -714,12 +1089,31 @@ Future<String?> _writeAudioTranscriptDraftAndMaybeTranscribe({
   required int fileSize,
   String? transcript,
   SpeechToTextEngine? engineOverride,
+  CancelToken? cancelToken,
 }) async {
   if (kIsWeb) return null;
   final AudioTranscriptArchive archive;
   try {
     final root = await getApplicationDocumentsDirectory();
     archive = AudioTranscriptArchive(rootDirectory: root);
+    // 重试同一条已归档消息时复用成功的 sidecar，避免每次点击重试都再次
+    // 消耗 ASR 额度。failed / empty / pending 状态仍允许重新发起识别。
+    try {
+      final existing = await archive.readDetails(
+        messageId: messageId,
+        attachmentId: attachmentId,
+      );
+      if (existing?.hasCopyableTranscript == true) {
+        _invalidateAudioTranscriptStatus(
+          ref,
+          messageId: messageId,
+          attachmentId: attachmentId,
+        );
+        return existing!.transcriptText!.trim();
+      }
+    } catch (_) {
+      // sidecar 损坏时按新任务处理；后续 writeDraft 会覆盖为 pending。
+    }
     final initialTranscript = transcript == null
         ? null
         : initialAudioTranscriptText(transcript);
@@ -787,6 +1181,7 @@ Future<String?> _writeAudioTranscriptDraftAndMaybeTranscribe({
         fileName: fileName,
         fileSize: fileSize,
       ),
+      cancelToken: cancelToken,
     );
     return initialAudioTranscriptText(result.transcript);
   } catch (e) {
@@ -828,8 +1223,7 @@ SpeechToTextEngine? _resolveSpeechToTextEngineForMessage({
         // 通道模型本身是 ASR 模型（如 SimiRouter 的 mimo-v2.5-asr）时
         // 直接透传，否则保持默认 whisper-1（避免把聊天模型名传给转录接口）。
         model: channelModelIsAsr ? channelModel : kDefaultSpeechToTextModel,
-        language:
-            ref.read(sttLanguageOverrideProvider) ?? 'auto',
+        language: ref.read(sttLanguageOverrideProvider) ?? 'auto',
       ),
     );
   }
@@ -847,6 +1241,7 @@ Future<String?> _transcribeAudioAttachmentsForAi({
   required String messageId,
   required List<_StoredAttachment> attachments,
   required SpeechToTextEngine? engine,
+  CancelToken? cancelToken,
 }) async {
   final transcripts = <String>[];
   for (final attachment in attachments) {
@@ -860,6 +1255,7 @@ Future<String?> _transcribeAudioAttachmentsForAi({
       fileName: attachment.fileName,
       fileSize: attachment.fileSize,
       engineOverride: engine,
+      cancelToken: cancelToken,
     );
     // 单次语言覆盖只影响本次发送的转录，全部完成后清除。
     ref.read(sttLanguageOverrideProvider.notifier).clear();
@@ -896,13 +1292,15 @@ class _DocumentContentSource {
 /// normally but contributes one text block to this request, preventing an
 /// accidental duplicate append when a picker returns the same file twice.
 Future<List<String>> _extractDocumentContents(
-  Iterable<_DocumentContentSource> sources,
-) async {
+  Iterable<_DocumentContentSource> sources, {
+  bool skipNativeDocumentTransport = false,
+}) async {
   final extractor = const FileContentExtractor();
   final extracted = <String>[];
   final seenPaths = <String>{};
   for (final source in sources) {
     if (source.type.trim().toLowerCase() != 'document') continue;
+    if (skipNativeDocumentTransport) continue;
     final path = source.path.trim();
     if (!seenPaths.add(path)) continue;
     final result = await extractor.extract(
@@ -913,6 +1311,20 @@ Future<List<String>> _extractDocumentContents(
     extracted.add(result.text);
   }
   return extracted;
+}
+
+/// `openai_response` 的 `input_file` 是已验证的原生协议字段。走该路径时
+/// 不能再把同一 document 抽取并拼到 `input_text`，否则用户的一份文件会被
+/// 发送两次、计费两次且可能得到相互矛盾的上下文。
+bool _usesVerifiedNativeDocumentTransport(ChannelModelWithChannel modelInfo) {
+  final protocol = _tryGetAiProtocol(modelInfo.channel.protocol);
+  return protocol?.nativeAttachmentTypes.contains('document') == true &&
+      ModelCapability.supportsVerifiedNativeFile(
+        capability: modelInfo.channelModel.capability,
+        modelId: modelInfo.channelModel.modelName,
+        protocol: modelInfo.channel.protocol,
+        attachmentType: 'document',
+      );
 }
 
 String _safeAttachmentPreparationError(Object error) {
@@ -932,15 +1344,15 @@ String? _preflightChatAttachments({
   }
   for (final rawType in attachmentTypes) {
     final type = rawType.trim().toLowerCase();
-    if (type == 'pdf' &&
-        protocolAdapter.nativeAttachmentTypes.contains('pdf') &&
+    if ((type == 'pdf' || type == 'document') &&
+        protocolAdapter.nativeAttachmentTypes.contains(type) &&
         !ModelCapability.supportsVerifiedNativeFile(
           capability: modelInfo.channelModel.capability,
           modelId: modelInfo.channelModel.modelName,
           protocol: modelInfo.channel.protocol,
           attachmentType: type,
         )) {
-      return '当前模型 ${modelInfo.channelModel.modelName} 未验证 PDF 原生 File 契约，消息未发送；已保留输入和附件。';
+      return '当前模型 ${modelInfo.channelModel.modelName} 未验证 ${attachmentTypeLabel(type)} 原生 File 契约，消息未发送；已保留输入和附件。';
     }
   }
   final transportError = preflightChatAttachmentTransport(
@@ -1037,6 +1449,98 @@ class _StoredAttachment {
   });
 }
 
+class _ChunkedContentSource {
+  const _ChunkedContentSource({
+    required this.attachmentIds,
+    required this.fileNames,
+    required this.contents,
+    required this.content,
+  });
+
+  final List<String> attachmentIds;
+  final List<String> fileNames;
+  final List<String> contents;
+  final String content;
+}
+
+/// 任务创建与启动恢复共用同一份源加载逻辑。路径去重保持普通文本降级的
+/// 语义：同一私有文件被重复选择只作为一份待处理数据，但附件卡仍原样保留。
+Future<_ChunkedContentSource?> _buildChunkedContentSourceFromStoredAttachments(
+  Iterable<_StoredAttachment> attachments, {
+  Set<String>? onlyAttachmentIds,
+}) async {
+  final extractor = const FileContentExtractor();
+  final seenPaths = <String>{};
+  final ids = <String>[];
+  final names = <String>[];
+  final contents = <String>[];
+  for (final attachment in attachments) {
+    if (attachment.fileType.trim().toLowerCase() != 'document') continue;
+    if (onlyAttachmentIds != null &&
+        !onlyAttachmentIds.contains(attachment.id)) {
+      continue;
+    }
+    final path = attachment.localPath.trim();
+    if (path.isEmpty || !seenPaths.add(path)) continue;
+    final result = await extractor.extract(
+      path: path,
+      fileName: attachment.fileName,
+      attachmentType: 'document',
+    );
+    ids.add(attachment.id);
+    names.add(attachment.fileName);
+    contents.add(result.text);
+  }
+  if (ids.isEmpty || contents.isEmpty) return null;
+  final content = buildChunkedContentSource(
+    contents: contents,
+    fileNames: names,
+  );
+  if (content.isEmpty) return null;
+  return _ChunkedContentSource(
+    attachmentIds: List<String>.unmodifiable(ids),
+    fileNames: List<String>.unmodifiable(names),
+    contents: List<String>.unmodifiable(contents),
+    content: content,
+  );
+}
+
+Future<_ChunkedContentSource?> _loadChunkedContentSourceForTask({
+  required AppDatabase database,
+  required ChunkedContentTask task,
+}) async {
+  ChunkedContentRequestSnapshot snapshot;
+  try {
+    snapshot = ChunkedContentRequestSnapshot.decode(task.requestSnapshot);
+  } on FormatException {
+    return null;
+  }
+  final rows = await database.attachmentDao.getAttachmentsByMessage(
+    task.sourceMessageId,
+  );
+  final source = await _buildChunkedContentSourceFromStoredAttachments(
+    rows
+        .map(
+          (row) => _StoredAttachment(
+            id: row.id,
+            fileName: row.fileName,
+            fileType: row.fileType,
+            localPath: row.localPath,
+            fileSize: row.fileSize,
+          ),
+        )
+        .toList(growable: false),
+    onlyAttachmentIds: snapshot.sourceAttachmentIds.toSet(),
+  );
+  if (source == null) return null;
+  final expected = snapshot.sourceAttachmentIds.toSet();
+  if (source.attachmentIds.toSet().length != expected.length ||
+      !source.attachmentIds.toSet().containsAll(expected)) {
+    return null;
+  }
+  return source;
+}
+
 class _GeneratedSourceAttachment {
   final String path;
   final String fileName;
@@ -1047,6 +1551,19 @@ class _GeneratedSourceAttachment {
     required this.fileName,
     required this.fileType,
   });
+}
+
+const _generatedSourceManifestFormat = 'simichat.media_sources.v1';
+const _generatedSourceManifestFileType = 'source-manifest';
+const _generatedSourceManifestMaxBytes = 256 * 1024;
+
+class _StoredSourceManifest {
+  const _StoredSourceManifest({required this.marker, required this.sources});
+
+  /// 持久化到 MediaJob 单数 source 字段中的 manifest 标记；它本身不作为
+  /// 用户附件插入时间线，真正插入的是 [sources] 中的每一份素材。
+  final _StoredAttachment marker;
+  final List<_StoredAttachment> sources;
 }
 
 /// 将生成动作使用的参考图复制到应用私有目录，确保源文件被用户移动后，
@@ -1087,6 +1604,233 @@ Future<_StoredAttachment> _archiveGeneratedSourceAttachment(
     localPath: archived.path,
     fileSize: await archived.length(),
   );
+}
+
+/// 在提交远端媒体任务前归档全部参考素材，并用一个相对应用 support 根目录
+/// 的 manifest 绑定到 MediaJob。这样进程在 pending / polling 阶段退出后，
+/// 冷启动恢复仍能交付首帧、多参考图和参考音频，而不是只记住第一份文件。
+Future<_StoredSourceManifest> _archiveGeneratedSourceManifest(
+  List<_GeneratedSourceAttachment> sources, {
+  required String operationId,
+  required String baseAttachmentId,
+  Directory? rootDirectory,
+}) async {
+  if (sources.isEmpty) {
+    throw const FormatException('参考素材清单不能为空');
+  }
+  if (sources.length > kMaxAttachmentsPerMessage) {
+    throw const FormatException('参考素材数量超过单条消息附件上限');
+  }
+
+  final root = rootDirectory ?? await getApplicationSupportDirectory();
+  final rootPath = p.normalize(p.absolute(root.path));
+  final archived = <_StoredAttachment>[];
+  File? manifestFile;
+  try {
+    for (var index = 0; index < sources.length; index++) {
+      archived.add(
+        await _archiveGeneratedSourceAttachment(
+          sources[index],
+          attachmentId: index == 0
+              ? baseAttachmentId
+              : '$baseAttachmentId-$index',
+          rootDirectory: root,
+        ),
+      );
+    }
+
+    final manifest = <String, Object>{
+      'format': _generatedSourceManifestFormat,
+      'sources': <Map<String, Object>>[
+        for (final source in archived)
+          <String, Object>{
+            'id': source.id,
+            'file_name': source.fileName,
+            'file_type': source.fileType,
+            'local_path': p.relative(source.localPath, from: rootPath),
+            'file_size': source.fileSize,
+          },
+      ],
+    };
+    manifestFile = File(
+      p.join(rootPath, 'generated_context', '$operationId-sources.json'),
+    );
+    await writeBytesAtomically(
+      manifestFile,
+      utf8.encode(jsonEncode(manifest)),
+      maxBytes: _generatedSourceManifestMaxBytes,
+    );
+    final marker = _StoredAttachment(
+      id: baseAttachmentId,
+      fileName: p.basename(manifestFile.path),
+      fileType: _generatedSourceManifestFileType,
+      localPath: p.relative(manifestFile.path, from: rootPath),
+      fileSize: await manifestFile.length(),
+    );
+    return _StoredSourceManifest(
+      marker: marker,
+      sources: List<_StoredAttachment>.unmodifiable(archived),
+    );
+  } catch (_) {
+    for (final source in archived) {
+      try {
+        final file = File(source.localPath);
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+    try {
+      if (manifestFile != null && await manifestFile.exists()) {
+        await manifestFile.delete();
+      }
+    } catch (_) {}
+    rethrow;
+  }
+}
+
+String _resolveGeneratedSourcePath(
+  Directory root,
+  String rawPath, {
+  bool requireRelative = false,
+}) {
+  final normalized = rawPath.trim();
+  if (normalized.isEmpty || normalized.contains('\u0000')) {
+    throw const FormatException('参考素材路径为空或无效');
+  }
+  if (p.split(normalized).contains('..')) {
+    throw const FormatException('参考素材路径越界');
+  }
+  if (requireRelative && p.isAbsolute(normalized)) {
+    throw const FormatException('参考素材 manifest 只能保存相对路径');
+  }
+  final rootPath = p.normalize(p.absolute(root.path));
+  final candidate = p.normalize(
+    p.isAbsolute(normalized) ? normalized : p.join(rootPath, normalized),
+  );
+  if (candidate == rootPath || !p.isWithin(rootPath, candidate)) {
+    throw const FormatException('参考素材路径不在应用私有目录');
+  }
+  return candidate;
+}
+
+Future<List<_StoredAttachment>> _loadGeneratedSourcePlan({
+  required MediaJob row,
+  required Directory root,
+}) async {
+  final rawPath = row.deliverySourcePath?.trim();
+  if (rawPath == null || rawPath.isEmpty) return const <_StoredAttachment>[];
+
+  if (row.deliverySourceFileType != _generatedSourceManifestFileType) {
+    final localPath = _resolveGeneratedSourcePath(root, rawPath);
+    final file = File(localPath);
+    if (!await file.exists()) {
+      throw const FileSystemException('参考附件不存在');
+    }
+    final fileName = safeAttachmentFileName(
+      row.deliverySourceFileName ?? p.basename(localPath),
+    );
+    final fileType =
+        row.deliverySourceFileType ?? inferAttachmentType(fileName);
+    final fileSize = await file.length();
+    final validationError = validateAttachmentMetadata(
+      fileName: fileName,
+      fileType: fileType,
+      fileSize: fileSize,
+      currentCount: 0,
+    );
+    if (validationError != null) throw FormatException(validationError);
+    return <_StoredAttachment>[
+      _StoredAttachment(
+        id:
+            row.deliverySourceAttachmentId ??
+            UniversalMediaDeliveryIds.forOperationId(row.id).sourceAttachmentId,
+        fileName: fileName,
+        fileType: fileType,
+        localPath: localPath,
+        fileSize: fileSize,
+      ),
+    ];
+  }
+
+  final manifestPath = _resolveGeneratedSourcePath(root, rawPath);
+  final manifestFile = File(manifestPath);
+  if (!await manifestFile.exists()) {
+    throw const FileSystemException('参考素材 manifest 不存在');
+  }
+  final manifestSize = await manifestFile.length();
+  if (manifestSize <= 0 || manifestSize > _generatedSourceManifestMaxBytes) {
+    throw const FormatException('参考素材 manifest 大小无效');
+  }
+  final decoded = jsonDecode(await manifestFile.readAsString());
+  if (decoded is! Map || decoded['format'] != _generatedSourceManifestFormat) {
+    throw const FormatException('参考素材 manifest 格式无效');
+  }
+  final rawSources = decoded['sources'];
+  if (rawSources is! List ||
+      rawSources.isEmpty ||
+      rawSources.length > kMaxAttachmentsPerMessage) {
+    throw const FormatException('参考素材 manifest 数量无效');
+  }
+
+  final baseAttachmentId =
+      row.deliverySourceAttachmentId ??
+      UniversalMediaDeliveryIds.forOperationId(row.id).sourceAttachmentId;
+  final result = <_StoredAttachment>[];
+  final seenIds = <String>{};
+  for (var index = 0; index < rawSources.length; index++) {
+    final raw = rawSources[index];
+    if (raw is! Map) throw const FormatException('参考素材 manifest 条目无效');
+    final id = raw['id'];
+    final fileNameValue = raw['file_name'];
+    final fileType = raw['file_type'];
+    final localPathValue = raw['local_path'];
+    final declaredSize = raw['file_size'];
+    final expectedId = index == 0
+        ? baseAttachmentId
+        : '$baseAttachmentId-$index';
+    if (id is! String || id != expectedId || !seenIds.add(id)) {
+      throw const FormatException('参考素材 manifest ID 无效');
+    }
+    if (fileNameValue is! String ||
+        fileType is! String ||
+        localPathValue is! String ||
+        declaredSize is! int) {
+      throw const FormatException('参考素材 manifest 字段无效');
+    }
+    final fileName = safeAttachmentFileName(fileNameValue);
+    if (fileName != fileNameValue || fileName.isEmpty) {
+      throw const FormatException('参考素材文件名无效');
+    }
+    final localPath = _resolveGeneratedSourcePath(
+      root,
+      localPathValue,
+      requireRelative: true,
+    );
+    final file = File(localPath);
+    if (!await file.exists()) {
+      throw const FileSystemException('参考附件不存在');
+    }
+    final actualSize = await file.length();
+    if (declaredSize != actualSize) {
+      throw const FormatException('参考素材大小与 manifest 不一致');
+    }
+    final validationError = validateAttachmentMetadata(
+      fileName: fileName,
+      fileType: fileType,
+      fileSize: actualSize,
+      currentCount: index,
+    );
+    if (validationError != null) throw FormatException(validationError);
+    result.add(
+      _StoredAttachment(
+        id: id,
+        fileName: fileName,
+        fileType: fileType,
+        localPath: localPath,
+        fileSize: actualSize,
+      ),
+    );
+  }
+  return List<_StoredAttachment>.unmodifiable(result);
 }
 
 Future<List<_StoredAttachment>> _storeAttachments({
@@ -1149,6 +1893,25 @@ Future<List<_StoredAttachment>> _storeAttachments({
     );
   }
   return stored;
+}
+
+/// Remove files archived for a send that never reached the database. The
+/// Composer still owns the original pending file, so this only cleans the
+/// message-scoped copy created by [_storeAttachments].
+Future<void> _deleteUnpersistedAttachmentFiles(
+  Iterable<_StoredAttachment> attachments,
+) async {
+  if (kIsWeb) return;
+  for (final attachment in attachments) {
+    final path = attachment.localPath.trim();
+    if (path.isEmpty) continue;
+    try {
+      await File(path).delete();
+    } catch (_) {
+      // Cleanup is best effort; the pending Composer attachment remains
+      // retryable even if a stale archive copy cannot be removed now.
+    }
+  }
 }
 
 /// 重试当前会话最后一条 user 消息
@@ -1310,6 +2073,10 @@ Future<ModelSwitchResult> switchConversationModel({
   required String modelLabel,
   String? previousModelId,
   String? previousModelLabel,
+
+  /// 顶部模型胶囊的切换是工作区状态变化，不应向聊天时间线插入一条
+  /// 系统消息。设置页 / 兼容调用方可保留旧的审计记录行为。
+  bool recordInConversation = true,
 }) async {
   final selectedNotifier = ref.read(selectedModelIdProvider.notifier);
   final previousSelectedId = ref.read(selectedModelIdProvider);
@@ -1346,6 +2113,18 @@ Future<ModelSwitchResult> switchConversationModel({
           recorded: false,
           message:
               '当前回复进行中，本次回复仍使用原模型；${resolveModelSwitchLabel(modelLabel)}将用于下一条消息',
+        );
+      }
+
+      if (!recordInConversation) {
+        ref.invalidate(chatSessionModelProvider(activeSessionId));
+        ref.invalidate(activeSessionProvider);
+        ref.invalidate(sessionsProvider);
+        selectedNotifier.state = modelId;
+        return const ModelSwitchResult(
+          changed: true,
+          recorded: false,
+          message: '模型已切换',
         );
       }
 
@@ -1457,6 +2236,16 @@ final streamStateProvider = StateProvider.family<StreamState, String>((
   return const StreamState();
 });
 
+/// 工作卡的数据库读模型。中间 chunk 正文不通过这个 Provider 暴露到消息
+/// 时间线；卡片只使用任务状态、进度和安全错误摘要。
+final chunkedContentTasksProvider =
+    FutureProvider.family<List<ChunkedContentTask>, String>((ref, sessionId) {
+      return ref
+          .watch(databaseProvider)
+          .chunkedContentTaskDao
+          .listTasksBySession(sessionId);
+    });
+
 /// 发送消息（支持 MCP 工具调用循环：AI → tool_call → 执行 → AI 回复，最多 3 轮）
 Future<bool> sendMessage({
   required WidgetRef ref,
@@ -1473,9 +2262,13 @@ Future<bool> sendMessage({
   final channelDao = ref.read(channelDaoProvider);
   final attachmentDao = ref.read(attachmentDaoProvider);
 
-  // 防止同一会话并发发送：先取消已有流
+  // 防止同一会话并发发送：普通 SSE 与分批任务都必须先停止。直接调用
+  // sendMessage 的调用方也得到与 Composer 相同的单会话串行语义。
   if (_streamSubscriptions.containsKey(sessionId)) {
     cancelStreaming(ref, sessionId);
+  }
+  if (_activeChunkedContentTaskIdBySession.containsKey(sessionId)) {
+    await cancelActiveChunkedContentTask(ref, sessionId);
   }
   final operation = _beginSendOperation(sessionId);
 
@@ -1495,6 +2288,13 @@ Future<bool> sendMessage({
     );
     return false;
   }
+  final contextBudget = resolveModelContextBudget(
+    protocol: modelInfo.channel.protocol,
+    modelName: modelInfo.channelModel.modelName,
+  );
+  final useNativeDocumentTransport = _usesVerifiedNativeDocumentTransport(
+    modelInfo,
+  );
 
   Message? reusedUserMessage;
   if (reuseUserMessageId != null) {
@@ -1575,9 +2375,25 @@ Future<bool> sendMessage({
 
   if (!_isCurrentSendOperation(sessionId, operation)) return false;
 
+  // 解密一次当前 Chat 模型的凭据。语音附件在真正建立聊天 SSE 之前会先
+  // 走独立的 ASR 路由；这里提前取得 key，确保 STT 失败时不会先落库一条
+  // 不完整的用户消息，也不会把 ASR 模型误当成 Chat 模型使用。
+  final String apiKey;
+  try {
+    apiKey = KeyEncryptor.decryptOrEmpty(modelInfo.channel.apiKeyEncrypted);
+  } catch (e) {
+    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+      isStreaming: false,
+      modelId: modelId,
+      error: 'API Key 解密失败: $e',
+    );
+    return false;
+  }
+
   final String userMsgId;
   final List<_StoredAttachment> storedAttachments;
   late final List<String> extractedDocumentContents;
+  var shouldUseChunkedContentTask = false;
   var userTokens = TokenEstimator.estimate(messageContent);
   if (reusedUserMessage != null) {
     userMsgId = reusedUserMessage.id;
@@ -1601,6 +2417,7 @@ Future<bool> sendMessage({
             fileName: attachment.fileName,
           ),
         ),
+        skipNativeDocumentTransport: useNativeDocumentTransport,
       );
     } on Object catch (error) {
       _setSendPreflightError(
@@ -1609,6 +2426,20 @@ Future<bool> sendMessage({
         _safeAttachmentPreparationError(error),
       );
       return false;
+    }
+    if (extractedDocumentContents.isNotEmpty &&
+        !_isSingleTextFallbackSafe(
+          content: messageContent,
+          extractedContents: extractedDocumentContents,
+          maxInputTokens: contextBudget.maxInputTokens,
+        )) {
+      if (!_canStartChunkedContentTask(
+        storedAttachments.map((attachment) => attachment.fileType),
+      )) {
+        _setTextFallbackBudgetError(ref, sessionId);
+        return false;
+      }
+      shouldUseChunkedContentTask = true;
     }
   } else {
     late final List<_PreparedAttachment> preparedAttachments;
@@ -1622,6 +2453,7 @@ Future<bool> sendMessage({
             fileName: prepared.attachment.name,
           ),
         ),
+        skipNativeDocumentTransport: useNativeDocumentTransport,
       );
     } on Object catch (error) {
       _setSendPreflightError(
@@ -1630,6 +2462,20 @@ Future<bool> sendMessage({
         _safeAttachmentPreparationError(error),
       );
       return false;
+    }
+    if (extractedDocumentContents.isNotEmpty &&
+        !_isSingleTextFallbackSafe(
+          content: messageContent,
+          extractedContents: extractedDocumentContents,
+          maxInputTokens: contextBudget.maxInputTokens,
+        )) {
+      if (!_canStartChunkedContentTask(
+        messageAttachments.map((attachment) => attachment.type),
+      )) {
+        _setTextFallbackBudgetError(ref, sessionId);
+        return false;
+      }
+      shouldUseChunkedContentTask = true;
     }
     userMsgId = _uuid.v4();
     try {
@@ -1645,15 +2491,95 @@ Future<bool> sendMessage({
       );
       return false;
     }
+  }
+
+  if (!_isCurrentSendOperation(sessionId, operation)) return false;
+
+  final hasAudioAttachment = storedAttachments.any(
+    (attachment) => attachment.fileType == 'audio',
+  );
+  String? audioTranscriptForAi;
+  if (hasAudioAttachment) {
+    // STT happens before the chat SSE is created. Register its token here so
+    // the Composer Stop action can cancel an in-flight transcription instead
+    // of only invalidating the later chat request.
+    final sttCancelToken = CancelToken();
+    _cancelTokens[sessionId] = sttCancelToken;
+    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+      isStreaming: true,
+      modelId: modelId,
+      isWaitingForFirstToken: true,
+    );
+    try {
+      audioTranscriptForAi = await _transcribeAudioAttachmentsForAi(
+        ref: ref,
+        sessionId: sessionId,
+        messageId: userMsgId,
+        attachments: storedAttachments,
+        engine: _resolveSpeechToTextEngineForMessage(
+          ref: ref,
+          modelInfo: modelInfo,
+          apiKey: apiKey,
+        ),
+        cancelToken: sttCancelToken,
+      );
+    } catch (_) {
+      if (reusedUserMessage == null) {
+        await _deleteUnpersistedAttachmentFiles(storedAttachments);
+      }
+      rethrow;
+    } finally {
+      // Do not remove a token installed by a newer request after cancellation
+      // or a same-session retry raced this preparation phase.
+      if (identical(_cancelTokens[sessionId], sttCancelToken)) {
+        _cancelTokens.remove(sessionId);
+      }
+    }
+    if (!_isCurrentSendOperation(sessionId, operation)) {
+      if (reusedUserMessage == null) {
+        await _deleteUnpersistedAttachmentFiles(storedAttachments);
+      }
+      return false;
+    }
+    if (audioTranscriptForAi == null || audioTranscriptForAi.trim().isEmpty) {
+      if (reusedUserMessage == null) {
+        await _deleteUnpersistedAttachmentFiles(storedAttachments);
+      }
+      ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
+        isStreaming: false,
+        modelId: modelId,
+        error: '语音识别失败，消息未发送。请检查 mimo-v2.5-asr 配置后重试。',
+      );
+      return false;
+    }
+  }
+
+  final fileAwareContent = fileAwareMessageContent(
+    content: messageContent,
+    extractedContents: extractedDocumentContents,
+  );
+  final effectiveUserContent = audioAwareMessageContent(
+    content: fileAwareContent,
+    hasAudioAttachment: hasAudioAttachment,
+    audioTranscript: audioTranscriptForAi,
+  );
+  userTokens = TokenEstimator.estimate(effectiveUserContent);
+
+  // 语音 + 文字必须在时间线中保存为同一条用户消息；否则下一次重试或
+  // 历史恢复只能看到原始文字，无法复现当时给 Chat 模型的完整输入。
+  if (reusedUserMessage != null) {
+    if (effectiveUserContent != reusedUserMessage.content) {
+      await messageDao.updateMessageContent(userMsgId, effectiveUserContent);
+    }
+  } else {
     await messageDao.insertMessage(
       id: userMsgId,
       sessionId: sessionId,
       role: 'user',
-      content: messageContent,
+      content: effectiveUserContent,
       tokens: userTokens,
     );
 
-    // 保存附件到数据库
     for (final attachment in storedAttachments) {
       await attachmentDao.insertAttachment(
         id: attachment.id,
@@ -1672,7 +2598,7 @@ Future<bool> sendMessage({
         sessionTitle: session.title,
         messageId: userMsgId,
         role: 'user',
-        content: messageContent,
+        content: effectiveUserContent,
         attachmentNames: storedAttachments
             .map((attachment) => attachment.fileName)
             .toList(),
@@ -1681,83 +2607,67 @@ Future<bool> sendMessage({
 
     await sessionDao.updateLastMessageAt(sessionId);
 
-    // 本地核心记忆点提取：只处理用户明示偏好 / 画像 / 目标等文本，
-    // 结果持久化在本机，后续构建上下文时按相关性注入系统提示词。
-    final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
-    try {
-      final extractedMemory = ref
-          .read(keyPointExtractorProvider)
-          .extractFromUserMessage(
-            sessionId: sessionId,
-            sourceMessageId: userMsgId,
-            content: messageContent,
-          );
-      if (extractedMemory.isNotEmpty) {
-        await memoryNotifier.rememberAll(extractedMemory);
+    // 分批路径不把附件全文送入记忆提取；普通消息仍维持既有本地记忆行为。
+    if (!shouldUseChunkedContentTask) {
+      final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
+      try {
+        final extractedMemory = ref
+            .read(keyPointExtractorProvider)
+            .extractFromUserMessage(
+              sessionId: sessionId,
+              sourceMessageId: userMsgId,
+              content: effectiveUserContent,
+            );
+        if (extractedMemory.isNotEmpty) {
+          await memoryNotifier.rememberAll(extractedMemory);
+        }
+      } catch (_) {
+        // 记忆提取失败不能阻断聊天主路径；不要记录用户消息内容。
       }
-    } catch (_) {
-      // 记忆提取失败不能阻断聊天主路径；不要记录用户消息内容。
     }
   }
 
   // 刷新消息列表
   ref.invalidate(messagesProvider(sessionId));
   ref.invalidate(sessionsProvider);
+
+  // 路径 C：文本附件已安全归档，但完整正文不能放入单次请求。任务会以
+  // 私有附件为源持久化分块计划，中间输出不写入聊天时间线，最终只交付一条
+  // assistant 消息。任务创建失败时原始 user message/附件仍保留，可重试。
+  if (shouldUseChunkedContentTask) {
+    try {
+      final error = await _createAndRunChunkedContentTask(
+        ref: ref,
+        session: session,
+        modelInfo: modelInfo,
+        sourceMessageId: userMsgId,
+        // 分批任务的 prompt 仍只使用用户原始输入；完整附件正文由 task
+        // runner 按 chunk 读取，不能把全文再次拼进 reducer 的 prompt。
+        originalPrompt: messageContent,
+        storedAttachments: storedAttachments,
+        maxInputTokens: contextBudget.maxInputTokens,
+      );
+      if (error != null) {
+        _setSendPreflightError(ref, sessionId, error);
+        return false;
+      }
+      return true;
+    } on Object catch (error) {
+      _setSendPreflightError(
+        ref,
+        sessionId,
+        '已保存原始文本附件，但无法创建分批任务：${sanitizeChunkedContentDiagnostic(error)}',
+      );
+      return false;
+    }
+  }
+
   final memoryNotifier = ref.read(keyPointMemoryProvider.notifier);
 
-  // 解密 API Key
-  final String apiKey;
-  try {
-    apiKey = KeyEncryptor.decryptOrEmpty(modelInfo.channel.apiKeyEncrypted);
-  } catch (e) {
-    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
-      isStreaming: false,
-      modelId: modelId,
-      error: 'API Key 解密失败: $e',
-    );
-    return false;
-  }
-
-  if (!_isCurrentSendOperation(sessionId, operation)) return false;
-
-  final hasAudioAttachment = storedAttachments.any(
-    (attachment) => attachment.fileType == 'audio',
-  );
-  String? audioTranscriptForAi;
-  if (hasAudioAttachment) {
-    ref.read(streamStateProvider(sessionId).notifier).state = StreamState(
-      isStreaming: true,
-      modelId: modelId,
-      isWaitingForFirstToken: true,
-    );
-    audioTranscriptForAi = await _transcribeAudioAttachmentsForAi(
-      ref: ref,
-      sessionId: sessionId,
-      messageId: userMsgId,
-      attachments: storedAttachments,
-      engine: _resolveSpeechToTextEngineForMessage(
-        ref: ref,
-        modelInfo: modelInfo,
-        apiKey: apiKey,
-      ),
-    );
-    if (!_isCurrentSendOperation(sessionId, operation)) return false;
-  }
-  final fileAwareContent = fileAwareMessageContent(
-    content: messageContent,
-    extractedContents: extractedDocumentContents,
-  );
-  final effectiveUserContent = audioAwareMessageContent(
-    content: fileAwareContent,
-    hasAudioAttachment: hasAudioAttachment,
-    audioTranscript: audioTranscriptForAi,
-  );
-  userTokens = TokenEstimator.estimate(effectiveUserContent);
-
-  // 只把协议确实能表达的原生附件传给 adapter。document 已在上面绑定为
-  // 一次性的文本上下文，不能再把“文件名 / 空 base64 / 伪 file part”传给
-  // Chat-compatible adapter；audio 继续使用现有 STT 文本路径，即使某个
-  // 协议同时声明了原生 audio 也不重复发送同一段音频。
+  // 只把协议确实能表达、且已经通过模型级 File 契约验证的附件传给 adapter。
+  // 原生 document 已跳过文本抽取，因此这里会作为单个 input_file 发送；其它
+  // 协议的 document 仍只走受限文本 / 分批路径。audio 继续使用既有 STT 文本
+  // 路径，即使协议同时声明原生 audio 也不重复发送同一段音频。
   final aiAttachments = <ai.Attachment>[];
   final nativeAttachmentTypes =
       _tryGetAiProtocol(modelInfo.channel.protocol)?.nativeAttachmentTypes ??
@@ -1768,8 +2678,21 @@ Future<bool> sendMessage({
         !nativeAttachmentTypes.contains(attachmentType)) {
       continue;
     }
+    if ((attachmentType == 'pdf' || attachmentType == 'document') &&
+        !ModelCapability.supportsVerifiedNativeFile(
+          capability: modelInfo.channelModel.capability,
+          modelId: modelInfo.channelModel.modelName,
+          protocol: modelInfo.channel.protocol,
+          attachmentType: attachmentType,
+        )) {
+      continue;
+    }
     aiAttachments.add(
-      ai.Attachment(type: attachmentType, path: attachment.localPath),
+      ai.Attachment(
+        type: attachmentType,
+        path: attachment.localPath,
+        fileName: attachment.fileName,
+      ),
     );
   }
 
@@ -1841,10 +2764,6 @@ Future<bool> sendMessage({
   } catch (_) {
     // 反思提示失败不能影响主聊天链路；保留已有记忆提示。
   }
-  final contextBudget = resolveModelContextBudget(
-    protocol: modelInfo.channel.protocol,
-    modelName: modelInfo.channelModel.modelName,
-  );
   final compressionThreshold = dynamicCompressThresholdForBudget(
     contextBudget,
     ref.read(compressThresholdProvider),
@@ -1925,6 +2844,71 @@ ImageGenerationService Function({
 })?
 debugImageServiceFactory;
 
+/// 图片任务面板的正式提交入口。它和旧版 [generateImage] 分开保留，确保
+/// Composer 兼容调用不会丢失；新入口明确绑定本次选择的模型、所有参考图、
+/// 数量、比例、分辨率和质量，并在进入网络层前通过 typed Options 校验。
+Future<String?> generateImageWithOptions({
+  required WidgetRef ref,
+  required String sessionId,
+  required ImageGenerationOptions options,
+  required String routeModelId,
+  List<PendingAttachment> referenceAttachments = const [],
+}) async {
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+
+  final routeModel = await channelDao.getModelWithChannel(routeModelId);
+  if (routeModel == null) return '图片模型不存在或已被删除';
+  if (!canUseChannelImageGeneration(routeModel.channel.protocol)) {
+    return '当前渠道不支持 OpenAI 兼容图片生成，请切换到支持图片接口的渠道';
+  }
+
+  final profile = resolveImageRequestProfile(
+    modelName: routeModel.channelModel.modelName,
+    protocol: routeModel.channel.protocol,
+    baseUrl: routeModel.channel.baseUrl,
+  );
+  final errors = options.validationErrors(capability: profile.capability);
+  if (errors.isNotEmpty) return errors.join('；');
+
+  final imageAttachments = referenceAttachments
+      .where((attachment) => attachment.type == 'image')
+      .toList(growable: false);
+  final paths = imageAttachments
+      .map((attachment) => attachment.path.trim())
+      .where((path) => path.isNotEmpty)
+      .toList(growable: false);
+  if (paths.length != options.referenceImages.length) {
+    return '参考图片已失效，请重新选择后重试';
+  }
+
+  return _runImageGenerationTask(
+    ref: ref,
+    session: session,
+    // Media output metadata must point at the selected image channel model,
+    // not the conversation's Chat model.  The latter may be a text-only row
+    // from a different channel and would make the persisted result appear to
+    // have used the wrong route.
+    modelId: routeModelId,
+    channel: routeModel.channel,
+    prompt: options.prompt.trim(),
+    referenceImagePaths: options.referenceImages,
+    referenceImageNames: imageAttachments
+        .map((attachment) => attachment.name)
+        .toList(growable: false),
+    userContent: paths.isEmpty
+        ? options.prompt.trim()
+        : '参考图生成：${options.prompt.trim()}',
+    assistantContent: paths.isEmpty ? '已生成图片' : '已根据参考图生成图片',
+    filePrefix: paths.isEmpty ? 'generated' : 'reference-generated',
+    options: options,
+    routeModelId: routeModelId,
+    requestProfile: profile,
+  );
+}
+
 Future<String?> generateImage({
   required WidgetRef ref,
   required String sessionId,
@@ -1941,14 +2925,30 @@ Future<String?> generateImage({
   final session = await sessionDao.getSession(sessionId);
   if (session == null) return '会话不存在';
 
-  final modelId = session.defaultChannelModelId;
-  final modelInfo = modelId == null
+  await ref.read(imageGenerationConfigProvider.notifier).ready;
+  final imageConfig = ref.read(imageGenerationConfigProvider);
+  final preferredImageModelId =
+      imageConfig.channelModelId ??
+      (ref.read(creationModeProvider) == CreationMode.image
+          ? ref.read(activeCreationModelIdProvider)
+          : null);
+  final chatModelId = session.defaultChannelModelId;
+  final chatModelInfo = chatModelId == null
       ? null
-      : await channelDao.getModelWithChannel(modelId);
-  if (modelInfo == null) return '请先选择一个模型';
+      : await channelDao.getModelWithChannel(chatModelId);
+  final modelInfo = preferredImageModelId == null
+      ? chatModelInfo
+      : await channelDao.getModelWithChannel(preferredImageModelId);
+  if (modelInfo == null) return '请先选择一个图片模型';
+  final modelId = modelInfo.channelModel.id;
   final channel = modelInfo.channel;
+  final modelName = modelInfo.channelModel.modelName.trim();
   if (!canUseChannelImageGeneration(channel.protocol)) {
     return '当前渠道不支持 OpenAI 兼容图片生成，请切换到支持 /v1/images/generations 的渠道';
+  }
+  if (!ModelCapability.isImage(modelInfo.channelModel.capability) &&
+      !modelInfo.capabilities.contains(ModelCapability.image)) {
+    return '当前未选择图片生成模型，请切换到图片模式后选择已配置模型';
   }
 
   final referenceImagePath = referenceAttachments
@@ -1976,6 +2976,8 @@ Future<String?> generateImage({
         ? 'reference-generated'
         : 'generated',
     size: size ?? ref.read(imageGenerationConfigProvider).size,
+    routeModelId: modelId,
+    routeModelName: modelName,
   );
 }
 
@@ -1990,26 +2992,72 @@ Future<String?> _runImageGenerationTask({
   required String prompt,
   String? referenceImagePath,
   String? referenceImageName,
+  List<String> referenceImagePaths = const <String>[],
+  List<String> referenceImageNames = const <String>[],
   required String userContent,
   required String assistantContent,
   required String filePrefix,
   bool includeUserMessage = true,
   String? size,
+  ImageGenerationOptions? options,
+  String? routeModelId,
+  String? routeModelName,
+  MediaRequestProviderProfile? requestProfile,
 }) async {
   final tasks = ref.read(imageGenerationTasksProvider.notifier);
   final messageDao = ref.read(messageDaoProvider);
   final sessionDao = ref.read(sessionDaoProvider);
   final imageConfig = ref.read(imageGenerationConfigProvider);
+  final effectiveReferencePaths = options?.referenceImages.isNotEmpty == true
+      ? options!.referenceImages
+      : referenceImagePaths.isNotEmpty
+      ? List<String>.unmodifiable(referenceImagePaths)
+      : referenceImagePath == null || referenceImagePath.trim().isEmpty
+      ? const <String>[]
+      : <String>[referenceImagePath.trim()];
+  final effectiveReferenceNames = referenceImageNames.isNotEmpty
+      ? List<String>.unmodifiable(referenceImageNames)
+      : referenceImageName == null || referenceImageName.trim().isEmpty
+      ? const <String>[]
+      : <String>[referenceImageName.trim()];
+  final effectiveModelName = options?.model.trim().isNotEmpty == true
+      ? options!.model.trim()
+      : (routeModelName?.trim().isNotEmpty == true
+            ? routeModelName!.trim()
+            : imageConfig.model);
+  final effectiveProfile =
+      requestProfile ??
+      (options == null
+          ? MediaRequestProviderProfile.openAiCompatibleImage
+          : resolveImageRequestProfile(
+              modelName: effectiveModelName,
+              protocol: channel.protocol,
+              baseUrl: channel.baseUrl,
+            ));
 
   final placeholderId = _uuid.v4();
   final task = ImageGenerationTask(
     messageId: placeholderId,
     sessionId: session.id,
     prompt: prompt,
-    referenceImagePath: referenceImagePath,
-    referenceImageName: referenceImageName,
-    modelName: imageConfig.model,
+    referenceImagePath: effectiveReferencePaths.isEmpty
+        ? null
+        : effectiveReferencePaths.first,
+    referenceImageName: effectiveReferenceNames.isEmpty
+        ? null
+        : effectiveReferenceNames.first,
+    modelName: effectiveModelName,
     channelId: channel.id,
+    routeModelId: routeModelId,
+    providerProfileId: effectiveProfile.id,
+    referenceImagePaths: effectiveReferencePaths,
+    referenceImageNames: effectiveReferenceNames,
+    count: options?.count ?? 1,
+    aspectRatio: options?.aspectRatio,
+    resolution: options?.resolution,
+    size: options?.size ?? size,
+    quality: options?.quality,
+    typedOptions: options != null,
   );
   try {
     await messageDao.insertMessage(
@@ -2032,22 +3080,33 @@ Future<String?> _runImageGenerationTask({
       ? factory(
           baseUrl: channel.baseUrl,
           apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
-          model: imageConfig.model,
+          model: effectiveModelName,
         )
       : ImageGenerationService(
           baseUrl: channel.baseUrl,
           apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
-          model: imageConfig.model,
+          model: effectiveModelName,
         );
 
-  final GeneratedImage generated;
+  late final List<GeneratedImage> generatedImages;
   try {
-    generated = await service.generate(
-      prompt,
-      referenceImagePath: referenceImagePath,
-      cancelToken: cancelToken,
-      size: size ?? kImageGenerationSize,
-    );
+    generatedImages = options == null
+        ? <GeneratedImage>[
+            await service.generate(
+              prompt,
+              referenceImagePath: effectiveReferencePaths.isEmpty
+                  ? null
+                  : effectiveReferencePaths.first,
+              referenceImagePaths: effectiveReferencePaths,
+              cancelToken: cancelToken,
+              size: size ?? kImageGenerationSize,
+            ),
+          ]
+        : await service.generateWithOptions(
+            options,
+            profile: effectiveProfile,
+            cancelToken: cancelToken,
+          );
   } catch (e) {
     if (cancelToken.isCancelled) {
       tasks.finish(placeholderId);
@@ -2070,14 +3129,6 @@ Future<String?> _runImageGenerationTask({
     return message;
   }
 
-  // 成功：移除占位与任务，走原有原子写入。
-  try {
-    await messageDao.deleteMessage(placeholderId);
-  } catch (_) {
-    // 占位删除失败不影响结果写入；任务注册表仍然清理，避免悬空 spinner。
-  }
-  tasks.finish(placeholderId);
-
   final savedError = await _saveGeneratedImageConversation(
     ref: ref,
     session: session,
@@ -2085,23 +3136,54 @@ Future<String?> _runImageGenerationTask({
     userContent: userContent,
     assistantContent: assistantContent,
     filePrefix: filePrefix,
-    image: generated,
-    sourceAttachment: referenceImagePath == null
+    image: generatedImages.first,
+    additionalImages: generatedImages.skip(1).toList(growable: false),
+    sourceAttachments: effectiveReferencePaths.isEmpty
         ? null
-        : _GeneratedSourceAttachment(
-            path: referenceImagePath,
-            fileName: referenceImageName ?? 'reference-image',
-            fileType: 'image',
-          ),
+        : [
+            for (var index = 0; index < effectiveReferencePaths.length; index++)
+              _GeneratedSourceAttachment(
+                path: effectiveReferencePaths[index],
+                fileName: index < effectiveReferenceNames.length
+                    ? effectiveReferenceNames[index]
+                    : 'reference-image-${index + 1}',
+                fileType: 'image',
+              ),
+          ],
     includeUserMessage: includeUserMessage,
   );
 
-  // 自动图床：上传成功后把 CDN 地址附到 assistant 消息正文。
-  if (savedError == null &&
-      ref.read(imageGenerationConfigProvider).autoUploadToCdn) {
-    unawaited(_uploadGeneratedImageToCdn(ref, session, generated));
+  // 上游成功不等于交付成功。只有图片文件和消息事务都写入后才能删除占位与
+  // 持久化快照；磁盘空间、目录权限或 SQLite 失败时继续保留相同 route /
+  // profile / 参考图参数，让用户可重试，而不是把已经生成但尚未交付的任务
+  // 静默丢失。
+  if (savedError != null) {
+    final message = '图片结果保存失败：$savedError';
+    tasks.markFailed(placeholderId, message);
+    await _updatePlaceholderMessage(
+      ref,
+      session.id,
+      placeholderId,
+      content: message,
+    );
+    return message;
   }
-  return savedError;
+
+  try {
+    await messageDao.deleteMessage(placeholderId);
+  } catch (_) {
+    // 结果消息已经原子落库；占位删除失败只会多一个历史提示，不能回滚成功
+    // 交付。任务注册表仍然清理，避免把已完成任务显示为可重试。
+  }
+  tasks.finish(placeholderId);
+
+  // 自动图床：上传成功后把 CDN 地址附到 assistant 消息正文。
+  if (ref.read(imageGenerationConfigProvider).autoUploadToCdn) {
+    for (final generated in generatedImages) {
+      unawaited(_uploadGeneratedImageToCdn(ref, session, generated));
+    }
+  }
+  return null;
 }
 
 /// 上传生成图片到百度 CDN 图床，并把地址追加到最新 assistant 消息。
@@ -2123,10 +3205,14 @@ Future<void> _uploadGeneratedImageToCdn(
       if (messages[i].role == 'assistant') {
         final message = messages[i];
         final suffix = '\n\n图床地址：$url';
-        await ref.read(messageDaoProvider).updateMessageContent(
-          message.id,
-          message.content.endsWith(suffix) ? message.content : '${message.content}$suffix',
-        );
+        await ref
+            .read(messageDaoProvider)
+            .updateMessageContent(
+              message.id,
+              message.content.endsWith(suffix)
+                  ? message.content
+                  : '${message.content}$suffix',
+            );
         ref.invalidate(messagesProvider(session.id));
         break;
       }
@@ -2143,10 +3229,7 @@ Future<void> _updatePlaceholderMessage(
   required String content,
 }) async {
   try {
-    await ref.read(messageDaoProvider).updateMessageContent(
-      messageId,
-      content,
-    );
+    await ref.read(messageDaoProvider).updateMessageContent(messageId, content);
   } catch (_) {
     // 占位更新失败不阻塞任务结果，占位消息保持原样。
   }
@@ -2172,15 +3255,51 @@ Future<String?> retryImageGeneration({
   final channelDao = ref.read(channelDaoProvider);
   final session = await sessionDao.getSession(sessionId);
   if (session == null) return '会话不存在';
-  final modelId = session.defaultChannelModelId;
-  final modelInfo = modelId == null
+  final routeModelId = task.routeModelId ?? session.defaultChannelModelId;
+  final routeModel = routeModelId == null
       ? null
-      : await channelDao.getModelWithChannel(modelId);
-  if (modelInfo == null) return '请先选择一个模型';
-  final channel = modelInfo.channel;
+      : await channelDao.getModelWithChannel(routeModelId);
+  if (routeModel == null) return '图片模型不存在或已被删除';
+  final channel = routeModel.channel;
 
-  final hasReference = task.referenceImagePath != null &&
-      task.referenceImagePath!.trim().isNotEmpty;
+  final referencePaths = task.referenceImagePaths.isNotEmpty
+      ? task.referenceImagePaths
+      : task.referenceImagePath == null ||
+            task.referenceImagePath!.trim().isEmpty
+      ? const <String>[]
+      : <String>[task.referenceImagePath!.trim()];
+  final referenceNames = task.referenceImageNames.isNotEmpty
+      ? task.referenceImageNames
+      : task.referenceImageName == null ||
+            task.referenceImageName!.trim().isEmpty
+      ? const <String>[]
+      : <String>[task.referenceImageName!.trim()];
+  final hasReference = referencePaths.isNotEmpty;
+  for (final path in referencePaths) {
+    final file = File(path);
+    if (!await file.exists() || await file.length() <= 0) {
+      return '参考图片已失效，请重新选择后重试';
+    }
+  }
+  final options = task.typedOptions
+      ? ImageGenerationOptions(
+          model: task.modelName,
+          prompt: task.prompt,
+          count: task.count,
+          referenceImages: referencePaths,
+          aspectRatio: task.aspectRatio,
+          resolution: task.resolution,
+          size: task.size,
+          quality: task.quality,
+        )
+      : null;
+  final requestProfile = imageRequestProfileById(task.providerProfileId);
+  if (options != null) {
+    final errors = options.validationErrors(
+      capability: requestProfile.capability,
+    );
+    if (errors.isNotEmpty) return errors.join('；');
+  }
   tasks.finish(messageId);
   try {
     await ref.read(messageDaoProvider).deleteMessage(messageId);
@@ -2193,19 +3312,25 @@ Future<String?> retryImageGeneration({
   return _runImageGenerationTask(
     ref: ref,
     session: session,
-    modelId: modelId,
+    // Retry metadata must keep the selected image route, not the session's
+    // unrelated Chat model.
+    modelId: routeModel.channelModel.id,
     channel: channel,
     prompt: task.prompt,
-    referenceImagePath: task.referenceImagePath,
-    referenceImageName: task.referenceImageName,
+    referenceImagePaths: referencePaths,
+    referenceImageNames: referenceNames,
     userContent: hasReference ? '参考图生成：${task.prompt}' : task.prompt,
     assistantContent: hasReference ? '已根据参考图生成图片' : '已生成图片',
     filePrefix: hasReference ? 'reference-generated' : 'generated',
+    options: options,
+    routeModelId: task.routeModelId,
+    requestProfile: requestProfile,
   );
 }
 
-/// 重新生成图片消息：定位 assistant 图片消息与前一条用户消息，删除旧结果
-/// 后以相同提示词 / 参考图重新调用图片接口（不重复插入用户消息）。
+/// 重新生成图片消息：定位 assistant 图片消息与前一条用户消息，保留旧结果，
+/// 再以原图片 route、提示词和全部参考图生成一条新的结果记录（不重复插入
+/// 用户消息）。旧结果只有在用户明确删除时才移除。
 Future<String?> retryImageMessage({
   required WidgetRef ref,
   required String sessionId,
@@ -2214,9 +3339,7 @@ Future<String?> retryImageMessage({
   final messageDao = ref.read(messageDaoProvider);
   final attachmentDao = ref.read(attachmentDaoProvider);
   final messages = await messageDao.getMessagesBySession(sessionId);
-  final assistantIndex = messages.indexWhere(
-    (m) => m.id == assistantMessageId,
-  );
+  final assistantIndex = messages.indexWhere((m) => m.id == assistantMessageId);
   if (assistantIndex <= 0) return '未找到图片消息';
 
   final assistantAttachments = await attachmentDao.getAttachmentsByMessage(
@@ -2237,8 +3360,8 @@ Future<String?> retryImageMessage({
 
   const referencePrefix = '参考图生成：';
   var prompt = userMessage.content;
-  String? referenceImagePath;
-  String? referenceImageName;
+  final referenceImagePaths = <String>[];
+  final referenceImageNames = <String>[];
   if (prompt.startsWith(referencePrefix)) {
     prompt = prompt.substring(referencePrefix.length).trim();
     final userAttachments = await attachmentDao.getAttachmentsByMessage(
@@ -2248,9 +3371,8 @@ Future<String?> retryImageMessage({
       if (attachment.fileType != 'image') continue;
       final path = attachment.localPath.trim();
       if (path.isNotEmpty) {
-        referenceImagePath = path;
-        referenceImageName = attachment.fileName;
-        break;
+        referenceImagePaths.add(path);
+        referenceImageNames.add(attachment.fileName);
       }
     }
   }
@@ -2259,31 +3381,65 @@ Future<String?> retryImageMessage({
   final channelDao = ref.read(channelDaoProvider);
   final session = await sessionDao.getSession(sessionId);
   if (session == null) return '会话不存在';
-  final modelId = session.defaultChannelModelId;
-  final modelInfo = modelId == null
+  await ref.read(imageGenerationConfigProvider.notifier).ready;
+  final savedImageModelId = ref
+      .read(imageGenerationConfigProvider)
+      .channelModelId;
+  final routeModelId =
+      messages[assistantIndex].channelModelId ??
+      savedImageModelId ??
+      session.defaultChannelModelId;
+  final modelInfo = routeModelId == null
       ? null
-      : await channelDao.getModelWithChannel(modelId);
-  if (modelInfo == null) return '请先选择一个模型';
+      : await channelDao.getModelWithChannel(routeModelId);
+  if (modelInfo == null) return '原图片模型已被删除，请重新选择图片模型';
   final channel = modelInfo.channel;
-
-  // 删除旧的 assistant 结果（含附件），随后按相同参数重新生成。
-  await messageDao.deleteMessage(assistantMessageId);
-  await attachmentDao.deleteByMessage(assistantMessageId);
-  ref.invalidate(messagesProvider(sessionId));
+  final profile = resolveImageRequestProfile(
+    modelName: modelInfo.channelModel.modelName,
+    protocol: modelInfo.channel.protocol,
+    baseUrl: modelInfo.channel.baseUrl,
+  );
+  for (final path in referenceImagePaths) {
+    final file = File(path);
+    if (!await file.exists() || await file.length() <= 0) {
+      return '原参考图片已失效，请重新选择后生成';
+    }
+  }
+  final requestedCount = assistantAttachments
+      .where((attachment) => attachment.fileType == 'image')
+      .length
+      .clamp(profile.capability.minOutputs, profile.capability.maxOutputs)
+      .toInt();
+  final options = ImageGenerationOptions(
+    model: modelInfo.channelModel.modelName,
+    prompt: prompt,
+    count: requestedCount,
+    referenceImages: referenceImagePaths,
+  );
+  final validationErrors = options.validationErrors(
+    capability: profile.capability,
+  );
+  if (validationErrors.isNotEmpty) return validationErrors.join('；');
 
   return _runImageGenerationTask(
     ref: ref,
     session: session,
-    modelId: modelId,
+    modelId: routeModelId,
     channel: channel,
     prompt: prompt,
-    referenceImagePath: referenceImagePath,
-    referenceImageName: referenceImageName,
-    userContent: referenceImagePath != null ? '参考图生成：$prompt' : prompt,
-    assistantContent: referenceImagePath != null ? '已根据参考图生成图片' : '已生成图片',
-    filePrefix: referenceImagePath != null ? 'reference-generated' : 'generated',
+    referenceImagePaths: referenceImagePaths,
+    referenceImageNames: referenceImageNames,
+    userContent: referenceImagePaths.isNotEmpty ? '参考图生成：$prompt' : prompt,
+    assistantContent: referenceImagePaths.isNotEmpty
+        ? '已根据参考图重新生成图片'
+        : '已重新生成图片',
+    filePrefix: referenceImagePaths.isNotEmpty
+        ? 'reference-generated'
+        : 'generated',
     includeUserMessage: false,
-    size: ref.read(imageGenerationConfigProvider).size,
+    options: options,
+    routeModelId: routeModelId,
+    requestProfile: profile,
   );
 }
 
@@ -2330,23 +3486,40 @@ Future<String?> editImage({
   final session = await sessionDao.getSession(sessionId);
   if (session == null) return '会话不存在';
 
-  final modelId = session.defaultChannelModelId;
-  final modelInfo = modelId == null
+  await ref.read(imageGenerationConfigProvider.notifier).ready;
+  final imageConfig = ref.read(imageGenerationConfigProvider);
+  final configuredModelId =
+      imageConfig.channelModelId ??
+      (ref.read(creationModeProvider) == CreationMode.image
+          ? ref.read(activeCreationModelIdProvider)
+          : null);
+  final chatModelId = session.defaultChannelModelId;
+  final modelInfo = configuredModelId == null
       ? null
-      : await channelDao.getModelWithChannel(modelId);
-  if (modelInfo == null) return '请先选择一个模型';
-  final channel = modelInfo.channel;
+      : await channelDao.getModelWithChannel(configuredModelId);
+  final routeInfo =
+      modelInfo ??
+      (configuredModelId == null && chatModelId != null
+          ? await channelDao.getModelWithChannel(chatModelId)
+          : null);
+  if (routeInfo == null) return '请先选择一个图片模型';
+  final modelId = routeInfo.channelModel.id;
+  final modelInfoForRoute = routeInfo;
+  final channel = modelInfoForRoute.channel;
   final userContent = '编辑图片：$trimmedPrompt';
   if (!canUseChannelImageGeneration(channel.protocol)) {
     return '当前渠道不支持 OpenAI 兼容图片编辑，请切换到支持 /v1/images/edits 的渠道';
   }
+  if (!ModelCapability.isImage(modelInfoForRoute.channelModel.capability) &&
+      !modelInfoForRoute.capabilities.contains(ModelCapability.image)) {
+    return '当前未选择图片生成模型，请切换到图片模式后选择已配置模型';
+  }
 
   // 上游成功后才以事务写入会话，失败保留对话框内的提示词。
-  final imageConfig = ref.read(imageGenerationConfigProvider);
   final service = ImageGenerationService(
     baseUrl: channel.baseUrl,
     apiKey: KeyEncryptor.decryptOrEmpty(channel.apiKeyEncrypted),
-    model: imageConfig.model,
+    model: modelInfoForRoute.channelModel.modelName,
   );
 
   final GeneratedImage edited;
@@ -2376,8 +3549,199 @@ Future<String?> editImage({
   );
 }
 
+MediaRequestProviderProfile _videoRequestProfileForId(String profileId) {
+  return switch (profileId.trim().toLowerCase()) {
+    kUniversalMediaProfileOpenAiSora =>
+      MediaRequestProviderProfile.openAiSoraVideo,
+    kUniversalMediaProfileXaiGrokVideo =>
+      MediaRequestProviderProfile.xAiGrokVideo,
+    kUniversalMediaProfileCustomAsync =>
+      MediaRequestProviderProfile.customAsyncVideo,
+    _ => MediaRequestProviderProfile.openAiCompatibleVideo,
+  };
+}
+
+/// 完整的视频任务入口。任务面板中的首帧图、多个参考图和参考音频分别
+/// 进入 typed Options，随后由 provider adapter 在 HTTP 边界选择 multipart
+/// 或 data URL；本机路径不会进入普通 JSON，也不会静默丢弃第 N 张参考图。
+Future<String?> generateVideoWithOptions({
+  required WidgetRef ref,
+  required String sessionId,
+  required String prompt,
+  required VideoGenerationConfig config,
+}) async {
+  final sessionDao = ref.read(sessionDaoProvider);
+  final channelDao = ref.read(channelDaoProvider);
+  final trimmedPrompt = prompt.trim();
+  if (trimmedPrompt.isEmpty) return '请输入视频描述';
+  final session = await sessionDao.getSession(sessionId);
+  if (session == null) return '会话不存在';
+  final chatModelId = session.defaultChannelModelId;
+  final chatModel = chatModelId == null
+      ? null
+      : await channelDao.getModelWithChannel(chatModelId);
+  if (chatModel == null) return '请先选择一个模型';
+
+  await ref.read(universalMediaConfigProvider.notifier).ready;
+  final mediaConfig = ref.read(universalMediaConfigProvider);
+  final routeModelInfo = await _resolveUniversalMediaRouteModel(
+    channelDao: channelDao,
+    chatModel: chatModel,
+    config: mediaConfig,
+    kind: UniversalMediaKind.video,
+  );
+  if (routeModelInfo == null) {
+    return '已选择的视频媒体渠道模型不存在或已被禁用，请到设置 → 视频 / 音乐 / 通用媒体接口重新选择';
+  }
+  final mediaModel = _configuredUniversalMediaModelName(
+    mediaConfig,
+    UniversalMediaKind.video,
+    routeModelInfo,
+  );
+  final channelModelId =
+      _configuredUniversalMediaChannelModelId(
+        mediaConfig,
+        UniversalMediaKind.video,
+      ) ??
+      routeModelInfo.channelModel.id;
+  final capability = resolveUniversalMediaCapability(
+    kind: UniversalMediaKind.video,
+    protocol: routeModelInfo.channel.protocol,
+    baseUrl: routeModelInfo.channel.baseUrl,
+    apiKeyConfigured: routeModelInfo.channel.apiKeyEncrypted.trim().isNotEmpty,
+    modelName: routeModelInfo.channelModel.modelName,
+    modelCapability: routeModelInfo.channelModel.capability,
+    modelCapabilities: routeModelInfo.capabilities,
+    mediaModel: mediaModel,
+    mediaEndpoint: mediaConfig.videoEndpoint,
+  );
+  if (!capability.isAvailable) return capability.message;
+
+  final profile = _videoRequestProfileForId(mediaConfig.videoProfileId);
+  final imageRefs = config.referenceAttachments
+      .where((attachment) => attachment.type == 'image')
+      .toList(growable: false);
+  final refPaths = imageRefs
+      .map((attachment) => attachment.path.trim())
+      .where((path) => path.isNotEmpty)
+      .toList(growable: false);
+  final firstFramePath = config.firstFrameAttachment?.path.trim();
+  final referenceAudioPath = config.referenceAudioAttachment?.path.trim();
+  final options = VideoGenerationOptions(
+    model: mediaModel,
+    prompt: trimmedPrompt,
+    firstFrameImage: firstFramePath == null || firstFramePath.isEmpty
+        ? null
+        : firstFramePath,
+    referenceImages: refPaths,
+    referenceAudio: referenceAudioPath == null || referenceAudioPath.isEmpty
+        ? null
+        : referenceAudioPath,
+    duration: config.duration,
+    aspectRatio: config.aspectRatio,
+    resolution: config.resolution,
+  );
+  final optionErrors = options.validationErrors(capability: profile.capability);
+  if (optionErrors.isNotEmpty) return optionErrors.join('；');
+  if (refPaths.length != imageRefs.length) return '参考图片已失效，请重新选择后重试';
+  if (config.firstFrameAttachment != null && firstFramePath == null) {
+    return '首帧图片已失效，请重新选择后重试';
+  }
+  if (config.referenceAudioAttachment != null && referenceAudioPath == null) {
+    return '参考音频已失效，请重新选择后重试';
+  }
+
+  String apiKey;
+  try {
+    apiKey = KeyEncryptor.decryptOrEmpty(
+      routeModelInfo.channel.apiKeyEncrypted,
+    );
+  } catch (_) {
+    return '当前渠道 API Key 无法读取，请重新配置';
+  }
+  final service = UniversalMediaService(
+    baseUrl: routeModelInfo.channel.baseUrl,
+    apiKey: apiKey,
+    onJobUpdate: (job) =>
+        ref.read(universalMediaTaskProvider(sessionId).notifier).updateJob(job),
+  );
+  final hasInputs =
+      refPaths.isNotEmpty ||
+      options.firstFrameImage != null ||
+      options.referenceAudio != null;
+  final userContent = hasInputs
+      ? '参考素材生成视频：$trimmedPrompt'
+      : '生成视频：$trimmedPrompt';
+  final assistantContent = hasInputs ? '已根据参考素材生成视频' : '已生成视频';
+  final deliverySources = <_GeneratedSourceAttachment>[
+    if (config.firstFrameAttachment case final attachment?)
+      _GeneratedSourceAttachment(
+        path: attachment.path,
+        fileName: attachment.name.isNotEmpty
+            ? attachment.name
+            : p.basename(attachment.path),
+        fileType: attachment.type,
+      ),
+    for (final attachment in config.referenceAttachments)
+      _GeneratedSourceAttachment(
+        path: attachment.path,
+        fileName: attachment.name.isNotEmpty
+            ? attachment.name
+            : p.basename(attachment.path),
+        fileType: attachment.type,
+      ),
+    if (config.referenceAudioAttachment case final attachment?)
+      _GeneratedSourceAttachment(
+        path: attachment.path,
+        fileName: attachment.name.isNotEmpty
+            ? attachment.name
+            : p.basename(attachment.path),
+        fileType: attachment.type,
+      ),
+  ];
+  return _runUniversalMediaTask(
+    ref: ref,
+    sessionId: sessionId,
+    kind: UniversalMediaKind.video,
+    service: service,
+    model: options.model,
+    endpoint: mediaConfig.videoEndpoint,
+    taskOptions: mediaConfig.videoTaskOptions,
+    prompt: trimmedPrompt,
+    requestFields: profile.serializeVideoGeneration(options),
+    referenceImagePaths: options.referenceImages,
+    firstFrameImagePath: options.firstFrameImage,
+    referenceAudioPath: options.referenceAudio,
+    referenceImageField: profile.referenceImagesField,
+    firstFrameField: profile.firstFrameField,
+    referenceAudioField: profile.referenceAudioField,
+    channelModelId: channelModelId,
+    deliveryUserContent: userContent,
+    deliveryAssistantContent: assistantContent,
+    deliveryFileType: 'video',
+    deliverySourceAttachments: deliverySources,
+    saveAsset: (asset, job, operationId) => _saveGeneratedMediaConversation(
+      ref: ref,
+      session: session,
+      modelId: channelModelId,
+      userContent: userContent,
+      assistantContent: assistantContent,
+      fileType: 'video',
+      directoryName: 'generated_videos',
+      filePrefix: 'generated-video',
+      extension: asset.extension,
+      mimeType: asset.mimeType,
+      bytes: asset.bytes,
+      sourceAttachments: deliverySources,
+      mediaJob: job,
+      operationId: operationId,
+    ),
+  );
+}
+
 /// 使用当前渠道的通用媒体接口生成视频，并将最终内容作为 assistant
-/// `video` 附件落到本地会话。参考图只取已选附件中的第一张图片。
+/// `video` 附件落到本地会话。该函数保留旧版自由字段入口，供历史调用方
+/// 和没有完整任务面板的外部集成继续使用。
 Future<String?> generateVideo({
   required WidgetRef ref,
   required String sessionId,
@@ -2433,10 +3797,23 @@ Future<String?> generateVideo({
   );
   if (!capability.isAvailable) return capability.message;
 
-  final referenceImagePath = referenceAttachments
+  final referenceImages = referenceAttachments
       .where((attachment) => attachment.type == 'image')
-      .map((attachment) => attachment.path)
-      .firstOrNull;
+      .toList(growable: false);
+  // P0 must never silently take the first reference image. The current
+  // legacy Composer selects one image; callers that provide more than one get
+  // a clear boundary until the P2 multi-reference panel consumes the complete
+  // VideoGenerationOptions collection.
+  if (referenceImages.length > 1) {
+    return '当前视频模型入口一次只能提交 1 张参考图；请在本次任务面板中选择单张，或等待多参考图面板完成';
+  }
+  final referenceImagePath = referenceImages.isEmpty
+      ? null
+      : referenceImages.single.path;
+  final requestFields = MediaRequestProviderProfile.normalizeLegacyVideoFields(
+    profileId: config.videoProfileId,
+    rawFields: extra,
+  );
   final String apiKey;
   try {
     apiKey = KeyEncryptor.decryptOrEmpty(
@@ -2455,6 +3832,17 @@ Future<String?> generateVideo({
       ? '生成视频：$trimmedPrompt'
       : '参考图生成视频：$trimmedPrompt';
   final assistantContent = referenceImagePath == null ? '已生成视频' : '已根据参考图生成视频';
+  final deliverySources = referenceImagePath == null
+      ? const <_GeneratedSourceAttachment>[]
+      : <_GeneratedSourceAttachment>[
+          _GeneratedSourceAttachment(
+            path: referenceImagePath,
+            fileName: referenceImages.single.name.isNotEmpty
+                ? referenceImages.single.name
+                : p.basename(referenceImagePath),
+            fileType: 'image',
+          ),
+        ];
   return _runUniversalMediaTask(
     ref: ref,
     sessionId: sessionId,
@@ -2463,13 +3851,16 @@ Future<String?> generateVideo({
     model: mediaModel,
     endpoint: config.videoEndpoint,
     taskOptions: config.videoTaskOptions,
-    extra: extra,
+    // Legacy dialog values are normalized through the saved provider profile;
+    // xAI now receives duration / aspect_ratio rather than seconds.
+    extra: requestFields,
     prompt: trimmedPrompt,
     referenceImagePath: referenceImagePath,
     channelModelId: mediaChannelModelId,
     deliveryUserContent: userContent,
     deliveryAssistantContent: assistantContent,
     deliveryFileType: 'video',
+    deliverySourceAttachments: deliverySources,
     saveAsset: (asset, job, operationId) => _saveGeneratedMediaConversation(
       ref: ref,
       session: session,
@@ -2482,18 +3873,7 @@ Future<String?> generateVideo({
       extension: asset.extension,
       mimeType: asset.mimeType,
       bytes: asset.bytes,
-      sourceAttachment: referenceImagePath == null
-          ? null
-          : _GeneratedSourceAttachment(
-              path: referenceImagePath,
-              fileName:
-                  referenceAttachments
-                      .where((attachment) => attachment.type == 'image')
-                      .map((attachment) => attachment.name)
-                      .firstOrNull ??
-                  p.basename(referenceImagePath),
-              fileType: 'image',
-            ),
+      sourceAttachments: deliverySources,
       mediaJob: job,
       operationId: operationId,
     ),
@@ -2617,6 +3997,10 @@ Future<String?> synthesizeSpeechMessage({
   required String text,
   String? style,
   String? referenceAudioPath,
+  String? voice,
+  String? speed,
+  String? responseFormat,
+  String? model,
 }) async {
   final trimmedText = text.trim();
   if (trimmedText.isEmpty) return '请输入要合成的文字';
@@ -2624,7 +4008,10 @@ Future<String?> synthesizeSpeechMessage({
   final config = ref.read(textToSpeechConfigProvider);
   final service = ref.read(textToSpeechServiceProvider);
 
-  final mode = config.requestedMode;
+  final effectiveModel = model?.trim().isNotEmpty == true
+      ? model!.trim()
+      : config.model;
+  final mode = simiRouterTtsModeOf(effectiveModel);
   final requestedStyle = style?.trim();
   final requestedReferenceAudioPath = referenceAudioPath?.trim();
   final effectiveStyle = requestedStyle?.isNotEmpty == true
@@ -2674,7 +4061,7 @@ Future<String?> synthesizeSpeechMessage({
       (config.isXai ||
           config.isSimiRouter ||
           config.provider == kTextToSpeechProviderOpenAiCompatible) &&
-      (config.isXai || config.model.trim().isNotEmpty);
+      (config.isXai || effectiveModel.trim().isNotEmpty);
   final hasTemporaryModeInput =
       (mode == SimiRouterTtsMode.voiceDesign &&
           requestedStyle?.isNotEmpty == true) ||
@@ -2687,20 +4074,39 @@ Future<String?> synthesizeSpeechMessage({
 
   final session = await ref.read(sessionDaoProvider).getSession(sessionId);
   if (session == null) return '会话不存在';
-  final modelId = session.defaultChannelModelId;
+  // Media model selection is intentionally independent from the session's
+  // normal Chat default.  Persist the model that is actually bound to the
+  // TTS configuration so the generated audio timeline entry shows the same
+  // model as the AppBar capsule (and not the previous text-chat model).
+  final configuredTtsModelId = config.channelModelId?.trim();
+  final modelId = configuredTtsModelId == null || configuredTtsModelId.isEmpty
+      ? session.defaultChannelModelId
+      : configuredTtsModelId;
   try {
+    final usesPerRequestOptions =
+        voice?.trim().isNotEmpty == true ||
+        speed?.trim().isNotEmpty == true ||
+        responseFormat?.trim().isNotEmpty == true ||
+        model?.trim().isNotEmpty == true;
     final usesModeSpecificRequest =
         mode == SimiRouterTtsMode.voiceDesign ||
         mode == SimiRouterTtsMode.voiceClone;
-    final engine = usesModeSpecificRequest || service == null
+    final engine =
+        usesModeSpecificRequest || usesPerRequestOptions || service == null
         ? _buildSpeechEngineForRequest(
             config: config,
             style: effectiveStyle,
             referenceAudioPath: effectiveReferenceAudioPath,
+            model: effectiveModel,
+            speed: speed,
+            responseFormat: responseFormat,
           )
         : service.engine;
     final bytes = await engine.synthesize(
-      TextToSpeechInput(text: trimmedText, voice: config.voice),
+      TextToSpeechInput(
+        text: trimmedText,
+        voice: voice?.trim().isNotEmpty == true ? voice!.trim() : config.voice,
+      ),
     );
     if (bytes.isEmpty) return '声音合成未返回音频';
 
@@ -2723,11 +4129,185 @@ Future<String?> synthesizeSpeechMessage({
       fileType: 'audio',
       directoryName: 'generated_speech',
       filePrefix: 'generated-speech',
-      extension: normalizeTextToSpeechAudioFileExtension(config.responseFormat),
+      extension: normalizeTextToSpeechAudioFileExtension(
+        responseFormat?.trim().isNotEmpty == true
+            ? responseFormat!.trim()
+            : config.responseFormat,
+      ),
       bytes: bytes,
+      sourceAttachments:
+          mode == SimiRouterTtsMode.voiceClone &&
+              effectiveReferenceAudioPath != null
+          ? <_GeneratedSourceAttachment>[
+              _GeneratedSourceAttachment(
+                path: effectiveReferenceAudioPath,
+                fileName: p.basename(effectiveReferenceAudioPath),
+                fileType: 'audio',
+              ),
+            ]
+          : const <_GeneratedSourceAttachment>[],
     );
   } catch (error) {
     return '声音合成失败：$error';
+  }
+}
+
+/// 将独立语音识别任务写回当前会话时间线。成功前先把音频复制到消息私有
+/// 归档，再把 user audio attachment、可编辑 transcript sidecar 和 assistant
+/// 结果一次写入数据库；Composer 草稿随后可以安全删除，不会让历史记录只
+/// 剩一个已经失效的文件名。
+Future<String?> recognizeSpeechMessage({
+  required WidgetRef ref,
+  required String sessionId,
+  required String audioPath,
+  required String fileName,
+  SpeechRecognitionLanguage language = SpeechRecognitionLanguage.auto,
+}) async {
+  final normalizedPath = audioPath.trim();
+  if (normalizedPath.isEmpty) return '请选择音频文件';
+  final session = await ref.read(sessionDaoProvider).getSession(sessionId);
+  if (session == null) return '会话不存在';
+  await ref.read(speechToTextConfigProvider.notifier).ready;
+  final config = ref.read(speechToTextConfigProvider);
+  ref
+      .read(sttLanguageOverrideProvider.notifier)
+      .set(language.wireLanguage ?? 'auto');
+  final userMessageId = _uuid.v4();
+  final assistantMessageId = _uuid.v4();
+  List<_StoredAttachment> storedAttachments = const [];
+  AudioTranscriptArchive? archive;
+  var committed = false;
+  try {
+    final engine = ref.read(speechToTextEngineProvider);
+    if (engine == null) return '请先在设置 → 语音输入中启用并配置 STT';
+    final root = await getApplicationDocumentsDirectory();
+    archive = AudioTranscriptArchive(rootDirectory: root);
+    final prepared = await _prepareAttachments(<PendingAttachment>[
+      PendingAttachment(path: normalizedPath, name: fileName, type: 'audio'),
+    ]);
+    storedAttachments = await _storeAttachments(
+      messageId: userMessageId,
+      attachments: prepared,
+    );
+    final storedAudio = storedAttachments.single;
+    final result =
+        await AudioTranscriptionService(
+          archive: archive,
+          engine: engine,
+        ).transcribeAndArchive(
+          AudioTranscriptionJob(
+            messageId: userMessageId,
+            attachmentId: storedAudio.id,
+            audioPath: storedAudio.localPath,
+            fileName: storedAudio.fileName,
+            fileSize: storedAudio.fileSize,
+          ),
+        );
+    final transcript = result.transcript.trim();
+    if (transcript.isEmpty) {
+      await _deleteUnpersistedAttachmentFiles(storedAttachments);
+      await archive.deleteTranscript(
+        messageId: userMessageId,
+        attachmentId: storedAudio.id,
+      );
+      return '未识别到可用文字，请更换音频后重试';
+    }
+    await archive.writeDraft(
+      messageId: userMessageId,
+      attachmentId: storedAudio.id,
+      fileName: storedAudio.fileName,
+      fileSize: storedAudio.fileSize,
+      transcript: transcript,
+      modelId: config.model.trim().isEmpty
+          ? config.providerLabel
+          : config.model,
+      language: language.wireLanguage ?? 'auto',
+      resultMessageId: assistantMessageId,
+    );
+
+    final database = ref.read(databaseProvider);
+    final userContent = '识别语音：${storedAudio.fileName}';
+    final userTokens = TokenEstimator.estimate(userContent);
+    final transcriptTokens = TokenEstimator.estimate(transcript);
+    await database.transaction(() async {
+      await database.messageDao.insertMessage(
+        id: userMessageId,
+        sessionId: sessionId,
+        role: 'user',
+        content: userContent,
+        tokens: userTokens,
+      );
+      await database.attachmentDao.insertAttachment(
+        id: storedAudio.id,
+        messageId: userMessageId,
+        fileType: 'audio',
+        localPath: storedAudio.localPath,
+        fileName: storedAudio.fileName,
+        fileSize: storedAudio.fileSize,
+      );
+      await database.messageDao.insertMessage(
+        id: assistantMessageId,
+        sessionId: sessionId,
+        role: 'assistant',
+        content: transcript,
+        tokens: transcriptTokens,
+        channelModelId: config.channelModelId,
+      );
+      await database.sessionDao.updateLastMessageAt(sessionId);
+      await database.sessionDao.updateTotalTokens(
+        sessionId,
+        session.totalTokens + userTokens + transcriptTokens,
+      );
+    });
+    committed = true;
+    _invalidateAudioTranscriptStatus(
+      ref,
+      messageId: userMessageId,
+      attachmentId: storedAudio.id,
+    );
+    ref.invalidate(messagesProvider(sessionId));
+    ref.invalidate(sessionsProvider);
+    unawaited(
+      _appendConversationArchiveMessage(
+        ref: ref,
+        sessionId: sessionId,
+        sessionTitle: session.title,
+        messageId: userMessageId,
+        role: 'user',
+        content: userContent,
+        attachmentNames: <String>[storedAudio.fileName],
+      ),
+    );
+    unawaited(
+      _appendConversationArchiveMessage(
+        ref: ref,
+        sessionId: sessionId,
+        sessionTitle: session.title,
+        messageId: assistantMessageId,
+        role: 'assistant',
+        content: transcript,
+        channelModelId: config.channelModelId,
+      ),
+    );
+    return null;
+  } catch (error) {
+    if (committed) {
+      ref.invalidate(messagesProvider(sessionId));
+      ref.invalidate(sessionsProvider);
+      return null;
+    }
+    await _deleteUnpersistedAttachmentFiles(storedAttachments);
+    if (archive != null && storedAttachments.isNotEmpty) {
+      try {
+        await archive.deleteTranscript(
+          messageId: userMessageId,
+          attachmentId: storedAttachments.single.id,
+        );
+      } catch (_) {}
+    }
+    return '语音识别失败：${AudioTranscriptArchive.sanitizeErrorMessage(error)}';
+  } finally {
+    ref.read(sttLanguageOverrideProvider.notifier).clear();
   }
 }
 
@@ -2735,11 +4315,30 @@ TextToSpeechEngine _buildSpeechEngineForRequest({
   required TextToSpeechConfig config,
   required String style,
   required String? referenceAudioPath,
+  required String model,
+  String? speed,
+  String? responseFormat,
 }) {
   if (config.isXai) {
-    // xAI 的批量 TTS 是独立的 voice_id / /v1/tts 协议，当前函数的临时
-    // style/reference 参数只适用于 SimiRouter mimo；不把字段静默丢给 xAI。
-    throw const TextToSpeechException('当前 TTS provider 不支持该声音模式');
+    // xAI 的批量 TTS 是独立的 voice_id / /v1/tts 协议；声音设计 / 克隆
+    // 仍然不能伪造为 xAI 能力，但标准合成允许本次覆盖语速和格式。
+    if (style.trim().isNotEmpty ||
+        referenceAudioPath?.trim().isNotEmpty == true) {
+      throw const TextToSpeechException('当前 TTS provider 不支持该声音模式');
+    }
+    final encryptedKey = config.apiKeyEncrypted;
+    if (encryptedKey == null || encryptedKey.isEmpty) {
+      throw const TextToSpeechException('TTS API Key 未配置');
+    }
+    return XaiTextToSpeechEngine(
+      baseUrl: config.baseUrl,
+      apiKey: KeyEncryptor.decryptOrEmpty(encryptedKey),
+      language: config.language,
+      speed: speed?.trim().isNotEmpty == true ? speed!.trim() : config.speed,
+      responseFormat: responseFormat?.trim().isNotEmpty == true
+          ? responseFormat!.trim()
+          : config.responseFormat,
+    );
   }
   final encryptedKey = config.apiKeyEncrypted;
   if (encryptedKey == null || encryptedKey.isEmpty) {
@@ -2752,9 +4351,11 @@ TextToSpeechEngine _buildSpeechEngineForRequest({
   return OpenAiCompatibleTextToSpeechEngine(
     baseUrl: config.baseUrl,
     apiKey: apiKey,
-    model: config.model,
-    speed: config.speed,
-    responseFormat: config.responseFormat,
+    model: model,
+    speed: speed?.trim().isNotEmpty == true ? speed!.trim() : config.speed,
+    responseFormat: responseFormat?.trim().isNotEmpty == true
+        ? responseFormat!.trim()
+        : config.responseFormat,
     style: style,
     referenceAudioPath: referenceAudioPath,
   );
@@ -2768,32 +4369,42 @@ Future<String?> _saveGeneratedImageConversation({
   required String assistantContent,
   required String filePrefix,
   required GeneratedImage image,
+  List<GeneratedImage> additionalImages = const <GeneratedImage>[],
   _GeneratedSourceAttachment? sourceAttachment,
+  List<_GeneratedSourceAttachment>? sourceAttachments,
   bool includeUserMessage = true,
 }) async {
-  File? file;
-  _StoredAttachment? archivedSource;
-  late final String fileName;
+  final images = <GeneratedImage>[image, ...additionalImages];
+  final files = <File>[];
+  final fileNames = <String>[];
+  final sources =
+      sourceAttachments ??
+      (sourceAttachment == null
+          ? const <_GeneratedSourceAttachment>[]
+          : <_GeneratedSourceAttachment>[sourceAttachment]);
+  final archivedSources = <_StoredAttachment>[];
   late final String userMsgId;
   late final String assistantMsgId;
   try {
     final root = await getApplicationSupportDirectory();
     final directory = Directory(p.join(root.path, 'generated_images'));
     await directory.create(recursive: true);
-    fileName = '$filePrefix-${_uuid.v4()}.${image.extension}';
-    file = File(p.join(directory.path, fileName));
-    await writeBytesAtomically(file, image.bytes);
-
-    if (sourceAttachment != null) {
-      archivedSource = await _archiveGeneratedSourceAttachment(
-        sourceAttachment,
-      );
+    for (final generated in images) {
+      final fileName = '$filePrefix-${_uuid.v4()}.${generated.extension}';
+      final file = File(p.join(directory.path, fileName));
+      await writeBytesAtomically(file, generated.bytes);
+      files.add(file);
+      fileNames.add(fileName);
+    }
+    if (includeUserMessage) {
+      for (final source in sources) {
+        archivedSources.add(await _archiveGeneratedSourceAttachment(source));
+      }
     }
 
     userMsgId = _uuid.v4();
     assistantMsgId = _uuid.v4();
     final userTokens = TokenEstimator.estimate(userContent);
-    final attachmentId = _uuid.v4();
     final database = ref.read(databaseProvider);
     final messageDao = ref.read(messageDaoProvider);
     final sessionDao = ref.read(sessionDaoProvider);
@@ -2807,7 +4418,7 @@ Future<String?> _saveGeneratedImageConversation({
           content: userContent,
           tokens: userTokens,
         );
-        if (archivedSource != null) {
+        for (final archivedSource in archivedSources) {
           await attachmentDao.insertAttachment(
             id: archivedSource.id,
             messageId: userMsgId,
@@ -2826,14 +4437,16 @@ Future<String?> _saveGeneratedImageConversation({
         tokens: 0,
         channelModelId: modelId,
       );
-      await attachmentDao.insertAttachment(
-        id: attachmentId,
-        messageId: assistantMsgId,
-        fileType: 'image',
-        localPath: file!.path,
-        fileName: fileName,
-        fileSize: image.bytes.lengthInBytes,
-      );
+      for (var index = 0; index < images.length; index++) {
+        await attachmentDao.insertAttachment(
+          id: _uuid.v4(),
+          messageId: assistantMsgId,
+          fileType: 'image',
+          localPath: files[index].path,
+          fileName: fileNames[index],
+          fileSize: images[index].bytes.lengthInBytes,
+        );
+      }
       await sessionDao.updateLastMessageAt(session.id);
       await sessionDao.updateTotalTokens(
         session.id,
@@ -2841,12 +4454,12 @@ Future<String?> _saveGeneratedImageConversation({
       );
     });
   } catch (_) {
-    if (file != null) {
+    for (final file in files) {
       try {
         if (await file.exists()) await file.delete();
       } catch (_) {}
     }
-    if (archivedSource != null) {
+    for (final archivedSource in archivedSources) {
       try {
         final sourceFile = File(archivedSource.localPath);
         if (await sourceFile.exists()) await sourceFile.delete();
@@ -2866,9 +4479,9 @@ Future<String?> _saveGeneratedImageConversation({
         messageId: userMsgId,
         role: 'user',
         content: userContent,
-        attachmentNames: archivedSource == null
-            ? const []
-            : [archivedSource.fileName],
+        attachmentNames: archivedSources
+            .map((source) => source.fileName)
+            .toList(growable: false),
       ),
     );
     unawaited(
@@ -2880,7 +4493,7 @@ Future<String?> _saveGeneratedImageConversation({
         role: 'assistant',
         content: assistantContent,
         channelModelId: modelId,
-        attachmentNames: [fileName],
+        attachmentNames: fileNames,
       ),
     );
     ref.invalidate(messagesProvider(session.id));
@@ -2904,6 +4517,7 @@ Future<String?> _saveGeneratedMediaConversation({
   String? mimeType,
   required List<int> bytes,
   _GeneratedSourceAttachment? sourceAttachment,
+  List<_GeneratedSourceAttachment>? sourceAttachments,
   UniversalMediaJob? mediaJob,
   String? operationId,
 }) async {
@@ -2926,6 +4540,7 @@ Future<String?> _saveGeneratedMediaConversation({
       directoryName: directoryName,
       filePrefix: filePrefix,
       sourceAttachment: sourceAttachment,
+      sourceAttachments: sourceAttachments,
     );
     if (error == null) {
       ref.invalidate(messagesProvider(session.id));
@@ -2934,7 +4549,12 @@ Future<String?> _saveGeneratedMediaConversation({
     return error;
   }
   File? file;
-  _StoredAttachment? archivedSource;
+  final archivedSources = <_StoredAttachment>[];
+  final sources =
+      sourceAttachments ??
+      (sourceAttachment == null
+          ? const <_GeneratedSourceAttachment>[]
+          : <_GeneratedSourceAttachment>[sourceAttachment]);
   late final String fileName;
   late final String userMsgId;
   late final String assistantMsgId;
@@ -2946,10 +4566,8 @@ Future<String?> _saveGeneratedMediaConversation({
     file = File(p.join(directory.path, fileName));
     await writeBytesAtomically(file, bytes);
 
-    if (sourceAttachment != null) {
-      archivedSource = await _archiveGeneratedSourceAttachment(
-        sourceAttachment,
-      );
+    for (final source in sources) {
+      archivedSources.add(await _archiveGeneratedSourceAttachment(source));
     }
 
     userMsgId = _uuid.v4();
@@ -2968,7 +4586,7 @@ Future<String?> _saveGeneratedMediaConversation({
         content: userContent,
         tokens: userTokens,
       );
-      if (archivedSource != null) {
+      for (final archivedSource in archivedSources) {
         await attachmentDao.insertAttachment(
           id: archivedSource.id,
           messageId: userMsgId,
@@ -3006,7 +4624,7 @@ Future<String?> _saveGeneratedMediaConversation({
       if (part != null && await part.exists()) await part.delete();
       if (file != null && await file.exists()) await file.delete();
     } catch (_) {}
-    if (archivedSource != null) {
+    for (final archivedSource in archivedSources) {
       try {
         final sourceFile = File(archivedSource.localPath);
         if (await sourceFile.exists()) await sourceFile.delete();
@@ -3024,9 +4642,9 @@ Future<String?> _saveGeneratedMediaConversation({
         messageId: userMsgId,
         role: 'user',
         content: userContent,
-        attachmentNames: archivedSource == null
-            ? const []
-            : [archivedSource.fileName],
+        attachmentNames: archivedSources
+            .map((source) => source.fileName)
+            .toList(growable: false),
       ),
     );
     unawaited(
@@ -3086,19 +4704,6 @@ Future<void> deliverRecoveredUniversalMediaJob({
   if (sessionId == null || sessionId.isEmpty) {
     throw const UniversalMediaException('恢复任务未绑定会话，无法交付媒体');
   }
-  final persistedSource = row.deliverySourcePath == null
-      ? null
-      : _StoredAttachment(
-          id:
-              row.deliverySourceAttachmentId ??
-              UniversalMediaDeliveryIds.forOperationId(
-                row.id,
-              ).sourceAttachmentId,
-          fileName: row.deliverySourceFileName ?? 'reference-image',
-          fileType: row.deliverySourceFileType ?? 'image',
-          localPath: row.deliverySourcePath!,
-          fileSize: 0,
-        );
   final error = await _deliverUniversalMediaResult(
     database: database,
     notifier: notifier,
@@ -3113,7 +4718,6 @@ Future<void> deliverRecoveredUniversalMediaJob({
     fileType: row.deliveryFileType ?? _universalFileType(row.kind),
     directoryName: _universalDirectoryName(row.kind),
     filePrefix: _universalFilePrefix(row.kind),
-    persistedSourceAttachment: persistedSource,
     rootDirectory: rootDirectory,
     leaseId: leaseId,
   );
@@ -3134,23 +4738,19 @@ Future<String?> _deliverUniversalMediaResult({
   required String directoryName,
   required String filePrefix,
   _GeneratedSourceAttachment? sourceAttachment,
-  _StoredAttachment? persistedSourceAttachment,
+  List<_GeneratedSourceAttachment>? sourceAttachments,
   Directory? rootDirectory,
   String? leaseId,
 }) async {
   File? outputFile;
-  _StoredAttachment? archivedSource = persistedSourceAttachment;
+  final generatedSources =
+      sourceAttachments ??
+      (sourceAttachment == null
+          ? const <_GeneratedSourceAttachment>[]
+          : <_GeneratedSourceAttachment>[sourceAttachment]);
+  final archivedSources = <_StoredAttachment>[];
   try {
     final root = rootDirectory ?? await getApplicationSupportDirectory();
-    if (archivedSource != null && !p.isAbsolute(archivedSource.localPath)) {
-      archivedSource = _StoredAttachment(
-        id: archivedSource.id,
-        fileName: archivedSource.fileName,
-        fileType: archivedSource.fileType,
-        localPath: _resolveMediaPath(root, archivedSource.localPath),
-        fileSize: archivedSource.fileSize,
-      );
-    }
     final current = await database.mediaJobDao.getJob(job.id);
     if (current == null) return '媒体任务记录不存在，无法交付';
     if (current.status == media_database.mediaJobCompletedStatus &&
@@ -3158,6 +4758,30 @@ Future<String?> _deliverUniversalMediaResult({
             media_database.mediaJobDeliveryCompletedPhase) {
       notifier.releaseDeliveryLease(operationId);
       return null;
+    }
+    archivedSources.addAll(
+      await _loadGeneratedSourcePlan(row: current, root: root),
+    );
+
+    // 兼容旧任务：历史版本可能直到 provider 完成后才传入 sourceAttachment，
+    // 数据库中没有任何 source plan。此时仍先归档 manifest 再写 saving，确保
+    // 保存阶段崩溃后也能按同一份 stable IDs 恢复，而不是再次只保留第一份。
+    var deliverySourcePath = current.deliverySourcePath;
+    var deliverySourceFileName = current.deliverySourceFileName;
+    var deliverySourceFileType = current.deliverySourceFileType;
+    if (archivedSources.isEmpty && generatedSources.isNotEmpty) {
+      final fallbackManifest = await _archiveGeneratedSourceManifest(
+        generatedSources,
+        operationId: operationId,
+        baseAttachmentId: UniversalMediaDeliveryIds.fromDatabaseRow(
+          current,
+        ).sourceAttachmentId,
+        rootDirectory: root,
+      );
+      archivedSources.addAll(fallbackManifest.sources);
+      deliverySourcePath = fallbackManifest.marker.localPath;
+      deliverySourceFileName = fallbackManifest.marker.fileName;
+      deliverySourceFileType = fallbackManifest.marker.fileType;
     }
     final ids = UniversalMediaDeliveryIds.fromDatabaseRow(current);
     final extension = current.assetExtension ?? asset.extension;
@@ -3181,33 +4805,13 @@ Future<String?> _deliverUniversalMediaResult({
       userContent: userContent,
       assistantContent: assistantContent,
       fileType: fileType,
-      sourcePath: archivedSource?.localPath,
-      sourceFileName: archivedSource?.fileName,
-      sourceFileType: archivedSource?.fileType,
+      sourcePath: deliverySourcePath,
+      sourceFileName: deliverySourceFileName,
+      sourceFileType: deliverySourceFileType,
     );
     final effectiveLeaseId = leaseId ?? prepared?.leaseId;
     if (effectiveLeaseId == null) {
       return '媒体任务 lease 已失效，无法交付';
-    }
-
-    if (archivedSource == null && sourceAttachment != null) {
-      archivedSource = await _archiveGeneratedSourceAttachment(
-        sourceAttachment,
-        attachmentId: ids.sourceAttachmentId,
-        rootDirectory: root,
-      );
-      await notifier.prepareDelivery(
-        operationId: operationId,
-        job: job,
-        asset: asset,
-        assetPath: outputFile.path,
-        userContent: userContent,
-        assistantContent: assistantContent,
-        fileType: fileType,
-        sourcePath: archivedSource.localPath,
-        sourceFileName: archivedSource.fileName,
-        sourceFileType: archivedSource.fileType,
-      );
     }
 
     await writeBytesAtomically(outputFile, asset.bytes);
@@ -3219,9 +4823,9 @@ Future<String?> _deliverUniversalMediaResult({
       userContent: userContent,
       assistantContent: assistantContent,
       fileType: fileType,
-      sourcePath: archivedSource?.localPath,
-      sourceFileName: archivedSource?.fileName,
-      sourceFileType: archivedSource?.fileType,
+      sourcePath: deliverySourcePath,
+      sourceFileName: deliverySourceFileName,
+      sourceFileType: deliverySourceFileType,
       deliveryPhase: media_database.mediaJobDeliveryFileWrittenPhase,
     );
     final finalLeaseId = written?.leaseId ?? effectiveLeaseId;
@@ -3261,10 +4865,10 @@ Future<String?> _deliverUniversalMediaResult({
         throw const FormatException('媒体交付用户消息 ID 已绑定到其它内容');
       }
 
-      if (archivedSource != null) {
+      for (final archivedSource in archivedSources) {
         final existingSource = await (database.select(
           database.attachments,
-        )..where((t) => t.id.equals(archivedSource!.id))).getSingleOrNull();
+        )..where((t) => t.id.equals(archivedSource.id))).getSingleOrNull();
         if (existingSource == null) {
           final sourceFile = File(archivedSource.localPath);
           if (!await sourceFile.exists()) {
@@ -3278,7 +4882,9 @@ Future<String?> _deliverUniversalMediaResult({
             fileName: archivedSource.fileName,
             fileSize: await sourceFile.length(),
           );
-        } else if (existingSource.messageId != userMessageId) {
+        } else if (existingSource.messageId != userMessageId ||
+            existingSource.localPath != archivedSource.localPath ||
+            existingSource.fileType != archivedSource.fileType) {
           throw const FormatException('媒体交付参考附件 ID 已绑定到其它消息');
         }
       }
@@ -3341,7 +4947,9 @@ Future<String?> _deliverUniversalMediaResult({
         deliveryUserMessageId: userMessageId,
         deliveryAssistantMessageId: assistantMessageId,
         deliveryAttachmentId: attachmentId,
-        deliverySourceAttachmentId: archivedSource?.id,
+        deliverySourceAttachmentId: archivedSources.isEmpty
+            ? null
+            : archivedSources.first.id,
         deliveryPhase: media_database.mediaJobDeliveryCompletedPhase,
       );
       if (completed?.status != media_database.mediaJobCompletedStatus ||
