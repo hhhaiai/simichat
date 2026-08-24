@@ -29,6 +29,11 @@ class LatexMarkdownWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 完整 HTML 文档直接进入成果卡片；只有用户主动打开工作台的“源码”
+    // 才渲染长文本，避免 AI 返回未加 fenced 标记时仍铺满聊天时间线。
+    if (HtmlArtifactCard.looksLikeHtmlDocument(data)) {
+      return HtmlArtifactCard(code: data);
+    }
     final segments = _parseLatex(data);
     final defaultStyle = styleSheet ?? _buildMarkdownStyle(context);
 
@@ -416,7 +421,10 @@ class LatexMarkdownWidget extends StatelessWidget {
         color: quoteBg,
         borderRadius: BorderRadius.circular(10),
         border: Border(
-          left: BorderSide(color: scheme.primary.withValues(alpha: 0.6), width: 6),
+          left: BorderSide(
+            color: scheme.primary.withValues(alpha: 0.6),
+            width: 6,
+          ),
         ),
       ),
       listBullet: TextStyle(fontSize: 15, height: 1.6, color: scheme.onSurface),
@@ -1045,7 +1053,9 @@ class _StyledTable extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.03)
         : const Color(0xFFFAFBFC);
 
-    final columnCount = rows.map((r) => r.length).fold(0, (a, b) => a > b ? a : b);
+    final columnCount = rows
+        .map((r) => r.length)
+        .fold(0, (a, b) => a > b ? a : b);
 
     return Container(
       width: double.infinity,
@@ -1065,9 +1075,7 @@ class _StyledTable extends StatelessWidget {
           for (var r = 0; r < rows.length; r++)
             TableRow(
               decoration: BoxDecoration(
-                color: isHeader[r]
-                    ? headerBg
-                    : (r.isOdd ? zebraBg : null),
+                color: isHeader[r] ? headerBg : (r.isOdd ? zebraBg : null),
               ),
               children: [
                 for (var c = 0; c < columnCount; c++)
@@ -1116,6 +1124,9 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     if (normalizedLanguage == 'html' &&
         HtmlArtifactCard.looksLikeHtmlDocument(code)) {
       return HtmlArtifactCard(code: code);
+    }
+    if (normalizedLanguage == 'markdown' || normalizedLanguage == 'md') {
+      return MarkdownArtifactCard(markdown: code);
     }
     if (language == null && !code.contains('\n')) {
       return null;
