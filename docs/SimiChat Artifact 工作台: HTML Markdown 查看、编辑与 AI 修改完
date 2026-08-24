@@ -1,0 +1,2070 @@
+# SimiChat Artifact 工作台：HTML / Markdown 查看、编辑与 AI 修改完整方案
+
+## 一、项目定义
+
+### 1.1 功能名称
+
+用户侧名称建议使用：
+
+> **成果工作台**
+
+内部模块名称建议使用：
+
+> **Artifact Studio**
+
+该功能用于承载 SimiChat 在对话中生成或用户上传的独立文件成果，包括：
+
+* HTML 网页
+* Markdown 文档
+* 后续可扩展的代码、表格、SVG、JSON 等文件
+
+本期重点实现：
+
+```text
+HTML 查看、运行、源码编辑、可视化编辑
+Markdown 查看、源码编辑、可视化编辑
+AI 定向修改
+版本保存与文件导出
+```
+
+---
+
+## 二、建设目标
+
+SimiChat 当前可以在会话中生成 HTML 文件和预览图片，但用户只能下载文件或查看静态预览。
+
+本次需要将其升级为一个可交互的成果工作台，使普通用户即使不懂 HTML、CSS 和 Markdown，也能够：
+
+1. 在聊天中直接打开 AI 生成的 HTML 或 Markdown。
+2. 查看 HTML 的真实运行效果。
+3. 查看 Markdown 渲染后的文档效果。
+4. 在“查看效果”和“源码”之间切换。
+5. 直接点击页面上的文字、图片、按钮和图标进行修改。
+6. 修改字体、字号、颜色、背景、链接和基础布局。
+7. 选中某个元素后，通过自然语言让 AI 定向修改。
+8. 撤销或恢复每次修改。
+9. 保存当前版本、另存为新版本或下载文件。
+10. 上传本地 HTML、HTM、MD、Markdown 文件继续编辑。
+
+本功能不是完整的专业前端 IDE，也不是类似 Webflow 的完整网页搭建系统。
+
+第一阶段定位为：
+
+> **面向普通用户的 AI 驱动 HTML / Markdown 查看与轻量可视化编辑工具。**
+
+---
+
+# 三、最终实现效果
+
+## 3.1 会话中的文件成果卡片
+
+当 AI 生成 HTML 或 Markdown 后，在当前会话中显示文件卡片。
+
+HTML 示例：
+
+```text
+┌─────────────────────────────────────┐
+│  ◉  world_art_gallery.html          │
+│     HTML · 82 KB                    │
+│                                     │
+│  [查看效果]  [下载]  [更多]          │
+└─────────────────────────────────────┘
+```
+
+Markdown 示例：
+
+```text
+┌─────────────────────────────────────┐
+│  M  product_requirement.md          │
+│     Markdown · 26 KB                │
+│                                     │
+│  [查看效果]  [下载]  [更多]          │
+└─────────────────────────────────────┘
+```
+
+卡片支持：
+
+* 查看效果
+* 下载文件
+* 重命名
+* 复制文件
+* 另存为
+* 删除
+* 查看版本
+* 继续让 AI 修改
+
+点击“查看效果”后打开 Artifact 工作台。
+
+---
+
+## 3.2 桌面端工作区
+
+桌面端采用左右分栏。
+
+```text
+┌───────────────────────┬─────────────────────────────────────────┐
+│                       │ 文件名                    保存   下载    │
+│                       │                                         │
+│      AI 对话区         │ [查看效果] [可视化编辑] [源码]           │
+│                       ├─────────────────────────────────────────┤
+│ 可以继续输入：         │                                         │
+│                       │                                         │
+│ “把标题改成金色”       │          HTML / Markdown 工作区          │
+│ “替换这张图片”         │                                         │
+│ “优化手机端布局”       │                                         │
+│                       │                                         │
+└───────────────────────┴─────────────────────────────────────────┘
+```
+
+右侧工作台宽度支持拖动调整。
+
+建议默认比例：
+
+```text
+对话区 38%
+工作台 62%
+```
+
+支持：
+
+* 收起对话区
+* 工作台全屏
+* 恢复左右分栏
+* 关闭工作台
+* 在不同文件间切换
+
+---
+
+## 3.3 移动端工作区
+
+移动端点击文件后进入全屏成果页面。
+
+页面结构：
+
+```text
+顶部：返回、文件名、保存、更多
+中部：查看效果 / 编辑区域
+底部：查看效果、编辑、源码三个模式入口
+```
+
+移动端优先支持：
+
+* HTML 和 Markdown 查看效果
+* 修改文字
+* 修改颜色
+* 替换图片
+* 修改链接
+* AI 定向修改
+* 源码查看与轻量编辑
+* 保存和下载
+
+复杂布局修改、完整属性面板和多栏操作优先在桌面端和平板端提供。
+
+---
+
+# 四、工作台模式设计
+
+## 4.1 HTML 文件模式
+
+HTML 文件包含三个核心标签：
+
+```text
+查看效果
+可视化编辑
+源码
+```
+
+可增加第四个可选标签：
+
+```text
+分屏
+```
+
+分屏模式显示：
+
+```text
+左侧源码
+右侧实时效果
+```
+
+---
+
+## 4.2 Markdown 文件模式
+
+Markdown 文件同样包含：
+
+```text
+查看效果
+可视化编辑
+源码
+```
+
+各模式含义：
+
+| 模式    | HTML                   | Markdown           |
+| ----- | ---------------------- | ------------------ |
+| 查看效果  | 运行并显示真实网页              | 渲染为格式化文档           |
+| 可视化编辑 | 点击网页元素修改               | 按文档块编辑标题、段落、列表等    |
+| 源码    | 编辑 HTML、CSS、JavaScript | 编辑原始 Markdown      |
+| 分屏    | 源码与网页同步显示              | Markdown 与渲染结果同步显示 |
+
+---
+
+# 五、HTML 查看效果
+
+## 5.1 页面运行
+
+点击“查看效果”后，HTML 在隔离的预览环境中运行。
+
+需要支持：
+
+* HTML
+* 内嵌 CSS
+* 内嵌 JavaScript
+* CSS 动画
+* JavaScript 交互
+* Canvas
+* SVG
+* 音频和视频
+* 鼠标、触摸和键盘事件
+* 页面内部交互
+* 响应式布局
+
+例如用户生成的世界名画 3D 画廊，应能够正常实现：
+
+* 3D 旋转
+* 鼠标拖动
+* 滚轮切换
+* 上一幅和下一幅
+* 点击名画查看详情
+* 弹窗关闭
+* 键盘方向键操作
+
+不能只生成一张页面截图。
+
+“查看效果”必须展示 HTML 的真实运行结果。
+
+---
+
+## 5.2 设备尺寸预览
+
+工具栏提供设备切换：
+
+```text
+自适应
+桌面
+平板
+手机
+```
+
+推荐预设：
+
+```text
+桌面：1440 × 900
+平板：768 × 1024
+手机：390 × 844
+```
+
+支持：
+
+* 横屏和竖屏切换
+* 自定义宽度
+* 缩放比例
+* 适应窗口
+* 刷新页面
+* 在新窗口打开
+
+设备预览只改变页面容器尺寸，不修改源代码。
+
+---
+
+## 5.3 安全运行模式
+
+HTML 不得直接插入 SimiChat 主页面 DOM。
+
+必须运行在隔离的 iframe 或等效沙箱环境中。
+
+建议分为两种模式。
+
+### 安全模式
+
+默认模式：
+
+* 禁止访问 SimiChat 主页面
+* 禁止读取 SimiChat Cookie
+* 禁止读取用户 API Key
+* 禁止跳转顶层页面
+* 禁止自动弹窗
+* 禁止未经授权的文件下载
+* 禁止提交表单到外部站点
+* 默认限制外部网络请求
+
+### 交互模式
+
+用户主动允许后，可启用：
+
+* HTML 内嵌 JavaScript
+* 页面动画
+* Canvas
+* WebGL
+* 外部图片和字体
+* 受限的外部脚本资源
+
+即使在交互模式中，也不能授予：
+
+```text
+allow-same-origin
+allow-top-navigation
+allow-popups
+```
+
+编辑模式中应暂停用户 HTML 自带的 JavaScript，只运行 SimiChat 编辑桥接程序，避免脚本持续修改 DOM，影响元素选择。
+
+---
+
+# 六、Markdown 查看效果
+
+## 6.1 Markdown 渲染范围
+
+查看效果应支持常用 Markdown 和 GitHub Flavored Markdown。
+
+至少包括：
+
+* 一级至六级标题
+* 段落
+* 粗体
+* 斜体
+* 删除线
+* 引用
+* 有序列表
+* 无序列表
+* 任务列表
+* 表格
+* 分割线
+* 链接
+* 图片
+* 行内代码
+* 代码块
+* 自动链接
+* 脚注
+* 转义字符
+
+代码块支持：
+
+* 语言识别
+* 语法高亮
+* 一键复制
+* 横向滚动
+
+---
+
+## 6.2 Markdown 文档主题
+
+查看效果支持选择预览主题：
+
+```text
+默认
+简洁
+技术文档
+公众号文章
+论文
+深色
+```
+
+主题参数可以包括：
+
+* 正文字体
+* 标题字体
+* 字号
+* 行高
+* 页面宽度
+* 强调色
+* 代码主题
+* 页面背景
+
+Markdown 主题属于 Artifact 的显示配置，默认不修改 Markdown 原始源码。
+
+用户下载 `.md` 文件时，下载的是纯 Markdown 内容。
+
+用户也可以选择：
+
+```text
+导出为 HTML
+```
+
+此时将当前 Markdown 内容和所选主题共同导出为 HTML。
+
+---
+
+## 6.3 Markdown 中的 HTML
+
+Markdown 中包含内嵌 HTML 时：
+
+* 查看效果中可以在安全规则允许的范围内渲染。
+* 可视化编辑中将其显示为“HTML 块”。
+* 普通 Markdown 元素按 Markdown 方式编辑。
+* HTML 块需要进入 HTML 编辑模式或源码模式修改。
+* 不允许未经清洗的危险标签直接运行。
+
+---
+
+# 七、HTML 可视化编辑
+
+## 7.1 元素选择
+
+进入“可视化编辑”后：
+
+* 鼠标悬停元素时显示浅色轮廓。
+* 点击元素后显示品牌色实线轮廓。
+* 显示元素类型，如 `标题`、`图片`、`按钮`、`容器`。
+* 显示当前元素尺寸。
+* 显示元素层级路径。
+
+示例：
+
+```text
+body > main > section.hero > h1
+```
+
+用户可以通过层级路径选择父元素。
+
+对于嵌套元素，默认选中最具体、最接近点击位置的可编辑元素。
+
+---
+
+## 7.2 文字直接修改
+
+用户双击文字后进入直接编辑状态。
+
+支持修改：
+
+* 标题
+* 段落
+* 按钮文字
+* 菜单文字
+* 图片说明
+* 标签文字
+* 链接文字
+
+交互规则：
+
+* Enter：完成编辑
+* Shift + Enter：插入换行
+* Esc：取消本次编辑
+* 点击空白位置：保存修改
+
+文字编辑完成后：
+
+1. 立即更新预览。
+2. 同步更新 HTML 源码。
+3. 写入撤销记录。
+4. 标记当前文件为“未保存”。
+
+---
+
+## 7.3 文字样式
+
+选中文字元素后，右侧属性面板或移动端底部抽屉显示：
+
+* 字体
+* 字号
+* 字重
+* 行高
+* 字间距
+* 文字颜色
+* 对齐方式
+* 粗体
+* 斜体
+* 下划线
+* 删除线
+* 大小写转换
+* 透明度
+
+对于已有 CSS 样式，第一版采用尽量不破坏原页面的策略：
+
+1. 优先修改元素已有行内样式。
+2. 没有行内样式时，生成局部覆盖样式。
+3. 不直接重写整个 CSS 文件。
+4. 不无条件删除原有 class。
+
+---
+
+## 7.4 背景、边框和基础布局
+
+选中普通元素或容器后支持：
+
+### 背景
+
+* 背景颜色
+* 背景图片
+* 渐变背景
+* 透明度
+* 背景尺寸
+* 背景位置
+
+### 边框
+
+* 边框颜色
+* 边框宽度
+* 边框样式
+* 圆角
+* 阴影
+
+### 尺寸
+
+* 宽度
+* 高度
+* 最小宽度
+* 最大宽度
+* 最小高度
+* 最大高度
+
+### 间距
+
+* 上下左右内边距
+* 上下左右外边距
+* 统一间距
+* 分别设置
+
+### 对齐
+
+* 左对齐
+* 居中
+* 右对齐
+* 顶部对齐
+* 垂直居中
+* 底部对齐
+
+第一版不提供类似 PPT 的完全自由绝对定位。
+
+原因是任意拖动可能破坏：
+
+* Flex 布局
+* Grid 布局
+* 响应式页面
+* 页面动画
+* JavaScript 定位逻辑
+
+第一版支持的结构操作为：
+
+* 在同级中前移
+* 在同级中后移
+* 移到最前
+* 移到最后
+* 复制元素
+* 删除元素
+* 隐藏元素
+* 恢复元素
+
+---
+
+## 7.5 图片修改
+
+点击图片后支持：
+
+* 上传本地图片替换
+* 从当前会话图片中选择
+* 从成果资源库中选择
+* 输入图片 URL
+* 让 AI 生成新图片
+* 裁剪图片
+* 调整显示比例
+* 修改圆角
+* 修改透明度
+* 修改替代文字
+* 删除图片
+
+替换图片时默认保留原元素的：
+
+* 宽度
+* 高度
+* CSS class
+* object-fit
+* 圆角
+* 动画
+* 定位方式
+
+避免替换图片后页面布局整体变化。
+
+---
+
+## 7.6 图标修改
+
+需要识别以下常见图标类型：
+
+* 内嵌 SVG
+* SVG 文件
+* Iconify
+* Lucide
+* Font Awesome
+* 图片图标
+* Emoji
+
+点击图标后支持：
+
+* 从内置图标库选择新图标
+* 上传 SVG
+* 上传 PNG 或 WebP
+* 修改颜色
+* 修改大小
+* 修改线条粗细
+* 旋转
+* 翻转
+* 删除
+
+第一版内置图标库建议采用项目已有图标库。
+
+如果现有项目没有统一图标库，可以接入 Lucide 或 Iconify，但不得同时引入多个重复图标库。
+
+---
+
+## 7.7 按钮与链接修改
+
+选中按钮或链接后支持：
+
+* 修改文字
+* 修改链接地址
+* 选择当前窗口或新窗口打开
+* 禁用链接
+* 删除链接但保留文字
+* 修改按钮颜色
+* 修改悬停颜色
+* 修改边框
+* 修改圆角
+* 修改图标
+* 修改按钮大小
+
+进入编辑模式后，点击链接默认只选中元素，不执行页面跳转。
+
+用户可以通过右键菜单或操作面板选择：
+
+```text
+测试打开链接
+```
+
+---
+
+## 7.8 元素上下文菜单
+
+右键或长按元素后显示：
+
+```text
+编辑文字
+修改样式
+替换图片
+更换图标
+编辑链接
+让 AI 修改
+复制
+隐藏
+删除
+选择父元素
+查看源码位置
+```
+
+菜单内容根据元素类型动态显示。
+
+---
+
+# 八、Markdown 可视化编辑
+
+## 8.1 编辑方式
+
+Markdown 的可视化编辑采用文档块模式，而不是网页 CSS 编辑模式。
+
+支持的文档块：
+
+* 标题
+* 段落
+* 引用
+* 有序列表
+* 无序列表
+* 任务列表
+* 表格
+* 图片
+* 链接
+* 代码块
+* 分割线
+
+用户点击一个块后，可以：
+
+* 直接修改内容
+* 切换块类型
+* 上移
+* 下移
+* 复制
+* 删除
+* 让 AI 改写
+
+例如：
+
+```text
+段落 → 二级标题
+无序列表 → 有序列表
+普通列表 → 任务列表
+```
+
+---
+
+## 8.2 Markdown 文字格式
+
+支持：
+
+* 粗体
+* 斜体
+* 删除线
+* 行内代码
+* 链接
+* 引用
+* 标题等级
+* 列表缩进
+
+操作完成后必须同步生成合法 Markdown 源码。
+
+---
+
+## 8.3 Markdown 表格
+
+表格支持：
+
+* 修改单元格内容
+* 增加行
+* 删除行
+* 增加列
+* 删除列
+* 调整列顺序
+* 设置对齐方式
+
+表格变化同步为 Markdown 表格语法。
+
+---
+
+## 8.4 Markdown 图片
+
+图片支持：
+
+* 上传本地图片
+* 输入图片地址
+* 从会话资源中选择
+* 修改替代文字
+* 修改标题
+* 删除图片
+
+Markdown 原生不支持图片圆角、阴影和任意尺寸。
+
+因此：
+
+* 图片地址和替代文字写入 Markdown 源码。
+* 圆角、宽度和阴影等视觉属性默认保存为预览主题配置。
+* 用户明确要求写入文件时，可转换为 HTML 图片标签。
+
+---
+
+## 8.5 Markdown 颜色和图标限制
+
+Markdown 本身不定义文字颜色和图标组件。
+
+因此需要遵守以下规则：
+
+### 修改整个文档颜色
+
+通过文档主题完成，不修改 Markdown 内容。
+
+### 修改单个文字颜色
+
+系统提示用户选择：
+
+```text
+仅修改预览样式
+转换为 HTML 标签并写入 Markdown
+```
+
+### 插入图标
+
+优先提供：
+
+* Emoji
+* 图片链接
+* SVG 图片
+
+如需可改变颜色的复杂图标，需要插入 HTML 或 SVG 内容。
+
+不得让用户误以为纯 Markdown 原生支持所有 CSS 能力。
+
+---
+
+# 九、源码编辑
+
+## 9.1 HTML 源码编辑器
+
+HTML 源码模式支持：
+
+* 语法高亮
+* 行号
+* 自动缩进
+* 查找
+* 替换
+* 撤销
+* 重做
+* 格式化代码
+* 标签匹配
+* 括号匹配
+* 错误提示
+* 快速跳转到指定行
+* 查看当前选中元素源码
+
+支持编辑：
+
+* HTML
+* CSS
+* JavaScript
+
+---
+
+## 9.2 Markdown 源码编辑器
+
+Markdown 源码模式支持：
+
+* 语法高亮
+* 行号
+* 标题结构提示
+* 查找和替换
+* 列表自动续行
+* 代码块识别
+* 表格辅助
+* 错误提示
+* 实时预览
+
+---
+
+## 9.3 实时同步
+
+源码修改后：
+
+1. 经过短暂防抖。
+2. 重新解析文档。
+3. 更新查看效果。
+4. 更新可视化编辑结构。
+5. 写入统一撤销记录。
+
+建议防抖时间：
+
+```text
+300–500ms
+```
+
+源码存在语法错误时：
+
+* 显示错误位置。
+* 保留用户当前源码。
+* 不覆盖用户内容。
+* 查看效果继续显示最近一次成功渲染结果。
+* 显示“当前源码存在错误，预览尚未更新”。
+
+---
+
+# 十、三种模式同步机制
+
+必须保证：
+
+```text
+查看效果
+可视化编辑
+源码
+```
+
+使用同一份 Artifact 内容，不得维护三份互相独立的数据。
+
+## 10.1 HTML 同步模型
+
+HTML 源码作为持久化内容。
+
+解析后生成：
+
+```text
+HTML AST
+元素索引
+预览文档
+可编辑节点树
+```
+
+可视化操作不能直接使用以下方式覆盖完整源码：
+
+```js
+source = iframe.document.documentElement.outerHTML;
+```
+
+这种方式会导致：
+
+* 原始代码格式丢失
+* 注释丢失
+* 脚本位置变化
+* 属性顺序变化
+* 大量无关代码被重写
+
+正确方案：
+
+1. 源码解析为 AST。
+2. 给可编辑节点建立内部 ID。
+3. 用户操作生成结构化 Patch。
+4. Patch 只修改目标节点或目标属性。
+5. 修改后重新解析并刷新预览。
+6. 导出时移除 SimiChat 内部编辑标记。
+
+结构化操作示例：
+
+```ts
+type HtmlPatch =
+  | {
+      type: "setText";
+      nodeId: string;
+      value: string;
+    }
+  | {
+      type: "setAttribute";
+      nodeId: string;
+      name: string;
+      value: string;
+    }
+  | {
+      type: "setStyle";
+      nodeId: string;
+      property: string;
+      value: string;
+    }
+  | {
+      type: "replaceAsset";
+      nodeId: string;
+      assetId: string;
+    }
+  | {
+      type: "moveNode";
+      nodeId: string;
+      targetNodeId: string;
+      position: "before" | "after" | "inside";
+    }
+  | {
+      type: "deleteNode";
+      nodeId: string;
+    };
+```
+
+---
+
+## 10.2 Markdown 同步模型
+
+Markdown 源码解析为 Markdown AST。
+
+可视化编辑生成结构化操作：
+
+```ts
+type MarkdownPatch =
+  | {
+      type: "setBlockText";
+      nodeId: string;
+      value: string;
+    }
+  | {
+      type: "changeBlockType";
+      nodeId: string;
+      blockType: string;
+    }
+  | {
+      type: "moveBlock";
+      nodeId: string;
+      direction: "up" | "down";
+    }
+  | {
+      type: "deleteBlock";
+      nodeId: string;
+    }
+  | {
+      type: "insertBlock";
+      afterNodeId?: string;
+      block: unknown;
+    };
+```
+
+Patch 更新 Markdown AST，再序列化为 Markdown 源码。
+
+---
+
+# 十一、AI 定向修改
+
+## 11.1 选中元素后调用 AI
+
+用户选中 HTML 元素或 Markdown 块后，可以点击：
+
+```text
+让 AI 修改
+```
+
+输入示例：
+
+```text
+把这个标题改得更有艺术感
+```
+
+```text
+将这个按钮改成金色，圆角增加到 20px
+```
+
+```text
+把这张图片换成夜晚的城市景观
+```
+
+```text
+把这一段压缩到 80 字以内
+```
+
+```text
+把当前表格增加一列“负责人”
+```
+
+---
+
+## 11.2 AI 上下文
+
+HTML 请求至少包含：
+
+```json
+{
+  "artifact_id": "artifact_xxx",
+  "artifact_type": "html",
+  "version_id": "version_xxx",
+  "selected_node": {
+    "node_id": "node_xxx",
+    "tag": "h1",
+    "text": "让时间，绕着名画旋转",
+    "attributes": {},
+    "computed_style": {},
+    "html": "<h1>让时间，绕着名画旋转</h1>"
+  },
+  "instruction": "把这个标题改成金色手写体"
+}
+```
+
+Markdown 请求至少包含：
+
+```json
+{
+  "artifact_id": "artifact_xxx",
+  "artifact_type": "markdown",
+  "version_id": "version_xxx",
+  "selected_node": {
+    "node_id": "node_xxx",
+    "type": "paragraph",
+    "markdown": "当前段落内容"
+  },
+  "instruction": "把这一段改得更简洁"
+}
+```
+
+---
+
+## 11.3 AI 修改结果
+
+AI 不应直接返回整个文件并覆盖当前内容。
+
+优先返回结构化修改：
+
+```json
+{
+  "summary": "已修改标题文案、字体和颜色",
+  "patches": [
+    {
+      "type": "setText",
+      "nodeId": "node_xxx",
+      "value": "穿越时间，遇见世界名画"
+    },
+    {
+      "type": "setStyle",
+      "nodeId": "node_xxx",
+      "property": "color",
+      "value": "#C8A45D"
+    }
+  ]
+}
+```
+
+应用前向用户展示：
+
+* 修改说明
+* 修改前内容
+* 修改后内容
+* 受影响元素
+* 应用修改
+* 放弃修改
+
+用户应用后仍然可以撤销。
+
+---
+
+## 11.4 全局 AI 修改
+
+未选中元素时，用户可以对整个文件提出要求：
+
+```text
+整体优化手机端布局
+```
+
+```text
+把页面风格改成黑金艺术馆
+```
+
+```text
+修复所有按钮在手机上太小的问题
+```
+
+全局修改需要：
+
+1. 创建临时版本。
+2. 展示差异摘要。
+3. 用户确认后应用。
+4. 支持一键恢复修改前版本。
+
+---
+
+# 十二、文件导入
+
+## 12.1 支持的文件类型
+
+第一版支持：
+
+```text
+.html
+.htm
+.md
+.markdown
+```
+
+入口包括：
+
+* 聊天输入框 `+`
+* 成果工作台“打开文件”
+* 拖拽上传
+* 文件选择器
+
+---
+
+## 12.2 HTML 导入限制
+
+第一版主要支持单文件 HTML。
+
+完整支持：
+
+* 内嵌 CSS
+* 内嵌 JavaScript
+* Base64 图片
+* Data URL
+* HTTPS 外部资源
+
+对于依赖本地相对路径的 HTML：
+
+```html
+<img src="./images/banner.png">
+<link rel="stylesheet" href="./style.css">
+```
+
+浏览器无法只凭一个 HTML 文件自动获取同目录文件。
+
+此时需要提示：
+
+```text
+该 HTML 引用了本地资源，请上传完整网页 ZIP，或将资源内嵌到 HTML。
+```
+
+第一阶段可以显示缺失资源列表。
+
+后续版本支持：
+
+```text
+上传 ZIP 网页项目
+HTML + CSS + JS + 图片多文件管理
+```
+
+---
+
+## 12.3 Markdown 导入
+
+Markdown 导入后：
+
+* 自动识别 UTF-8。
+* 保留原始换行。
+* 保留 Front Matter。
+* 识别 Markdown 图片链接。
+* 识别相对资源路径。
+* 缺失资源时显示提示。
+
+---
+
+# 十三、资源管理
+
+每个 Artifact 建立独立资源空间。
+
+资源类型包括：
+
+* 图片
+* SVG
+* 音频
+* 视频
+* 字体
+* CSS
+* JavaScript
+* 其他附件
+
+资源操作：
+
+* 上传
+* 重命名
+* 替换
+* 删除
+* 查看引用位置
+* 复制资源地址
+* 从会话中引用
+* AI 生成资源
+
+资源删除前必须检查引用关系。
+
+正在被 HTML 或 Markdown 使用的资源不得直接静默删除。
+
+---
+
+# 十四、保存与版本管理
+
+## 14.1 保存方式
+
+提供以下操作：
+
+```text
+自动保存草稿
+保存当前版本
+另存为新版本
+下载文件
+```
+
+### 自动保存草稿
+
+修改过程中自动保存到 SimiChat 服务端。
+
+不立即创建正式版本。
+
+### 保存当前版本
+
+将当前草稿提交为正式版本。
+
+### 另存为新版本
+
+保留原版本并创建新 Artifact 或新分支。
+
+### 下载
+
+根据文件类型下载：
+
+```text
+HTML → .html
+Markdown → .md
+```
+
+Markdown 还可以：
+
+```text
+导出为 HTML
+```
+
+---
+
+## 14.2 覆盖本地原文件
+
+浏览器通常不能在未经授权的情况下直接覆盖用户本地文件。
+
+因此需要区分：
+
+### 支持 File System Access API 的浏览器
+
+例如部分 Chromium 浏览器，在用户明确授权文件句柄后，可以显示：
+
+```text
+保存到原文件
+```
+
+### 不支持该能力的浏览器
+
+显示：
+
+```text
+下载替换文件
+```
+
+不得向用户承诺所有浏览器都可以无条件覆盖原文件。
+
+SimiChat 服务端内部的 Artifact 保存不受该限制。
+
+---
+
+## 14.3 版本历史
+
+版本记录包含：
+
+* 版本号
+* 保存时间
+* 保存人
+* 修改摘要
+* 来源
+* 文件大小
+
+来源包括：
+
+```text
+AI 初次生成
+用户可视化编辑
+用户源码编辑
+AI 定向修改
+本地文件导入
+版本恢复
+```
+
+支持：
+
+* 查看历史版本
+* 比较版本
+* 恢复版本
+* 复制为新版本
+* 下载历史版本
+
+---
+
+# 十五、撤销与重做
+
+查看效果、可视化编辑和源码编辑共用一套操作历史。
+
+支持：
+
+```text
+Ctrl / Cmd + Z：撤销
+Ctrl / Cmd + Shift + Z：重做
+Esc：取消当前编辑
+Ctrl / Cmd + S：保存
+```
+
+以下操作必须可撤销：
+
+* 修改文字
+* 修改颜色
+* 替换图片
+* 更换图标
+* 修改链接
+* 移动元素
+* 删除元素
+* AI 修改
+* 源码修改
+* Markdown 块修改
+
+切换标签不能清空撤销历史。
+
+保存版本后可以保留当前会话撤销历史，但重新打开页面后，以版本历史作为恢复方式。
+
+---
+
+# 十六、数据结构
+
+## 16.1 Artifact
+
+```ts
+type ArtifactType = "html" | "markdown";
+
+interface Artifact {
+  id: string;
+  conversationId: string;
+
+  type: ArtifactType;
+  name: string;
+  mimeType: string;
+
+  currentVersionId: string;
+  draftSource?: string;
+
+  previewConfig: {
+    device: "responsive" | "desktop" | "tablet" | "mobile";
+    width?: number;
+    height?: number;
+    zoom: number;
+    theme?: string;
+    allowExternalResources?: boolean;
+    allowScripts?: boolean;
+  };
+
+  assets: ArtifactAsset[];
+
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+---
+
+## 16.2 ArtifactVersion
+
+```ts
+interface ArtifactVersion {
+  id: string;
+  artifactId: string;
+  versionNumber: number;
+
+  source: string;
+  sourceHash: string;
+
+  changeType:
+    | "initial"
+    | "visual_edit"
+    | "source_edit"
+    | "ai_edit"
+    | "upload"
+    | "restore";
+
+  changeSummary?: string;
+  createdBy: "user" | "assistant" | "system";
+
+  createdAt: string;
+}
+```
+
+---
+
+## 16.3 ArtifactAsset
+
+```ts
+interface ArtifactAsset {
+  id: string;
+  artifactId: string;
+
+  name: string;
+  mimeType: string;
+  size: number;
+
+  url: string;
+  source: "upload" | "conversation" | "ai" | "external";
+
+  createdAt: string;
+}
+```
+
+---
+
+## 16.4 编辑会话
+
+```ts
+interface ArtifactEditSession {
+  artifactId: string;
+  baseVersionId: string;
+
+  source: string;
+  dirty: boolean;
+
+  selectedNodeId?: string;
+
+  undoStack: ArtifactPatch[];
+  redoStack: ArtifactPatch[];
+
+  parseErrors: Array<{
+    line?: number;
+    column?: number;
+    message: string;
+  }>;
+}
+```
+
+---
+
+# 十七、前端组件方案
+
+建议建立以下组件。
+
+```text
+ArtifactCard
+ArtifactWorkspace
+ArtifactToolbar
+ArtifactModeTabs
+ArtifactFileMenu
+ArtifactVersionDrawer
+ArtifactAssetManager
+ArtifactSourceEditor
+ArtifactSplitView
+ArtifactSaveDialog
+ArtifactExportDialog
+```
+
+HTML 相关组件：
+
+```text
+HtmlPreviewRenderer
+HtmlSandboxFrame
+HtmlVisualEditor
+HtmlEditorOverlay
+HtmlElementInspector
+HtmlStylePanel
+HtmlElementBreadcrumb
+HtmlPatchEngine
+```
+
+Markdown 相关组件：
+
+```text
+MarkdownPreviewRenderer
+MarkdownVisualEditor
+MarkdownBlockEditor
+MarkdownToolbar
+MarkdownThemePanel
+MarkdownAstEngine
+```
+
+AI 相关组件：
+
+```text
+ArtifactAiEditInput
+ArtifactAiDiffPanel
+ArtifactAiPatchReview
+```
+
+移动端组件：
+
+```text
+ArtifactMobileHeader
+ArtifactMobileModeBar
+ArtifactMobileInspectorSheet
+ArtifactMobileActionSheet
+```
+
+具体组件名称应结合现有项目命名规范调整。
+
+不得为了实现本功能重新建立一个与现有 SimiChat 完全独立的前端项目。
+
+---
+
+# 十八、推荐技术方案
+
+应优先复用现有项目依赖。
+
+现有项目没有对应能力时，建议：
+
+## HTML 解析
+
+```text
+parse5
+```
+
+或项目已有的 HTML Parser。
+
+## Markdown 解析
+
+```text
+unified
+remark-parse
+remark-gfm
+remark-stringify
+rehype
+```
+
+## Markdown 安全清洗
+
+```text
+rehype-sanitize
+DOMPurify
+```
+
+## 源码编辑器
+
+优先级：
+
+1. 复用项目已有编辑器。
+2. 没有时采用 CodeMirror 6。
+3. 项目已经使用 Monaco 时继续使用 Monaco。
+
+移动端和包体积优先时，CodeMirror 6 更合适。
+
+## 代码格式化
+
+```text
+Prettier
+```
+
+格式化应由用户主动触发，不应在每次可视化修改后自动格式化整个文件。
+
+## HTML 预览通信
+
+使用：
+
+```text
+iframe + postMessage
+```
+
+父页面与 iframe 通信必须校验：
+
+* 来源
+* Artifact ID
+* 编辑会话 ID
+* 随机通信令牌
+
+---
+
+# 十九、接口建议
+
+## 获取 Artifact
+
+```http
+GET /api/artifacts/{artifactId}
+```
+
+## 创建 Artifact
+
+```http
+POST /api/artifacts
+```
+
+## 更新草稿
+
+```http
+PATCH /api/artifacts/{artifactId}/draft
+```
+
+请求：
+
+```json
+{
+  "source": "<html>...</html>",
+  "base_version_id": "version_xxx"
+}
+```
+
+## 保存正式版本
+
+```http
+POST /api/artifacts/{artifactId}/versions
+```
+
+## 获取版本列表
+
+```http
+GET /api/artifacts/{artifactId}/versions
+```
+
+## 恢复版本
+
+```http
+POST /api/artifacts/{artifactId}/versions/{versionId}/restore
+```
+
+## 上传资源
+
+```http
+POST /api/artifacts/{artifactId}/assets
+```
+
+## 删除资源
+
+```http
+DELETE /api/artifacts/{artifactId}/assets/{assetId}
+```
+
+## AI 修改
+
+```http
+POST /api/artifacts/{artifactId}/ai-edit
+```
+
+返回结构化 Patch，不直接覆盖文件。
+
+## 导出
+
+```http
+POST /api/artifacts/{artifactId}/export
+```
+
+支持：
+
+```text
+html
+markdown
+markdown_to_html
+zip
+```
+
+第一阶段可以由前端完成单文件 HTML 和 Markdown 下载，服务端负责多资源打包和版本持久化。
+
+---
+
+# 二十、状态与异常处理
+
+需要处理以下状态：
+
+```text
+文件加载中
+文件解析中
+预览生成中
+文件未保存
+自动保存中
+自动保存成功
+自动保存失败
+源码解析失败
+资源加载失败
+外部资源被阻止
+脚本被阻止
+AI 修改中
+AI 修改失败
+版本冲突
+文件过大
+浏览器不支持覆盖保存
+```
+
+错误提示必须面向普通用户。
+
+错误示例：
+
+```text
+当前 HTML 存在语法错误，已保留最近一次成功预览。
+```
+
+```text
+页面引用了 3 个本地文件，请上传完整网页 ZIP。
+```
+
+```text
+该浏览器不能直接覆盖本地原文件，已为你生成下载文件。
+```
+
+```text
+外部脚本已被安全模式阻止，可在确认来源可信后启用。
+```
+
+禁止直接显示：
+
+* API Key
+* Authorization Header
+* 服务端堆栈
+* 内部文件路径
+* 完整数据库错误
+
+---
+
+# 二十一、性能要求
+
+建议第一阶段控制范围：
+
+| 项目                 |        建议范围 |
+| ------------------ | ----------: |
+| HTML / Markdown 源码 | 1 MB 以内体验最佳 |
+| 单个上传资源             |    20 MB 以内 |
+| Artifact 总资源       |   100 MB 以内 |
+| 源码到预览更新            | 500ms 内开始刷新 |
+| 可视化操作响应            |     100ms 内 |
+| 自动保存延迟             | 停止操作后 1–2 秒 |
+| 版本保存               |      3 秒内完成 |
+
+大文件超过建议范围时，应提示用户，但不要无理由丢弃内容。
+
+---
+
+# 二十二、第一阶段范围
+
+## 必须实现
+
+* HTML 和 Markdown 文件卡片
+* HTML 查看真实运行效果
+* Markdown 渲染查看效果
+* HTML / Markdown 源码编辑
+* 源码与查看效果同步
+* HTML 文字、颜色、图片、图标、链接编辑
+* Markdown 文档块编辑
+* AI 选中元素定向修改
+* 撤销和重做
+* 自动保存草稿
+* 保存正式版本
+* 版本历史
+* 下载 HTML 和 Markdown
+* Markdown 导出 HTML
+* 上传本地 HTML 和 Markdown
+* 桌面端完整工作台
+* 移动端轻量编辑
+* HTML 沙箱隔离
+* Markdown 内容安全清洗
+
+## 第一阶段暂不实现
+
+* React、Vue、Next.js 项目运行
+* npm 依赖安装
+* 完整浏览器开发者工具
+* 完全自由拖拽布局
+* 多人同时协作
+* 可视化数据库绑定
+* 完整网页发布和域名托管
+* 任意服务端代码执行
+* PHP、Python、Node.js 后端运行
+
+---
+
+# 二十三、后续扩展
+
+后续可以增加：
+
+* 上传 ZIP 网页项目
+* 多文件目录树
+* HTML、CSS、JS 多文件编辑
+* React / Vue 预览
+* NPM 依赖沙箱
+* 网页模板库
+* 模块和组件插入
+* 自由拖拽网页搭建
+* 一键发布静态网站
+* 自定义域名
+* 团队协作
+* 评论和审阅
+* AI 自动修复页面错误
+* AI 响应式适配
+* AI 无障碍检查
+* AI SEO 检查
+* HTML 转 Markdown
+* Markdown 转公众号格式
+* Markdown 转 PDF
+* Mermaid 图表
+
+---
+
+# 二十四、Codex 实施顺序
+
+Codex 必须直接基于现有 SimiChat 仓库开发，不要只输出方案或另建静态 Demo。
+
+## 第一步：检查现有代码
+
+确认：
+
+* 前端框架
+* 路由
+* 状态管理
+* UI 组件库
+* 会话消息数据结构
+* 文件卡片实现
+* 文件上传实现
+* Markdown 渲染实现
+* HTML 预览实现
+* 后端文件存储
+* 用户权限和会话权限
+* 现有下载功能
+
+输出简短审查结论后继续开发，不要停在审查阶段。
+
+## 第二步：建立 Artifact 数据层
+
+实现：
+
+* Artifact 类型
+* Artifact Version
+* Artifact Asset
+* 编辑会话状态
+* 草稿保存
+* 版本保存
+* 文件权限校验
+
+## 第三步：实现基础工作台
+
+实现：
+
+* 文件卡片
+* 右侧工作区
+* 移动端全屏工作区
+* 查看效果、可视化编辑、源码标签
+* 保存、下载、版本菜单
+
+## 第四步：实现 HTML 查看效果
+
+实现：
+
+* iframe 沙箱
+* HTML 运行
+* 设备尺寸切换
+* 刷新
+* 全屏
+* 安全模式
+* 交互模式
+
+## 第五步：实现 Markdown 查看效果
+
+实现：
+
+* Markdown 解析
+* GFM
+* 代码高亮
+* 安全清洗
+* 文档主题
+* 导出 HTML
+
+## 第六步：实现源码编辑
+
+实现：
+
+* HTML 编辑器
+* Markdown 编辑器
+* 分屏预览
+* 防抖更新
+* 错误提示
+* 格式化
+* 查找替换
+
+## 第七步：实现 HTML 可视化编辑
+
+实现：
+
+* 元素悬停
+* 元素选择
+* 文字编辑
+* 样式面板
+* 图片替换
+* 图标替换
+* 链接修改
+* 元素复制、删除和排序
+* Patch 同步
+
+## 第八步：实现 Markdown 可视化编辑
+
+实现：
+
+* 文档块选择
+* 内容编辑
+* 块类型转换
+* 列表编辑
+* 表格编辑
+* 图片编辑
+* Markdown AST 同步
+
+## 第九步：实现 AI 定向修改
+
+实现：
+
+* 选中元素上下文
+* AI 指令输入
+* Patch 返回
+* 差异预览
+* 应用和撤销
+* 全局文件修改
+
+## 第十步：完善移动端
+
+实现：
+
+* 全屏页面
+* 底部模式栏
+* 属性底部抽屉
+* 长按元素菜单
+* 移动端源码编辑
+* 键盘和安全区适配
+
+## 第十一步：测试和修复
+
+执行：
+
+* 类型检查
+* Lint
+* 单元测试
+* 构建
+* HTML 安全测试
+* Markdown XSS 测试
+* 移动端宽度测试
+* 文件保存测试
+* 版本恢复测试
+* AI Patch 异常测试
+
+---
+
+# 二十五、验收标准
+
+## HTML 查看效果
+
+* HTML 可以在右侧工作台真实运行。
+* CSS 动画和基础 JavaScript 交互正常。
+* 页面不能访问 SimiChat 主页面数据。
+* 页面不能跳转或控制顶层页面。
+* 支持桌面、平板和手机尺寸预览。
+* 支持全屏和刷新。
+
+## Markdown 查看效果
+
+* 标题、列表、表格、任务项、代码块和图片正常渲染。
+* 代码块支持高亮和复制。
+* 危险脚本不会执行。
+* 支持切换文档主题。
+* 支持导出为 HTML。
+
+## 可视化编辑
+
+* HTML 文字可以直接点击修改。
+* 可以修改文字颜色和基础样式。
+* 可以替换图片。
+* 可以修改图标。
+* 可以修改按钮和链接。
+* 可视化修改同步到 HTML 源码。
+* Markdown 块修改同步到 Markdown 源码。
+* 修改后重新打开文件仍然存在。
+
+## 源码编辑
+
+* HTML 和 Markdown 均支持源码查看和编辑。
+* 修改源码后查看效果自动更新。
+* 源码错误时不丢失用户内容。
+* 可以查找、替换和格式化。
+* 可以从选中元素跳转到对应源码。
+
+## AI 修改
+
+* 选中元素后可以让 AI 只修改该元素。
+* AI 修改前可以查看修改摘要。
+* AI 修改可以放弃。
+* 应用后可以撤销。
+* AI 不应无条件覆盖整个文件。
+
+## 保存与版本
+
+* 支持自动保存草稿。
+* 支持保存正式版本。
+* 支持另存为。
+* 支持下载 HTML 和 Markdown。
+* 支持查看和恢复历史版本。
+* 不支持本地覆盖时给出客观提示。
+
+## 移动端
+
+* 360px 至 430px 宽度下无横向溢出。
+* 查看效果可以正常滚动和缩放。
+* 可以修改文字、颜色、图片和链接。
+* 属性面板使用底部抽屉。
+* 输入法弹出时不遮挡关键操作。
+* 支持关闭和返回。
+
+## 工程质量
+
+* 不建立脱离现有项目的独立 Demo。
+* 不直接将不可信 HTML 插入主页面。
+* 不使用整个 DOM 序列化覆盖源文件。
+* HTML 和 Markdown 共用统一 Artifact 框架。
+* 模式之间使用同一数据源。
+* API Key 和内部错误不得暴露。
+* 类型检查和项目构建通过。
+
+---
+
+# 二十六、最终交付内容
+
+完成后 Codex 应输出：
+
+1. 当前项目相关结构说明。
+2. 实际修改的文件列表。
+3. 新增组件及职责。
+4. Artifact 数据结构。
+5. HTML 安全预览方案。
+6. Markdown 渲染方案。
+7. 可视化编辑同步方案。
+8. AI Patch 修改方案。
+9. 已实现的保存和版本能力。
+10. 移动端适配说明。
+11. 测试和构建结果。
+12. 当前已知限制。
+
+最终结果必须是可运行代码，不得只提交页面效果图、伪代码或开发计划。
