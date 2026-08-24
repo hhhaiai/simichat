@@ -6,11 +6,45 @@
 >
 > **主事实来源**：本文件记录项目目标、阶段进度、待办、已完成事项、重要决策与执行约束。`CLAUDE.md` 的项目进度、路线图、已知问题和重要安排已迁移到本文件；后续维护以 `AGENTS.md` 为准。
 >
-> **最后更新**：2026-08-18。
+> **最后更新**：2026-08-24。
 
 ---
 
 ## 0. 文档与协作规则
+
+### 0.0.3 2026-08-24 TTS / 声音设计 / 声音克隆 / STT 真机稳定性复验
+
+- **代码修复**：OpenAI-compatible TTS 生成文件扩展名现在跟随实际 `response_format`，不再把 WAV / AAC / FLAC / Opus 固定保存成 `.mp3`；HTTP 200 但响应为 JSON / HTML / text 错误体时会在落盘前拒绝，避免时间线出现“看似音频、点击却无声”的坏附件。SimiRouter 请求的 `speed` 在 wire 层发送 JSON number，而不是字符串。
+- **声音克隆兼容修复**：参考音频 data URI 按真实扩展名映射 MIME。Pixel 8 真实差分确认，同一条 1.968 秒 MP3 在 `audio/mpeg` 下连续超时，而当前 SimiRouter legacy clone 上传会把 subtype 当作临时扩展名；MP3 改用网关兼容的 `audio/mp3` 后，同一参考音频数秒内成功生成并完成 Android 原生播放。WAV、M4A/MP4、OGG/Opus、AAC、FLAC、WebM 继续使用各自明确 MIME，未知格式在请求前拒绝。
+- **STT 兼容修复**：`/v1/audio/transcriptions` 先走 multipart；仅在 400 / 415 / 422 协议或内容类型拒绝时回退 JSON data URI。`language=auto` 在 multipart 和 JSON 两条路径均省略，中文 / 英文分别发送 `zh` / `en`。
+- **真实 Provider E2E**：`mimo-v2.5-tts` 已分别完成 MP3 与 WAV 合成；WAV 下载结果为 RIFF/PCM 16-bit、mono、24 kHz、2.24 秒，扩展名与容器一致。`mimo-v2.5-tts-voicedesign` 已按“文本 + 风格 + 语速 + MP3”生成 24 kHz / 1.968 秒音频。`mimo-v2.5-tts-voiceclone` 已分别用 WAV 与修复后的 MP3 参考音频生成可播放 MP3。`mimo-v2.5-asr` 已完成 `auto / zh / en` 三种语言路径，回环音频真实返回 `Voice clonistability test.`；独立识别时间线与 audio-only 先识别再交给 Chat 的联合发送路径均已验证。
+- **Android 播放与时间线**：上述 MP3、WAV、声音设计和两种克隆结果均写入当前会话的 assistant audio attachment；Android `MediaPlayer` 有 started / stopped 或 completed 事件、24 kHz `AudioTrack` 帧交付和 Audio Focus request / abandon，播放按钮在结束后恢复。失败请求保留输入与参考附件，不写入伪成功音频。
+- **Production Release**：Pixel 8 `37101FDJH0077P` 已以 `adb install -r` 覆盖安装当前正式包，未卸载、未清数据；`ANDROID_RELEASE_PARITY status=verified`，构建 APK 与设备 `base.apk` SHA-256 均为 `c9c8eb30d4a6e96d98ed7a8f35228517c9a7f6f543f15b62d2717183b139f60c`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持不变，安装后 PID `29832`。
+- **自动门禁**：语音影响面 27 个测试文件 **179 / 179 通过**；最终修复聚焦 `openai_text_to_speech_engine_test.dart`、`openai_speech_to_text_engine_test.dart`、`text_to_speech_provider_test.dart` **39 / 39 通过**；完整 Flutter JSON reporter 复跑 **1235 / 1235 通过**（`done.success=true`、0 error），随后独立 compact 复跑再次 **1235 / 1235 通过**。更早一次 compact 完整运行曾以 `+1234 -1` 结束，但工具输出截断未保留失败用例，未计为通过；后续两次持久化/独立复跑未复现，语音专项也未出现失败。`flutter --no-version-check analyze --no-pub` 为 `No issues found`，`git diff --check` 无输出。
+- **剩余边界**：当前证明的是本次短音频、当前 SimiRouter 账号和 Pixel 8 Production Release；长文本 / 长音频、弱网 / 超时恢复、连续批量生成、iOS provider 播放与真实来电 / 闹钟 / 第三方播放器焦点抢占仍需单独压力和真机门禁。
+
+### 0.0.2 2026-08-24 默认对话、客户端长上下文与图片参数真机复验
+
+- 用户未选择模型或会话绑定的旧模型已失效时，客户端从已启用 Chat 模型中精确回退到 `gpt-5.3-codex-spark`；已有有效显式选择不被覆盖。新会话、顶部模型胶囊、发送前门禁和会话 `defaultChannelModelId` 使用同一解析规则，不会凭空创建渠道或凭据。
+- `gpt-5.3-codex-spark` 按保守 128K 模型窗口、115200 最大输入和 57600 动态压缩阈值处理。旧 summary 与较旧原始消息合并为单一 1024-token 滚动摘要，最新 10 条原始消息保留，所有原文仍保存在 SQLite / 时间线 / 搜索 / 导出；同会话压缩 single-flight，上游超限后只做一次 65% 严格预算裁剪重试。该能力是客户端长期会话，不代表上游模型拥有无限 token。
+- 图片任务面板的“质量 / 宽高比 / 清晰度 / 分辨率”摘要均为可点击 `ActionChip`，移动端分别打开选择抽屉；`1K/2K/4K` 是清晰度档位并保存为 `resolution`，`1024x1024/1536x1024/1024x1536` 是像素分辨率并保存为 `size`。能力声明、typed request、失败重试与冷启动快照都按两个独立维度处理，模型切换会分别清除不支持的旧值。
+- 本次拆分后的最终代码门禁：全量 Flutter 测试 **1230 / 1230 通过**，`flutter --no-version-check analyze --no-pub` 为 `No issues found`，`git diff --check` 无输出；图片参数聚焦回归 **96 / 96 通过**，覆盖 Widget、能力校验、wire 序列化、失败重试、任务快照和旧快照兼容。
+- Pixel 8 `37101FDJH0077P` 已覆盖安装拆分后的 Production Release，`ANDROID_RELEASE_PARITY status=verified`；构建 APK 与设备 `base.apk` SHA-256 均为 `7130a5042c01b3df99e8655dca86e8b8f47517f82e67baed824be270f544b4e9`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持不变，安装后 PID `20256`。
+- 真机默认 Chat E2E：新建对话未打开模型选择器，顶部直接显示 `gpt-5.3-codex-spark`；发送 `Reply only OK` 后真实返回 `OK`，结果卡显示 `SimiRouter AI 中转站 / gpt-5.3-codex-spark`。
+- 拆分后的 Production Release 真机 UI 已确认 `gpt-image-2` 同时出现并可点击“清晰度 · 2K”和“分辨率 · 1536x1024”；清晰度抽屉只列 `自动 / 1K / 2K / 4K`，像素分辨率抽屉只列 `自动 / 1024x1024 / 1536x1024 / 1024x1536`，高级设置同步展示两个独立值。
+- 真机联合请求以 `resolution=2K`、`size=1536x1024` 提交后从“正在生成图片…”进入“已生成图片”，时间线和图片附件均已交付；下载 PNG 为 **1,447,276 bytes、1387x1134**，SHA-256 为 `110c1dcff303c18e881b44a8b13261f903869abc3e16cfb01706bcb924ec4396`。因此客户端 UI / snapshot / serializer / 交付链路为 `[PARITY VERIFIED]`，但 provider 没有执行请求的 `1536x1024`，上游像素尺寸为 `[PARITY BROKEN]`；本次只完成联合请求，不能扩写为 baseline / resolution only / size only / ratio only 的完整差分。
+- 待补：为可用图片渠道确认真实 capability / 参数协议或切换到实际遵守比例、像素尺寸、清晰度和质量的 provider，并按 baseline / resolution only / size only / ratio only / resolution + size 下载核对真实像素；使用真实 `gpt-5.3-codex-spark` 跨越至少一次 57600-token 压缩周期验证早期事实召回、冲突摘要和超限重试质量。
+
+### 0.0.1 2026-08-23 多模态发送路由与 Android Release 验证
+
+- 图片 / 视频 / TTS / 声音设计 / 声音克隆 / STT 均从设置中已配置渠道选择默认模型，媒体路由持久化 `channelModelId`、profile、endpoint 和 task options；模型获取后按能力自动测试，添加确认提示不被测试提示覆盖。
+- 已接入用户整理的 OpenAI-compatible、xAI Grok Imagine、SimiRouter TTS / STT、音色查询和账号额度协议；图片模式只展示图片能力模型，顶部胶囊显示完整模型名和向下箭头；输入框点击可弹出 Android 输入法。
+- 2026-08-22 补充联合语音发送：底部 Composer 发送 audio + typed text 时先调用绑定的 `mimo-v2.5-asr`（或当前 STT）再交给 Chat 模型，时间线保存合并正文与音频附件，成功后清除语音草稿；图片 / 视频 / 语音工作区统一使用底部输入框。Artifact 卡片编辑入口固定右下角，HTML 可视化编辑支持组件文字 / CSS 颜色修改。
+- 2026-08-22 进一步收敛为单一 Composer：移除 AppBar 的一级图片 / 视频 / 语音模式条和聊天区常驻媒体工作区，媒体动作统一从底部 `+` 菜单进入，任务参数继续在发送前 bottom sheet 配置；Artifact 卡片保存回调回写当前时间线卡片草稿，返回后再次打开仍使用修改后的 HTML / Markdown。
+- 2026-08-23 修复顶部切换媒体模型后 Composer 仍硬编码调用普通 Chat 的路由缺陷：活动会话与空会话均改为读取 `creationModeProvider` / `voiceCreationToolProvider` 后进入统一创建模式路由；TTS 生成消息的 `channelModelId` 现在优先保存当前 TTS 配置绑定的模型，而不是会话旧的文字 Chat 模型。
+- 2026-08-23 补充 SimiRouter TTS 八种预设音色的可读中文显示标签：冰糖/alloy、茉莉/echo、Mia/nova、Chloe/shimmer、苏打/onyx、白桦/fable、Milo/milo、Dean/dean。设置页与聊天页 TTS 任务面板显示可读名称，发送请求仍使用原始 `voice` ID。
+- 门禁：analyze 通过，全量 Flutter 测试 1196 项通过，Pixel 8 `37101FDJH0077P` 正式包 `top.simitalk.aichat` 通过 `scripts/smoke_android_release_install_launch.sh` 覆盖安装 parity；`firstInstallTime` 与 `dataDir` 保持不变。
+
 
 ### 0.1 最新需求确认（2026-06-27）
 
@@ -213,7 +247,7 @@
 
 ### 0.2.18 2026-08-09 SimiRouter mimo TTS 三模式与 ASR 接入
 
-- **TTS 三种模式**（`/v1/audio/speech`）：`mimo-v2.5-tts` 语音合成（8 种预设音色：冰糖-alloy / 茉莉-echo / mia-nova / Chioe-shimmer / 苏打-onyx / 白桦-fable / milo-milo / Dean-dean）、`mimo-v2.5-tts-voicedesign` 声音设计（style 文字描述）、`mimo-v2.5-tts-voiceclone` 声音克隆（参考音频 base64 data URI）；统一支持语速 0.25-4 与输出格式 mp3 / wav / opus / aac / flac。引擎按模型名自动切换请求体，非 SimiRouter 模型保持原 4 字段行为。
+- **TTS 三种模式**（`/v1/audio/speech`）：`mimo-v2.5-tts` 语音合成（8 种预设音色：冰糖-alloy / 茉莉-echo / Mia-nova / Chloe-shimmer / 苏打-onyx / 白桦-fable / Milo-milo / Dean-dean）、`mimo-v2.5-tts-voicedesign` 声音设计（style 文字描述）、`mimo-v2.5-tts-voiceclone` 声音克隆（参考音频 base64 data URI）；统一支持语速 0.25-4 与输出格式 mp3 / wav / opus / aac / flac。引擎按模型名自动切换请求体，非 SimiRouter 模型保持原 4 字段行为。
 - **ASR**：`mimo-v2.5-asr` multipart 支持 `language`（auto / zh / en）；`auto` 表示服务端自动检测，因此请求中省略 `language`，只在 zh / en 时发送明确语言代码，避免 OpenAI 兼容服务把字面值 `auto` 当作无效 ISO-639-1 代码；通道 fallback 引擎在模型名含 asr / whisper / transcribe 时透传模型名，避免聊天模型名误传转录接口。
 - **配置与 UI**：`TextToSpeechConfig` 新增 speed / responseFormat / style / referenceAudioPath（加密外字段均为普通 SharedPreferences 键），`SpeechToTextConfig` 新增 language；TTS 配置对话框在 SimiRouter 模型下显示三模式模型下拉、8 音色下拉、声音风格输入、参考音频选择（file_picker）、语速滑条与输出格式下拉；STT 对话框在 mimo-v2.5-asr 下显示识别语言下拉。语音预设新增 `dwchainless`（mimo TTS + ASR 一键填充）。
 - **2026-08-10 稳定性复核**：声音克隆 wav 选择改用 `FileType.custom`，避免 `allowedExtensions` 与 `FileType.audio` 的真机参数冲突；保存时校验存在、WAV、非空和 10 MB 上限，再以唯一临时目录中的 `.part -> rename` 复制到 `Application Support/tts/reference_audio/`，不再长期依赖文件选择器缓存路径；替换 / 清空配置只删除 App 自己管理的旧副本，不删除用户外部原文件。声音设计在启用配置保存时即校验 style；mimo 响应的 Accept MIME、本地临时文件扩展名与 mp3 / wav / opus / aac / flac 选择保持一致，非 mimo 模型继续固定 mp3；配置摘要按模式显示音色 / 声音设计 / 声音克隆，不再展示不适用字段。
@@ -284,6 +318,112 @@
 - ChatGPT 风格对齐：侧边栏图标行下方新增全宽"新建对话"按钮（移动端点击后自动收起抽屉，桌面端为持久侧边栏 no-op）；AppBar 的 "+" 保留（需求 4.1 移动端顶栏入口）。
 - 自动标题精修（已有 `_generateTitle`，只改细节）：标题为空串时也触发；模块级 `_titleGenerationInFlight` 防双生成；生成前重读会话标题防覆盖用户手动重命名；改用首条用户消息概括主题（400 字截断）；流加 30 秒总超时（Dio 流式默认 5 分钟）；写入前 30 字符截断；fork 会话标题在建会话时即写入，不会被覆盖。
 - 验证：`dart run build_runner build --delete-conflicting-outputs` 重新生成 drift 代码；`flutter --no-version-check analyze --no-pub` 无问题；全量 `flutter test` **1102 项通过**（修复 `media_job_persistence_test` 两处 schema 硬编码：期望版本 11→13；模拟 v8 老库时移除 v8 后新增的 `capabilities` / `is_pinned` 列，避免迁移重复加列）。Rerank 仅覆盖客户端解析与连通性测试入口，未做真实 Jina / Cohere 云端 E2E；置顶 / 新对话按钮为 widget / DAO 回归，未做真机 UI 取证。
+
+### 0.2.27 2026-08-19 顶部模型名称可见性与 Android 覆盖安装
+
+- **顶部模型选择器**：按用户确认，聊天 AppBar 的模型胶囊不再显示可能很长的 `渠道名 / 模型名`；现在只显示当前实际选中的模型名，末尾保持固定的向下箭头。渠道名仍保留在模型下拉菜单分组、消息元数据和模型切换记录中，因而不会影响渠道辨识或历史追溯。
+- **回归**：`test/chat_model_selector_ui_test.dart` 新增当前模型名、旧渠道前缀不再出现在胶囊、末尾存在 `keyboard_arrow_down_rounded`、展开菜单后顶部和已选项各显示一次模型名的断言；与 `test/model_switch_smoke_manifest_test.dart`、`test/chat_page_model_label_test.dart` 共 **12 项通过**。`flutter --no-version-check analyze --no-pub` 与 `git diff --check` 均通过。
+- **Android 真机**：Pixel 8 `37101FDJH0077P` 使用 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 构建并以 `adb install -r` 覆盖安装 Production Release；未卸载、未清空数据、未执行 `am force-stop`。安装后正式包 `top.simitalk.aichat` 的 `firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持不变，`lastUpdateTime=2026-08-19 17:27:37`，PID `20951`，前台组件为 `top.simitalk.aichat/.MainActivity`。实机截图确认顶栏显示 `gpt-5.3-codex-spark` 和末尾下拉箭头；截图不替代真实云端媒体链路验证。
+
+### 0.2.28 2026-08-19 会话草稿跨进程恢复 v1
+
+- **持久化范围**：新增 `ChatComposerDraftStore`，以应用私有 `SharedPreferences` 索引按会话保存 Composer 的短文本、附件恢复元数据与深度思考开关。保存操作串行化、默认至多保留 50 个会话；损坏 JSON、未知格式和非法附件会安全忽略，不阻塞聊天主链路。
+- **隐私与一致性**：大粘贴原文继续只保留在应用私有 `composer_drafts` UTF-8 文件；索引不保存原文、附件 bytes、完整 Base64、渠道凭据或诊断信息。聊天页在生命周期切出与销毁前保存最新快照；发送成功只清空文本和已消费附件，保留深度思考设置。
+- **恢复与隔离**：先恢复本进程缓存；仅冷启动 cache miss 读取持久化索引。恢复 generation、用户编辑 generation 和当前会话三重检查阻止异步旧结果覆盖新输入；附件异步恢复后仅重建对应 Composer。`ChatInputBar` 会话同步不再伪造一次用户草稿变更，避免将未加载的持久化草稿写空。
+- **验证与部署**：新增 `test/chat_composer_draft_store_test.dart`（保存/重载、PastedText 元数据、会话隔离、串行覆盖、淘汰、删除和损坏数据）与 `test/chat_page_persisted_draft_test.dart`（聊天页冷启动恢复文本/附件/深度思考及 A/B 会话隔离）。草稿/附件专项 **19 项通过**，多模态聚焦 **112 项通过**，`flutter --no-version-check analyze --no-pub` 与 `git diff --check` 均通过。Pixel 8 `37101FDJH0077P` 已使用 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 覆盖安装正式 Production Release：`firstInstallTime=2026-08-18 07:11:12` 和 `dataDir=/data/user/0/top.simitalk.aichat` 保持不变，`lastUpdateTime=2026-08-19 18:39:12`，PID `24303`，前台为 `MainActivity`，无隔离 smoke 包。发布后截图确认正式聊天页可用；手工输入草稿 → 系统回收 → 重启后的真实设备恢复仍待下一轮独立交互 smoke 补证。
+
+### 0.2.29 2026-08-19 超长文本附件单次降级防截断
+
+- **问题与修复**：旧的文本文件降级会先把 UTF-8 正文交给通用上下文裁剪；当附件超过窗口时，裁剪器可能只保留开头，而用户仍以为整个文件已发送。现在通过 `singleTextFallbackTokenBudget()` 只允许文本附件占模型最大输入预算的一半；余量留给 `ContextBuilder` 已受限的系统提示、最新问题、历史、序列化与 token 估算误差。
+- **失败语义**：预算不足时，在消息与附件写入本地数据库之前返回明确的预检错误：“文本附件超过当前模型的单次安全输入预算”；用户草稿与原始私有文件保持不变，可缩短内容、切换更大上下文模型，或等待下一阶段的可恢复分批任务。该修复不把任意 400、认证、额度或超时误判为附件降级。
+- **验证与部署**：`test/chat_provider_attachment_routing_test.dart` 新增 half-window 预算断言和超长 `.md` 发送未落库 / 可重试回归；与文本抽取、上下文、草稿和大粘贴相关组合共 **34 项通过**，`flutter --no-version-check analyze --no-pub` 与 `git diff --check` 无问题。Pixel 8 `37101FDJH0077P` 已覆盖安装 Production Release：`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-19 18:50:20`，PID `24898`，`MainActivity` 在前台且无隔离包。真实渠道的原生 File API 与后续分批任务不在本条范围内。
+
+### 0.2.30 2026-08-19 可恢复长内容分批任务 v1
+
+- **路径 C 已实现**：纯 `document` 文本附件无法安全装入单次请求时，`sendMessage()` 先持久化用户消息和私有附件，再创建 `ChunkedContentTask`，而不是截断或只显示“稍后支持”。`mapReduce` 用于总结、问答、分析和提取：每段结果只写入 `chunk_results`，全部完成后才发送一次 reduce；`orderedTransform` 用于翻译、改写、润色和格式转换：零 overlap 严格按 `chunkIndex` 拼接，绝不追加会删段或重排的最终润色请求。两种策略都只向消息时间线和 Markdown 档案交付一条最终 assistant 回复。
+- **持久化、恢复与竞态**：schema 升至 **14**，新增 `chunked_content_tasks`，保存无凭据路由快照、附件 ID、范围/哈希、尝试次数、内部结果、进度、lease 和确定性的最终消息 ID。每段请求最多首次 + 2 次瞬态重试；认证、参数和内容拒绝不自动重试。Stop 会取消 `CancelToken`、停止后续段并以 SQLite 状态为最终裁决；最终 reduce 在 Stop 后晚到也不会写入 assistant。冷启动只把 `preparing/running/reducing` 收敛为“应用已中断，可继续未完成部分或从头重试”，不会自动重放可能计费的请求。
+- **聊天交互与前置校验**：聊天页新增不泄露 chunk 原文的“长内容”工作卡，显示策略、进度、安全错误和“停止 / 继续 / 从头重试”。重试会先确认原始附件、渠道模型和无凭据请求快照仍可用；模型已删除或附件不可用时保持 failed/cancelled，不会留下没有 worker 的伪进行中卡片。混合图片、音频或其它非文本附件的超预算输入仍拒绝，防止只处理文本而静默丢失其它素材。
+- **自动验证与部署**：新增 `test/chunked_content_task_test.dart`，覆盖策略、数据边界、唯一最终回复、瞬态重试、段间停止、reduce 晚到 Stop 竞态、缓存 chunk 续跑和 completed 重放幂等；新增 `test/chat_page_chunked_content_task_test.dart`，覆盖工作卡、Stop、重试动作和缺少模型前置校验；`test/app_bootstrap_test.dart` 覆盖首帧后的长内容恢复钩子，`test/media_job_persistence_test.dart` 覆盖 schema 14 新表与 v8 升级。聚焦组合 **55 项通过**，`flutter --no-version-check analyze --no-pub` 与 `git diff --check` 无问题。随后 Pixel 8 `37101FDJH0077P` 通过 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P` 构建并 `adb install -r` 覆盖安装正式 Production Release：构建包与设备 `base.apk` SHA-256 均为 `0cb02258c80d2604974d11dd8a542c6a4dac0068b4200661cb55955f633730b2`，`ANDROID_RELEASE_PARITY status=verified`，签名 SHA-256 为 `30e29ac7421f4b6f4cbc0dc086be0d0b9b16260c58747290edccf4391b33eb42`，`firstInstallTime=2026-08-18 07:11:12` 与 `dataDir=/data/user/0/top.simitalk.aichat` 保持不变，`lastUpdateTime=2026-08-19 20:58:53`，启动 PID `30656`，前台为 `top.simitalk.aichat/.MainActivity`，无隔离 smoke 包。
+- **未补证边界**：OpenAI Responses 的普通 `document` 原生 `input_file`（路径 A 子集）已实现；其它 provider 的 File API / `FileTransport`、服务端明确附件拒绝后的一次性 File→文本降级、跨设备备份/导入中间结果、完整聊天/工作分段视图、Artifact MVP，以及已配置真实云端模型的长文 E2E、Pixel 8 手工“超长附件 → 分段 → Stop → 继续”交互 smoke 仍待补证；不得由本地 fake sender、SQLite 或安装启动替代。
+
+### 0.2.32 2026-08-21 图片生成本次任务面板与多图任务快照 v1
+
+- **图片任务面板**：移动端 `+ → 生成图片` 进入独立底部任务面板，支持本次提示词、图片模型（名称 + 下拉箭头）、多参考图、质量、宽高比、`1K / 2K / 4K` 清晰度、`width x height` 像素分辨率和生成数量；没有已配置图片模型时只显示真实空状态并可进入设置，不伪造请求。
+- **类型化提交**：新增图片面板回调边界，将全部图片参考附件转换为 `ImageGenerationOptions`，通过 `ImageGenerationRequestAdapter` 和 `MediaRequestProviderProfile` 进入图片请求；服务层支持多图响应、multipart 多参考图和本地私有归档，失败 / 取消仍保留可重试任务。
+- **任务快照 / 重试**：`ImageGenerationTask` 保存模型、参考图集合、数量、比例、清晰度、像素分辨率、质量和 route model id；重试不会退回全局设置或静默取第一张参考图；同一 assistant 消息可落库多张图片附件。
+- **验证**：图片服务 typed wire、图片任务流、Composer 全部参考图消费回归与图片能力契约聚焦测试通过；`flutter --no-version-check analyze --no-pub` 和 `git diff --check` 通过。当前尚未以真实云端凭据在 Pixel 8 上完成图片模型 / 多图请求 E2E，Production Release 覆盖安装待本轮完成。
+
+### 0.2.33 2026-08-21 语音合成本次任务面板与 typed TTS 参数 v1
+
+- **任务面板**：移动端 `+ → 声音合成` 现在优先打开本次任务底部面板，支持编辑输入内容、选择音色、滑动语速和选择输出格式；面板取消不会改写设置页，提交后才把本次选项传给请求层。旧的直接合成回调继续保留兼容边界。
+- **真实请求参数**：`synthesizeSpeechMessage()` 接受本次 `voice / speed / responseFormat / model` 覆盖，并按 provider 构造新的 TTS engine；OpenAI-compatible 与 SimiRouter 请求体都保留实际语速 / 输出格式，xAI 仅使用其标准 TTS 支持的 voice、language、speed 和 codec，不把声音设计 / 克隆字段伪造到 xAI。
+- **结果交付**：合成结果仍保存为当前会话 assistant 音频附件，沿用 `generated_speech/` 原子写入、播放 / 下载 / 重试链路；任务失败保留输入草稿，不写入半成品消息。
+- **验证**：新增 Composer 面板回调优先级回归和 TTS typed wire 回环断言；`chat_input_bar_voice_tools_test.dart`、`openai_text_to_speech_engine_test.dart` 聚焦通过，`flutter --no-version-check analyze --no-pub` 无问题。全量 `flutter --no-version-check test --no-pub --no-test-assets -r json` **1176 项可见测试通过**（含 201 项隐藏测试）；此前模型选择器旧断言已按移动端“只显示模型名”需求更新。Pixel 8 `37101FDJH0077P` 已执行 `scripts/smoke_android_release_install_launch.sh`：Release APK 82.5 MB，`adb install -r` 返回 `Success`，构建包 / 设备 `base.apk` SHA-256 均为 `de0f5624bd3980e272fa6594baa7d158e3a56cdece5819ed060af9e459718272`，签名 SHA-256 `30e29ac7421f4b6f4cbc0dc086be0d0b9b16260c58747290edccf4391b33eb42`，`ANDROID_RELEASE_PARITY status=verified`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-21 13:21:29`，PID `26911`。真机截图确认顶部模型名带向下箭头，`+ → 生成图片` 面板真实显示模型、质量、宽高比、分辨率、生成数量和“开始生成”；截图 `/tmp/simichat-image-panel.png`。设计 / 克隆面板代码在该 APK 之后追加，需重新覆盖安装；尚未用真实 TTS / 图片云端凭据完成生成结果质量 E2E。
+
+### 0.2.34 2026-08-21 声音设计 / 声音克隆本次任务面板 v1
+
+- **声音设计**：`+ → 声音设计` 打开一次性面板，支持朗读文本、自然语言声音风格、温柔 / 活泼 / 成熟 / 磁性 / 沉稳 / 故事感快捷标签、语速和输出格式；快捷标签只追加，不覆盖用户已有描述。
+- **声音克隆**：`+ → 声音克隆` 打开一次性面板，展示本次 Composer 已选参考音频（文件名、大小、仅当前任务语义），支持多音频单选、朗读文本、语速和输出格式；无附件但设置中有有效归档参考音频时明确显示使用配置音频，无任何参考音频时拒绝提交。
+- **请求与交付**：两个面板都通过 `synthesizeSpeechMessage()` 的 typed 覆盖传递 `style / referenceAudioPath / speed / responseFormat`，仍受 SimiRouter provider 模式门禁；xAI 不接收未声明的声音设计 / 克隆字段。成功结果进入当前会话 `generated_speech/` audio 附件，失败保留草稿与参考附件。
+- **验证**：新增 Composer 设计 / 克隆面板回调优先级与参考附件边界测试，`chat_input_bar_voice_tools_test.dart` **8 项通过**；`flutter --no-version-check analyze --no-pub` 和 `git diff --check` 无问题。随后 Pixel 8 `37101FDJH0077P` 已重新覆盖安装包含本条代码的 Production Release：构建包 / 设备 `base.apk` SHA-256 均为 `b200b61ab9adfbc918e6f8dfa9ea3e7eecd7b87ff9c5e37603869ece8a411fb7`，`ANDROID_RELEASE_PARITY status=verified`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-21 13:35:11`，PID `28225`。真实声音设计 / 克隆 provider E2E 仍需仓库外凭据；当前设备没有可用 TTS 云端配置，因此只验证了真实 App 启动与安装 parity。
+
+### 0.2.35 2026-08-21 独立语音识别任务面板 v1
+
+- **任务面板**：Composer 新增 `识别语音` 工具，要求先附加音频文件；面板支持在多条音频中单选，并选择 `自动 / 中文 / 英文` 识别语言。
+- **结果链路**：新增 `recognizeSpeechMessage()`，复用当前已配置 STT engine 和 `AudioTranscriptionService`，识别结果以 assistant 文本消息写回当前会话时间线；语言只通过单次 override 生效，任务结束自动清除，不改设置页默认语言。
+- **边界**：无 STT 配置、无音频、文件不存在或 provider 失败时直接返回可操作错误，不写半成品消息；本地 transcript archive 继续复用既有安全路径和脱敏规则。
+- **验证**：`chat_input_bar_voice_tools_test.dart` 新增识别任务回调和附件选择回归；`flutter --no-version-check analyze --no-pub` 无问题。真实 STT provider、长音频、视频转写和 Pixel 8 识别结果质量仍待仓库外凭据验证。
+
+### 0.2.36 2026-08-21 视频生成完整任务面板与 typed 多参考链路 v1
+
+- **任务面板**：`+ → 生成视频` 现在使用一次性任务配置，支持多选参考图、独立首帧图、参考音频、时长、宽高比和分辨率；所有附件角色保存在 `VideoGenerationConfig`，旧 `onGenerateVideo` 回调仍保留兼容。
+- **请求链路**：新增 `generateVideoWithOptions()`，按 `openai_sora`、`xai_grok_video`、自定义 OpenAI-compatible / configuredAsync profile 映射 `VideoGenerationOptions`。参考图、首帧图和参考音频分别通过 `UniversalMediaService.submitVideoWithOptions()` 进入显式附件字段；JSON 端点使用 data URI，multipart 端点使用重复文件字段，不把本机路径写进普通 JSON，也不静默丢弃多参考图。
+- **任务状态与重试**：通用媒体 worker 现在透传 `referenceImagePaths`、`firstFrameImagePath`、`referenceAudioPath`、字段名和 typed `requestFields`；失败重试保存完整视频配置和附件集合，成功后视频结果继续以 assistant `video` 附件写入当前会话时间线。
+- **验证**：新增视频任务面板 Widget 回归和 typed 视频实际 wire 回环（多参考图、首帧、参考音频、时长 / 比例 / 分辨率），`test/chat_input_bar_video_tools_test.dart`、`test/universal_media_service_test.dart`、`test/media_request_options_test.dart` 聚焦通过；全量 `flutter --no-version-check test --no-pub --no-test-assets -r json` **1179 项可见测试通过**（含 202 项隐藏测试），`flutter --no-version-check analyze --no-pub` 无问题。
+- **验证与部署**：随后 Pixel 8 `37101FDJH0077P` 执行 `scripts/smoke_android_release_install_launch.sh 37101FDJH0077P`，Production Release 构建 82.6 MB，`adb install -r` 返回 `Success`，`ANDROID_RELEASE_PARITY status=verified`；构建包 / 设备 `base.apk` SHA-256 均为 `4465ffa1f164e30fe97873c7f193b57fd6dc7023657bbcb04223f4c21a954f1c`，签名 SHA-256 `30e29ac7421f4b6f4cbc0dc086be0d0b9b16260c58747290edccf4391b33eb42`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-21 14:17:06`，启动 PID `31119`，隔离包检查 clean。当前最新 APK 已覆盖安装并启动。
+- **未补证边界**：真实 Sora / xAI / 自定义视频云端账号、长轮询和生成质量仍需仓库外 provider 凭据；协议回环和 Release parity 不替代真实云端视频结果质量 E2E。
+
+### 0.2.37 2026-08-21 移动端一级多模态模式导航 v1
+
+- **统一入口**：新增 `CreationModeSwitcher` 和 `creationModeProvider`，顶部固定提供 `聊天 / 图片 / 视频 / 语音` 四个一级模式；模式状态不依赖模型名称，也不改变当前会话默认聊天模型。
+- **工作区**：`ChatPage` 在非聊天模式显示对应的图片、视频、语音轻量工作区，继续调用既有 typed 图片 / 视频 / TTS / STT / 音乐任务链路，任务结果仍进入当前会话时间线；聊天模式保持原消息列表、停止、重试和 Composer。
+- **能力边界**：图片、视频、语音入口依据已配置模型能力 / TTS / STT 配置动态显示；没有可用能力时显示真实去设置空状态，未声明的语音子入口隐藏，不伪造生成结果。
+- **实现文档与验证**：新增 `docs/multimodal-mode-navigation.md`、`test/creation_mode_switcher_test.dart`；模式切换测试、模型选择器、移动端主流程聚焦回归通过，全量 Flutter 测试 **1180 项可见 / 203 项隐藏** 通过，`flutter --no-version-check analyze --no-pub` 无问题。Pixel 8 `37101FDJH0077P` 已通过 `scripts/smoke_android_release_install_launch.sh` 覆盖安装 Production Release：APK / 设备 `base.apk` SHA-256 均为 `af7c2f6874908f545ea469928417e519fb09cf0096e1b8615c45bde743ec6b2d`，签名 SHA-256 `30e29ac7421f4b6f4cbc0dc086be0d0b9b16260c58747290edccf4391b33eb42`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-21 15:27:55`，PID `2690`，隔离包检查 clean。真机 UI Automator / 截图已确认四个模式可切换，图片模式显示可编辑提示词、参数摘要和“生成图片”入口。
+
+### 0.2.38 2026-08-21 模型任务联动与 Artifact 工作台 v1
+
+- **模型单一工作区状态**：新增 `activeCreationModelIdProvider` / `voiceCreationToolProvider`；常规移动端顶部模型胶囊打开可搜索底部抽屉，按渠道 / 能力展示模型并提供“管理模型”，窄屏保留 PopupMenu 降级。图片、视频、语音模型选择同步任务类型、工具配置和顶部任务标签，不改写聊天会话默认模型；聊天模型切换使用 `recordInConversation: false`，只显示短时 SnackBar，不写入新的 `model_switch` 时间线消息。
+- **能力标签**：`ModelCapability` 增加显式 `tts` / `asr` / `voice_design` / `voice_clone`，页面按能力过滤；旧 `audio` 行保留 TTS 兼容回退，禁止再按模型名称分散判断音频任务。
+- **Artifact 工作台**：`HtmlArtifactCard` 改为紧凑文件成果卡片，完整 HTML（含未 fenced 文档）和显式 Markdown fenced 内容进入独立 `ArtifactWorkbenchPage`；HTML 使用隔离 WebView 预览，Markdown 提供阅读视图，源码 / 可视化入口支持全屏草稿编辑、自动换行切换和应用私有目录下载，不在聊天区展开长源码。
+- **验证**：模型选择、语音任务标签、Artifact 卡片 / 完整 HTML 抽取聚焦测试通过；`flutter --no-version-check analyze --no-pub` 无问题，`git diff --check` 无输出。最终全量测试与 Android Release parity 需以本轮最后命令输出为准。
+- **未补证边界**：Artifact 跨会话 DAO / 版本历史 / AI 结构化 Patch / 多资源 ZIP、真实 HTML 外部资源策略、真实云端 TTS / ASR / 视频质量仍待后续 provider 与真机交互门禁；当前不伪造已完成的版本同步。
+
+### 0.2.39 2026-08-21 模型能力一致性与任务参数动态化补充
+
+- **旧音频模型一致性**：新增 `ModelCapability.voiceCapabilityForModel()` 作为旧 `audio` 元数据的集中兼容解析点；显式 `tts` / `asr` / `voice_design` / `voice_clone` / `music` 优先，旧 `mimo-v2.5-asr` 等模型的默认语音任务不再由顶部、工作区和配置动作分别猜测。模型选择器、语音工作区和 TTS / STT 配置共享同一解析结果；新增 `isVoiceDesign` / `isVoiceClone` 能力谓词，并补显式 `tts` 模型可见性回归。
+- **视频参数**：视频面板从 `MediaRequestProviderProfile` 读取当前模型支持的时长、比例、分辨率、首帧图、参考图数量和参考音频能力；未声明字段隐藏，默认值取支持列表，避免向不支持 `6s / 1080p` 的模型发送固定参数。
+- **语音参数摘要**：语音工作区按 TTS / ASR / 音乐 / 声音设计 / 声音克隆切换参数摘要，隐藏其它任务字段；详细提交仍复用既有底部任务表单和真实服务链路。
+- **验证**：`flutter --no-version-check analyze --no-pub` 无问题；模型能力、模型选择器、模式切换和视频任务聚焦测试通过；串行全量测试 `1185` 项可见 / `204` 项隐藏、`0` errors、`1389` success、`0` fail；`git diff --check` 无输出。Pixel 8 `37101FDJH0077P` Production Release 覆盖安装通过 `ANDROID_RELEASE_PARITY status=verified`，最终 APK / 设备 `base.apk` SHA-256 均为 `14a4a1958cffc2193f91ff1adf1d883034404cf6733d3a6e1e967e0187e52322`，签名 SHA-256 `30e29ac7421f4b6f4cbc0dc086be0d0b9b16260c58747290edccf4391b33eb42`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，`lastUpdateTime=2026-08-21 17:56:03`，PID `11890`，隔离包 clean。真机 UI Automator 已确认语音模式顶部 `mimo-v2.5-asr + 语音识别`、ASR 参数摘要和模型底部抽屉入口。
+- **边界**：Artifact 跨会话 DAO / 版本历史 / AI 结构化 Patch / 多资源 ZIP，以及真实云端 TTS / ASR / 视频质量仍待后续 provider 与真机交互门禁。
+
+### 0.2.40 2026-08-21 CCSwitch / Claude 额度查询
+
+- **实现**：新增 `ChannelQuotaClient` 与 `channelQuotaProvider`。设置页每个非 SimiRouter 渠道展开后提供手动“查询额度 / 刷新”；Claude OAuth 按 CCSwitch 使用的 `GET /api/oauth/usage` 读取 `five_hour` / `seven_day` 等窗口、使用率和重置时间，OpenAI 兼容 / new-api 读取 `/dashboard/billing/usage` 与可选 `/dashboard/billing/subscription`。
+- **边界与隐私**：查询不在打开设置时自动遍历渠道，不把额度响应写入 SQLite、备份或聊天记录；鉴权失败、404、限流、超时只显示脱敏中文错误，不回显响应正文或密钥。SimiRouter 原有专属用量行继续保留，避免重复请求。
+- **验证与部署**：`test/channel_quota_client_test.dart`、SimiRouter billing、设置页和模型选择聚焦回归通过；`flutter --no-version-check analyze --no-pub`、`git diff --check` 通过。Pixel 8 `37101FDJH0077P` 以 `adb install -r` 覆盖安装当前 Production Release，`ANDROID_RELEASE_PARITY status=verified`，APK / 设备 hash `34ced0dd2a66e275eea3be3bc12bd596df49e7b5ca75c45923455860ee9dac95`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持，安装后 PID `14099`；设置页真实取证确认 SimiRouter 用量行返回“已用 $0.16 · 未设限额”。
+- **待补证**：真实 Claude OAuth / CCSwitch token 仍需用户在设置页手动点按“查询额度”完成一次真机账号闭环；不以本地 fake endpoint 测试替代真实账号证据。
+
+### 0.2.41 2026-08-21 媒体模式模型选择器按能力收窄
+
+- **问题**：图片模式的模型底部抽屉和窄屏 PopupMenu 误使用完整模型目录，Chat / TTS / ASR 等不支持生图的模型被置灰展示，造成用户误以为可以用于图片生成。
+- **修复**：`ChatModelSelector` 在图片 / 视频 / 语音模式只把当前工作区能力模型传给抽屉和 PopupMenu；聊天模式仍保留完整目录，并允许媒体行作为配置工具的快捷入口。图片模式现在只展示 `ModelCapability.image` 模型。
+- **验证与部署**：新增 `image mode picker only exposes image-capable models` 回归；模型选择器聚焦 **8 项通过**，`flutter --no-version-check analyze --no-pub`、`git diff --check` 通过。Pixel 8 真机切换到图片模式后打开模型抽屉，UI Automator 仅看到 `grok-imagine-image-lite`、`grok-imagine-image-quality`、`gpt-image-1.5`、`gpt-image-2` 等 Image 图片生成模型，未出现 `grok-4.x`、`mimo-v2.5-chat` 或 TTS / ASR；Production Release `ANDROID_RELEASE_PARITY status=verified`，APK / 设备 hash `b85a5f06740f0753bb0c914e6d86262f2da0e52141161b6810eeba9db81eb0a6`，正式包 `firstInstallTime` / `dataDir` 保持不变。
+
+### 0.2.31 2026-08-19 OpenAI Responses 原生普通文档传输 v1
+
+- **路径 A 子集已实现**：当渠道协议为 `openai_response` 且模型级文件契约已验证时，`.txt` / `.md` 等普通 `document` 附件不再被文本提取器重复拼入 `input_text`，而是通过 Responses `input_file` 的 `file_data=data:<mime>;base64,...` 和 `filename` 一次发送原始字节。`Ai.Attachment.fileName` 使用用户安全文件名；发送前会去目录、控制字符和 `.` / `..`，不把应用私有归档路径或用户目录带到上游请求。
+- **保持的边界**：PDF 沿用已有原生 `input_file` 路线；非 Responses、未声明原生文件能力或未验证的模型仍走受限文本降级 / `ChunkedContentTask`，不会伪造文件字段。当前尚未把“服务端明确拒绝附件”自动改发为文本，也尚未声明其它厂商的真实 File API。
+- **验证与部署**：`test/openai_response_protocol_test.dart` 覆盖普通文档 `input_file` 和安全文件名；`test/chat_provider_attachment_routing_test.dart` 使用 Dio 回环 adapter 断言实际 Responses 请求中的 `input_text` 只含用户问题、`input_file` 只含原始 UTF-8 bytes、私有路径与裸文档正文均不泄露，且助手结果会写回会话。两份测试共 **20 项通过**，`flutter --no-version-check analyze --no-pub` 与 `git diff --check` 无问题。随后 Pixel 8 `37101FDJH0077P` 使用正式 Production Release 覆盖安装：构建 APK 与设备 `base.apk` SHA-256 均为 `7b51c6e768f1261d16a2f75a7c9f9bd48d3eb1a47e4d9a322aea816bbf716d28`，`firstInstallTime=2026-08-18 07:11:12`、`dataDir=/data/user/0/top.simitalk.aichat` 保持不变，`lastUpdateTime=2026-08-19 21:37:17`，PID `32597`，前台为 `top.simitalk.aichat/.MainActivity`，无隔离 smoke 包。该验证是协议回环与 Release 覆盖安装，不等同已配置真实云端的文档 E2E。
 
 ### 0.3 2026-07-14 模型增强 Reflection 验证补充
 
@@ -597,6 +737,7 @@
 - [x] 图片 / 文件附件输入基础稳定化：类型识别、8 个附件数量限制、25 MB 单文件上限、发送前存在性校验、数据库与 Markdown 归档路径保护。
 - [x] 消息内本地图片缩略图预览：发送后图片附件展示缩略图、文件名、大小，完整本地路径不进入界面文本。
 - [x] ChatGPT 风格多模态 Composer v1：文件多选、视频附件类型、图片参考图 / 图片编辑入口、视频生成、声音合成、声音克隆 / 声音设计复用、语音识别复用、音乐生成和统一工具菜单；通用媒体 endpoint / 模型可在设置中配置，结果作为本地图片 / 视频 / 音频消息展示。具体方案见 `docs/chat-composer-multimodal.md`。
+- [ ] Android 多模态、超长内容与 Artifact（2026-08-19 执行型 PRD）：以 `docs/android-multimodal-long-content-artifact-prd.md` 为准。已完成：Phase 1 的三态 `ModelCapabilities` / provider adapter / 六类 Options、图片请求 `n` / 网络层多参考图和 xAI `duration` 基础；Phase 2 的大粘贴私有归档、`TextChunker`、会话草稿跨进程恢复、单次文本安全预算、路径 C 的持久化 `ChunkedContentTask`（`mapReduce` / `orderedTransform`、每段瞬态重试、Stop、冷启动收敛为可继续、唯一最终 assistant、聊天内工作卡、schema 14），以及路径 A 子集：已验证的 OpenAI Responses 普通文档原生 `input_file`（安全文件名、单次原始 bytes 发送，禁止正文重复入 `input_text`）。仍未完成：其它 provider 的真实 `FileTransport` / File API、服务端附件拒绝后的一次性降级、完整聊天 / 工作分段视图；六类独立任务面板的实际业务提交 / 交付；Artifact 私有存储、受限预览、版本与下载；真实云端长文本 E2E 和 Pixel 8 长文本交互 smoke。纯 document 文本附件超单次安全预算会自动创建分批任务；混合非文本附件仍明确拒绝，避免静默遗漏素材。设置页仅保存凭据和默认值；本轮不以新增音乐为验收项。`docs/android-multimodal-long-content-artifact-requirements-refinement.md` 定义交付判定、状态机、Options、A/B/C 决策、任务恢复、Artifact 边界与真机矩阵；交互基准见 `docs/chatgpt-interaction-reference.md`。
 - [x] 对话级模型切换体验完善：切换记录写入当前会话时间线，切换失败回滚选择，`model_switch` 记录不进入 AI 请求上下文。
 
 ### P1 — 模型接入与个人中转
@@ -776,6 +917,11 @@
 
 | 日期 | 验证项 | 结果 |
 | --- | --- | --- |
+| 2026-08-19 | OpenAI Responses 普通文档原生传输：路径 A 子集 | `openai_response` 已把经验证模型的 `document` 从文本抽取降级路径切换至 Responses `input_file`：上游请求一次只含用户问题的 `input_text` 与 `file_data=data:<mime>;base64,...` / 安全 `filename`，不含私有归档路径或裸文档正文。协议与 ChatProvider Dio 回环测试 20 项通过，analyze / diff check 无问题。Pixel 8 `37101FDJH0077P` 正式 Release 覆盖安装后，构建和设备 `base.apk` SHA-256 一致为 `7b51c6e768f1261d16a2f75a7c9f9bd48d3eb1a47e4d9a322aea816bbf716d28`，`firstInstallTime` / `dataDir` 不变，`lastUpdateTime=2026-08-19 21:37:17`、PID `32597`、`MainActivity` 前台，无隔离包。 | [PARITY VERIFIED]；协议回环 + 正式包安装完成；真实云端 File API E2E 与服务端拒绝降级待补 |
+| 2026-08-19 | 可恢复长内容分批任务 v1：`ChunkedContentTask` 路径 C | 纯 `document` 文本附件超过单次安全预算后，用户消息和私有附件先入库，再走持久化 `mapReduce` / `orderedTransform`；中间 chunk 不进入聊天 / Markdown 档案，最终助手回复使用确定性 ID 原子交付。每段有瞬态重试，Stop 取消 token 并以 SQLite 状态裁决，reduce 晚到不会落入最终消息；冷启动 active task 收敛为 failed 并可“继续 / 从头重试”。工作卡显示进度和安全动作；缺模型/附件时保持终态，避免伪进行中。聚焦 55 项、analyze、diff check 均通过。Pixel 8 `37101FDJH0077P` Production Release 覆盖安装，设备和构建 APK SHA-256 一致为 `0cb02258c80d2604974d11dd8a542c6a4dac0068b4200661cb55955f633730b2`，签名不变，`firstInstallTime=2026-08-18 07:11:12` / `dataDir` 不变，`lastUpdateTime=2026-08-19 20:58:53`，PID `30656`、`MainActivity` 前台、无隔离包。 | 代码级完成 / 正式包已部署；真实 File API、真实云端长文 E2E、手工长文本交互 smoke、Artifact 待补 |
+| 2026-08-19 | 超长文本附件单次降级防截断：`ChatProvider` 预算门禁 | 旧路径会把整份已抽取文本交给通用上下文裁剪，超窗时可能静默只发送开头。新增 `singleTextFallbackTokenBudget()`，文本附件最多使用模型最大输入预算的一半，系统提示、历史、序列化和 token 估算保留余量；超出时在新消息 / 附件落库前返回“单次安全输入预算”错误并保留 Composer 草稿，要求缩短、切换大窗口模型或等待分批任务，不伪造原生 File API。新增 half-window 与 60000 字符 `.md` 未落库 / 可重试回归；关联 34 项通过，analyze / diff check 通过。Pixel 8 正式包覆盖安装，`firstInstallTime` / `dataDir` 保持、`lastUpdateTime=2026-08-19 18:50:20`、PID `24898`、`MainActivity` 前台且无隔离包。 | 代码级完成 / 正式包已部署 / 原生文件与分批待补 |
+| 2026-08-19 | 会话 Composer 草稿跨进程恢复 v1：`ChatComposerDraftStore`、`ChatPage` 生命周期保存与异步恢复 | 新增应用私有 `chat_composer_drafts_v1` 索引：按会话保存短文本、附件恢复元数据和深度思考，写入串行化并限制 50 条；不保存大粘贴原文、附件 bytes / Base64、凭据或诊断。ChatPage 先恢复进程内缓存，cold cache 再异步读取；以恢复 generation、用户编辑 generation 与活跃会话检查阻止旧读覆盖新输入，附件到达后仅重建对应 Composer。发送成功保留深度思考、清除已消费文本/附件；生命周期切出和销毁前继续保存。`ChatInputBar` 切会话不再把外部初始附件误写为空草稿。新增 Store 与 ChatPage widget 回归；草稿/附件专项 19 项、多模态聚焦 112 项通过，`flutter --no-version-check analyze --no-pub` 和 `git diff --check` 无问题。Pixel 8 已以 Production Release 覆盖安装，`firstInstallTime` / `dataDir` 保持、`lastUpdateTime=2026-08-19 18:39:12`、PID `24303`、`MainActivity` 前台且无隔离包；真实设备进程回收后的草稿恢复仍待独立交互 smoke。 | 代码级完成 / 正式包已部署 / 真机恢复待补 |
+| 2026-08-19 | Android 执行型 PRD Phase 2 首段：大粘贴私有附件与分块器 | 新增 `LargePastePolicy`，只按当前 `TextEditingValue` 插入 delta 判断 16000 字符 / 64 KiB UTF-8 / 8000 Token；命中时保留 Composer 原有文本并把原始 UTF-8（含中文、Emoji、Tab、CRLF/LF、末尾换行、Markdown / 代码围栏）写到应用私有 `composer_drafts`。`PastedTextAttachmentService` 保存会话 / 草稿标识、字符 / 字节 / Token、SHA-256 和创建时间，附件卡片支持显示元数据、删除、预览、重命名和还原文本。`TextChunker` 按 H1/H2、完整代码围栏、段落、行、句子和最终安全 code-point 硬切，生成带 `batchId`、顺序、偏移、hash 和可选 overlap 的片段。验证：新增 15 项大粘贴 / 私有归档 / 分块测试通过；`flutter --no-version-check analyze --no-pub` 通过，`git diff --check` 通过。未进行 Pixel 8 或真实渠道请求；文件能力传输、文本降级、mapReduce / orderedTransform、任务持久化和跨进程草稿恢复仍未完成。 | Phase 2 基础完成 / 后续发送与恢复链路待补 |
 | 2026-07-14 | 模型增强失败回退状态持久化与设置页可见 | 旧逻辑在模型失败后保存普通 `generationMode=local`，自动 / WorkManager / BGTask 路径虽然安全完成，但用户之后无法判断模型是否曾尝试失败。新增 `model_fallback` 模式并保持旧 `local` / `model` JSON 兼容；provider 捕获可选模型异常后把本地安全报告标记为回退，最近报告和历史均持久化该事实，不保存异常文本。Markdown 显示“模型失败回退”，设置页 tile 显示回退状态，弹窗展示“最近一次模型增强失败，已安全回退本地反思”；手动反馈改为读取报告模式，不会因用户后来切换开关误判旧报告。聚焦 47 项、全量稳定门禁 536 项通过，analyze 无问题。 | 自动和后台 Reflection 的模型失败事实可审计且不泄露错误详情；Dreaming / 本地反思继续成功 |
 | 2026-07-14 | 模型增强 Reflection 总墙钟超时与上游取消 | 代码审计确认旧 `Stream.timeout(60s)` 会在每个流事件后重新计时，持续慢碎片响应可能让后台 Reflection 超过 60 秒甚至长期占用任务。新增 `model reflection enforces one total timeout for slow chunks`，以每 10ms 出块的流先红灯于缺少总时限收集器；修复后 80ms 总时限仍会触发 `TimeoutException` 和取消回调。`ChannelModelRelayBridge.forward()` 新增可选 `CancelToken` 并传入正式协议，provider 在 60 秒总时限、响应过长或其他异常时取消上游并继续既有本地回退。模型服务 / Relay bridge / 正式协议 / provider 聚焦 23 项、全量稳定门禁 534 项通过，analyze 无问题。 | 模型慢流不会无限拖住移动端前台或 WorkManager / BGTask Reflection；真实外部模型时延仍待质量门禁统计 |
 | 2026-07-14 | 模型增强 Reflection 不覆盖本地安全基线 | 新增回归先红灯证明模型返回 8 条结论 / 行动时会占满结果并挤掉本地规则，且只重复本地内容仍会误标 `generationMode=model`。修复后合并顺序改为本地结论优先，模型最多补充 4 条且总量仍限制为 8；没有新增安全内容时触发既有本地回退，不保存伪增强报告。目标 6 项、模型 / provider / 正式协议 / 设置页聚焦 40 项、最终全量稳定门禁 533 项通过，`flutter --no-version-check analyze --no-pub` 无问题。 | 本地规则安全基线不会被异常模型输出覆盖；真实外部模型长会话质量仍待补证 |
@@ -951,6 +1097,7 @@
 | `docs/markdown-rendering.md` | 对话页扩展 Markdown 渲染能力、移动端字号指标和安全边界 |
 | `docs/media-attachments.md` | 语音、图片、文件附件、归档和多模态输入策略 |
 | `docs/chat-composer-multimodal.md` | ChatGPT 风格 Composer、多文件、参考图、视频 / 音频 / 音乐生成和通用媒体接口 |
+| `docs/multimodal-mode-navigation.md` | 移动端聊天 / 图片 / 视频 / 语音一级模式切换与能力驱动工作区 |
 
 | `docs/archive/` | 2026-06-27 ~ 2026-07-14 的单次真机 / 协议 / 稳定性验证归档（33 份，主链路、Dreaming / Reflection、音频、网络、Relay 协议、测试稳定性等），均为带日期的历史证据，当前结果以 `docs/verification-baseline-2026-08-08.md` 为准 |
 | `docs/dwchainless-relay-integration-2026-08-07.md` | DW Chainless 中转站预置、注册引导、一键接入、关于页鸣谢与测试记录 |

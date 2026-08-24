@@ -1,6 +1,6 @@
 # 语音、图片与附件系统设计
 
-> 对应模块：M8。状态：图片 / 文件附件基础稳定化、ChatGPT 风格多文件 Composer、视频附件、参考图 / 图片编辑、通用视频 / 音乐接口、图片 / 视频 / 音频消息展示、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、声音合成结果写回会话、播放停止控制、播放完成事件回传、SimiRouter mimo TTS 三模式与 ASR 预设、TTS 合成并发门禁、声音克隆参考 WAV 私有持久化、图片生成 / 编辑失败事务、Vision / Reasoner 单次请求路由、短代号 / embedding 误判保护、reasoner-only 渠道支持与短 o 系列上下文预算保护、Android / iOS 原生播放通道、Android 音频焦点基础处理与 iOS AVAudioSession 中断开始停止播放、SQLite 媒体任务恢复与本地交付幂等已落地；视频编码、真实异步厂商协议、音乐长音频和真实厂商质量仍需外部配置 / 真机验证。最后更新：2026-08-18。
+> 对应模块：M8。状态：图片 / 文件附件基础稳定化、ChatGPT 风格多文件 Composer、视频附件、参考图 / 图片编辑、通用视频 / 音乐接口、图片 / 视频 / 音频消息展示、语音文件附件、消息音频卡片转写状态展示、转写详情查看 / 复制、原始语音文件私有归档、转写稿件草稿归档、转写状态标记与失败错误脱敏、可注入 STT 转写管线、OpenAI 兼容 STT 引擎与设置页配置入口、音频转写稿详情查看 / 复制、移动端麦克风权限声明、设置页语音输入状态入口、OpenAI Relay 图片 data URL 内存态透传、移动端录音按钮、Android / iOS 原生运行时权限申请、本地录音附件、音频附件发送前 STT 音频接口转写、base64 语音文本粘贴转写、iOS 系统 Speech 原生识别兜底、非语音附件原文件导出 / 导入、OpenAI 兼容 TTS 语音播报、声音合成结果写回会话、播放停止控制、播放完成事件回传、SimiRouter mimo TTS 三模式与 ASR 预设、TTS 合成并发门禁、声音克隆参考 WAV 私有持久化、图片生成 / 编辑失败事务、Vision / Reasoner 单次请求路由、短代号 / embedding 误判保护、reasoner-only 渠道支持与短 o 系列上下文预算保护、Android / iOS 原生播放通道、Android 音频焦点基础处理与 iOS AVAudioSession 中断开始停止播放、SQLite 媒体任务恢复与本地交付幂等已落地；TTS MP3/WAV、声音设计、WAV/MP3 声音克隆和 STT auto/zh/en 已于 2026-08-24 在 Pixel 8 Production Release 完成当前 SimiRouter 短音频真实 Provider E2E；视频编码、真实异步厂商协议、音乐长音频和语音长音频/弱网/iOS 压力仍需继续验证。最后更新：2026-08-24。
 
 ## 1. 目标
 
@@ -29,9 +29,9 @@
 - `audio_transcript_archive.dart` 负责为音频附件创建 Markdown 转写稿件，路径位于应用文档目录下的 `audio_transcripts/`；稿件会记录 `pending` / `ready` / `empty` / `failed` 状态，失败时只写入脱敏后的错误说明，不记录完整本地路径、密钥、令牌或原始厂商错误；`readDetails` 只返回可展示 / 可复制的脱敏详情，不暴露 sidecar 绝对路径。
 - `audio_transcription_service.dart` 定义可注入 `SpeechToTextEngine` 和 `AudioTranscriptionService`，配置 STT 引擎后可对归档音频执行转写并覆盖更新对应 sidecar。
 - `inline_base64_audio.dart` 负责识别聊天文本中的 `data:audio/...;base64,...` 或“base64 的语音字符：...”payload，校验大小和音频格式，发送前转为临时 `audio` 附件并从正文剔除原始 base64。
-- `openai_speech_to_text_engine.dart` 提供 OpenAI 兼容 STT 引擎，调用 `/v1/audio/transcriptions`，限制本地音频 25 MB，校验 HTTP(S) Base URL，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误；语言为 `auto` 时省略 multipart `language`，仅 zh / en 发送明确语言代码。
+- `openai_speech_to_text_engine.dart` 提供 OpenAI 兼容 STT 引擎，调用 `/v1/audio/transcriptions`，限制本地音频 25 MB，校验 HTTP(S) Base URL，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误；默认先发 multipart，只在 400 / 415 / 422 时使用 JSON data URI 兼容回退；语言为 `auto` 时两条路径均省略 `language`，仅 zh / en 发送明确语言代码。
 - `native_speech_to_text_engine.dart` 提供 iOS 系统 Speech 兜底引擎，通过 `simichat/native_speech_to_text` MethodChannel 调用原生 `SFSpeechURLRecognitionRequest`，仅识别应用私有目录内普通音频文件；`audio_transcription_service.dart` 的 `FallbackSpeechToTextEngine` 会在前一个 STT 引擎失败或返回空结果时继续尝试下一个引擎。
-- `openai_text_to_speech_engine.dart` 提供 OpenAI 兼容 TTS 引擎并调用 `/v1/audio/speech`。普通 OpenAI 模型保持 `model / voice / input / response_format=mp3` 请求；SimiRouter 只把精确匹配（大小写不敏感）的 `mimo-v2.5-tts`、`mimo-v2.5-tts-voicedesign`、`mimo-v2.5-tts-voiceclone` 识别为三种已适配模式，未知前后缀不会静默套用错误请求体；语速范围为 0.25–4，输出格式支持 mp3 / wav / opus / aac / flac，并按模式仅发送音色、声音风格或参考音频 data URI 等适用字段。声音克隆参考 WAV 保存配置时复制到 `Application Support/tts/reference_audio/`，使用唯一暂存目录和 `.part -> rename` 原子落盘，源文件移动或删除不影响后续使用；只清理 App 自己管理的旧副本。引擎校验 HTTP(S) Base URL、模型、音色、模式必填参数和 10 MB 响应上限，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误。
+- `openai_text_to_speech_engine.dart` 提供 OpenAI 兼容 TTS 引擎并调用 `/v1/audio/speech`，路由级 404 / 405 时兼容回退 `/v1/audio/tasks`。普通 OpenAI 模型保持 `model / voice / input / speed / response_format` 请求；SimiRouter 只把精确匹配（大小写不敏感）的 `mimo-v2.5-tts`、`mimo-v2.5-tts-voicedesign`、`mimo-v2.5-tts-voiceclone` 识别为三种已适配模式，未知前后缀不会静默套用错误请求体；语速在 wire 层发送 JSON number，范围为 0.25–4，输出格式支持 mp3 / wav / opus / aac / flac，并按模式仅发送音色、声音风格或参考音频 data URI 等适用字段。声音克隆参考 WAV 保存配置时复制到 `Application Support/tts/reference_audio/`，使用唯一暂存目录和 `.part -> rename` 原子落盘，源文件移动或删除不影响后续使用；当前 Composer 一次性克隆还支持 MP3、M4A、OGG/Opus、AAC、FLAC、WebM 的明确 MIME。引擎拒绝 HTTP 200 JSON/HTML/text 错误体，限制 10 MB 响应，并把厂商失败转换为不含密钥 / 本机路径 / 原始响应正文的安全错误；TTS 服务保存扩展名始终跟随本次 `response_format`。
 - `universal_media_service.dart` 提供视频 / 音乐通用接口：endpoint / 模型可配置，支持 JSON / multipart、二进制、`b64_json` / `base64`、data URI 和常见媒体 URL 响应；视频参考图只走 multipart，不把本机路径或 API Key 放进 JSON；视频结果上限 100 MB，音乐结果上限 25 MB。异步响应会进入 SQLite `media_jobs` 状态机，记录 provider job ID、轮询地址、deadline、固定渠道模型和交付元数据。
 - `universal_media_recovery_provider.dart` 在首帧后启动幂等恢复 coordinator：等待 notifier ready，原子 claim pending / running 任务，按持久化渠道解密凭据并有限轮询；媒体文件写入和会话消息 / 附件事务提交后才收敛为 `completed`。重复进程 / 重试复用稳定 ID，失败进入可重试终态。相关测试使用 fake adapter / 内存 SQLite，只证明本地状态机与交付幂等，不证明真实云端 E2E。
 - `speech_provider_preset.dart` 提供 STT/TTS 厂商预设 v1：OpenAI 官方、Groq STT、SimiRouter AI 与自定义 OpenAI 兼容；SimiRouter 预设包含 `mimo-v2.5-asr` 和 `mimo-v2.5-tts`，设置页选择预设后自动填充 Base URL、STT 模型、TTS 模型和音色，并在推断已有配置时归一 `/v1` 后缀。
@@ -170,6 +170,17 @@ Composer + “+”工具菜单
 - 后续补充：更多非 OpenAI 兼容语音厂商预设、真实移动端网络转写长音频测试、真机长时间播报和播放中断场景测试。
 
 ## 6. 近期 TODO
+
+### 6.0 语音四能力真实验收记录（2026-08-24）
+
+- [x] TTS MP3：`mimo-v2.5-tts`、alloy、1.00x，真实生成 assistant audio，Android `MediaPlayer` started / stopped，Audio Focus request / abandon 闭环。
+- [x] TTS WAV：真实结果为 RIFF/PCM 16-bit、mono、24 kHz、2.24 秒，`.wav` 扩展名、实际容器和 Android 解码一致。
+- [x] 声音设计：`mimo-v2.5-tts-voicedesign` 以独立文本 / 风格 / 语速 / MP3 生成 24 kHz、1.968 秒音频并完整播放。
+- [x] 声音克隆 WAV：参考 WAV、生成 MP3、会话源附件和结果附件均保留正确语义，Android 完整播放。
+- [x] 声音克隆 MP3：同一条 1.968 秒 MP3 在旧 `audio/mpeg` 下连续超时，改为 SimiRouter-compatible `audio/mp3` 后数秒成功并完整播放；差分证明问题位于网关临时上传扩展名兼容，而非参考音频过短。
+- [x] STT：`mimo-v2.5-asr` 的 `auto / zh / en` 均真实成功；独立识别时间线和 audio-only 先识别再调用 Chat 均闭环。
+- [x] 自动门禁：语音影响面 179 / 179、最终修复聚焦 39 / 39、完整 Flutter JSON reporter 1235 / 1235（`done.success=true`、0 error）及随后独立 compact 1235 / 1235、analyze、diff check 和 Pixel 8 Production Release parity 均通过。
+- [ ] 压力边界：长文本/长音频、弱网/断网重试、连续批量或并发、iOS Provider 播放、真实来电/闹钟/第三方播放器焦点抢占。
 
 - [x] 附件类型识别、数量限制、大小限制。
 - [x] 发送前校验附件存在性，避免半残缺消息。
